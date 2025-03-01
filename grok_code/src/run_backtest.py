@@ -4,6 +4,7 @@ import backtrader as bt
 import pandas as pd
 from datetime import datetime
 import pickle
+import re
 
 class TradeLogger(bt.Analyzer):
     def __init__(self):
@@ -30,14 +31,14 @@ class TradeLogger(bt.Analyzer):
     def get_analysis(self):
         return self.trades
 
-def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=['MSFT']):
+def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None):
     """
     Run a backtest with the specified strategy on multiple tickers using a single CSV file.
     
     Args:
         output_dir (str): Directory to save results.
         strategy_name (str): Name of the strategy to run (e.g., 'SimpleStock').
-        tickers (list): List of stock ticker symbols (e.g., ['MSFT', 'AAPL']).
+        tickers (list): List of stock ticker symbols. If None, will use all tickers found in the CSV except SP500.
     """
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     strategy_dir = f"{timestamp}_{strategy_name}_portfolio"
@@ -58,6 +59,26 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=['MSF
     column_map = {col: idx for idx, col in enumerate(df.columns)}
     print("CSV columns:", list(column_map.keys()))  # Debug output
 
+    # Auto-detect tickers if not provided
+    if tickers is None:
+        # Extract unique ticker symbols from column names (format: TICKER_Field)
+        all_tickers = set()
+        ticker_pattern = re.compile(r'([A-Z]+)_(?:Open|High|Low|Close|Volume)')
+        
+        for col in column_map.keys():
+            match = ticker_pattern.match(col)
+            if match:
+                ticker = match.group(1)
+                if ticker != 'SP500':  # Exclude SP500
+                    all_tickers.add(ticker)
+        
+        tickers = sorted(list(all_tickers))
+        print(f"Auto-detected tickers: {tickers}")
+    
+    # If tickers is still empty, raise an error
+    if not tickers:
+        raise ValueError("No valid tickers found in the CSV file. Please check the file format.")
+
     # Add data feeds for each ticker
     valid_data_feeds = 0
     for ticker in tickers:
@@ -66,7 +87,8 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=['MSF
             required_cols = [f'{ticker}_{field}' for field in ['Open', 'High', 'Low', 'Close', 'Volume']]
             missing_cols = [col for col in required_cols if col not in column_map]
             if missing_cols:
-                raise KeyError(f"Missing columns: {missing_cols}")
+                print(f"Warning: Skipping {ticker} due to missing columns: {missing_cols}")
+                continue
             
             data = bt.feeds.GenericCSVData(
                 dataname=stock_csv,
@@ -100,7 +122,7 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=['MSF
         cerebro.addstrategy(SimpleStockStrategy)
     elif strategy_name == 'CoveredCall':
         from strategy import CoveredCallStrategy
-        cerebro.addstrategy(CoveredCallStrategy, **kwargs)
+        cerebro.addstrategy(CoveredCallStrategy)
     elif strategy_name == 'MultiPosition':
         from multi_position_strategy import MultiPositionStrategy
         cerebro.addstrategy(MultiPositionStrategy)
@@ -139,15 +161,83 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=['MSF
         pickle.dump(results, f)
     print(f"Backtest results saved to {results_dir}/backtest_results.pkl")
 
+    # Save a summary of results to a text file
+    with open(os.path.join(results_dir, 'results.txt'), 'w') as f:
+        # Calculate and write key metrics
+        initial_value = cerebro.broker.startingcash
+        final_value = cerebro.broker.getvalue()
+        total_return = ((final_value / initial_value) - 1) * 100
+        
+        # Get benchmark return if available (SP500)
+        benchmark_return = 0.0
+        try:
+            if 'SP500_Close' in df.columns:
+                sp500_start = df['SP500_Close'].iloc[0]
+                sp500_end = df['SP500_Close'].iloc[-1]
+                benchmark_return = ((sp500_end / sp500_start) - 1) * 100
+        except Exception as e:
+            print(f"Warning: Could not calculate benchmark return: {e}")
+        
+        # Calculate annualized metrics
+        start_date = df['Date'].iloc[0]
+        end_date = df['Date'].iloc[-1]
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d')
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d')
+        
+        years = (end_date - start_date).days / 365.25
+        annual_return = ((1 + total_return/100) ** (1/years) - 1) * 100 if years > 0 else 0
+        
+        # Calculate volatility and Sharpe ratio if equity curve is available
+        volatility = 0.0
+        sharpe_ratio = 0.0
+        max_drawdown = 0.0
+        
+        if hasattr(strat, 'equity_curve'):
+            # Calculate daily returns
+            equity_df = pd.DataFrame(strat.equity_curve, columns=['Date', 'Value'])
+            equity_df['Date'] = pd.to_datetime(equity_df['Date'])
+            equity_df.set_index('Date', inplace=True)
+            equity_df['Return'] = equity_df['Value'].pct_change()
+            
+            # Calculate annualized volatility
+            daily_volatility = equity_df['Return'].std()
+            volatility = daily_volatility * (252 ** 0.5) * 100  # Annualized and as percentage
+            
+            # Calculate Sharpe ratio (assuming risk-free rate of 0)
+            sharpe_ratio = annual_return / volatility if volatility > 0 else 0
+            
+            # Calculate maximum drawdown
+            equity_df['Peak'] = equity_df['Value'].cummax()
+            equity_df['Drawdown'] = (equity_df['Value'] - equity_df['Peak']) / equity_df['Peak'] * 100
+            max_drawdown = abs(equity_df['Drawdown'].min())
+        
+        # Write results to file
+        f.write(f"Strategy: {strategy_name}\n")
+        f.write(f"Tickers: {', '.join(tickers)}\n")
+        f.write(f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}\n")
+        f.write(f"Initial Capital: ${initial_value:.2f}\n")
+        f.write(f"Final Capital: ${final_value:.2f}\n")
+        f.write(f"Total Return: {total_return:.2f}%\n")
+        f.write(f"Annualized Return: {annual_return:.2f}%\n")
+        f.write(f"Annualized Volatility: {volatility:.2f}%\n")
+        f.write(f"Sharpe Ratio: {sharpe_ratio:.2f}\n")
+        f.write(f"Maximum Drawdown: {max_drawdown:.2f}%\n")
+        f.write(f"Benchmark Total Return: {benchmark_return:.2f}%\n")
+    
+    print(f"Results summary saved to {results_dir}/results.txt")
+    return results_dir
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run a backtest with a specified strategy on multiple tickers.")
     parser.add_argument('--strategy_name', type=str, default='SimpleStock',
                         help="Name of the strategy to run (e.g., SimpleStock)")
     parser.add_argument('--output_dir', type=str, default='output',
                         help="Directory to save backtest results")
-    parser.add_argument('--tickers', type=str, default='MSFT,AAPL',
-                        help="Comma-separated list of stock tickers (e.g., MSFT,AAPL,GOOG)")
+    parser.add_argument('--tickers', type=str, default=None,
+                        help="Comma-separated list of stock tickers (e.g., MSFT,AAPL,GOOG). If not provided, will use all tickers in the CSV except SP500.")
     args = parser.parse_args()
     
-    tickers = args.tickers.split(',')
+    tickers = args.tickers.split(',') if args.tickers else None
     run_backtest(output_dir=args.output_dir, strategy_name=args.strategy_name, tickers=tickers)
