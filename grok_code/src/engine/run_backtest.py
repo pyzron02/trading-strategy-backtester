@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 import backtrader as bt
 import pandas as pd
@@ -40,17 +41,21 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
         strategy_name (str): Name of the strategy to run (e.g., 'SimpleStock').
         tickers (list): List of stock ticker symbols. If None, will use all tickers found in the CSV except SP500.
     """
+    # Get the project root directory (3 levels up from this file)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
+    
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     strategy_dir = f"{timestamp}_{strategy_name}_portfolio"
-    results_dir = os.path.join(output_dir, strategy_dir)
+    results_dir = os.path.join(project_root, output_dir, strategy_dir)
     os.makedirs(results_dir, exist_ok=True)
 
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(100000.0)
     print(f"Initial cash: {cerebro.broker.getcash()}")
 
-    # Load single CSV file
-    stock_csv = 'input/stock_data.csv'
+    # Load single CSV file with absolute path
+    stock_csv = os.path.join(project_root, 'input', 'stock_data.csv')
     if not os.path.exists(stock_csv):
         raise FileNotFoundError(f"Stock data file not found at {stock_csv}")
     
@@ -115,6 +120,11 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
     if valid_data_feeds == 0:
         print("No valid data feeds added. Aborting backtest.")
         return
+
+    # Add the strategies directory to the Python path
+    strategies_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'strategies')
+    if strategies_dir not in sys.path:
+        sys.path.append(strategies_dir)
 
     # Add strategy based on name
     if strategy_name == 'SimpleStock':
