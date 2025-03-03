@@ -5,6 +5,8 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
+import calendar
+from matplotlib.colors import LinearSegmentedColormap
 
 # Set Seaborn theme for consistent styling
 sns.set_theme(style="whitegrid")
@@ -43,9 +45,142 @@ def evaluate_performance(results_path):
     annualized_volatility = daily_returns.std() * (252 ** 0.5) if not daily_returns.empty else np.nan
     sharpe_ratio = annualized_return / annualized_volatility if annualized_volatility != 0 else np.nan
     
+    # Calculate Sortino Ratio (using only negative returns for downside risk)
+    downside_returns = daily_returns[daily_returns < 0]
+    downside_deviation = downside_returns.std() * (252 ** 0.5) if not downside_returns.empty else np.nan
+    sortino_ratio = annualized_return / downside_deviation if downside_deviation != 0 else np.nan
+    
     cum_max = equity_curve['Value'].cummax()
     drawdown = (cum_max - equity_curve['Value']) / cum_max
     max_drawdown = drawdown.max() if not drawdown.empty else np.nan
+    
+    # Calculate Calmar Ratio (annualized return / maximum drawdown)
+    calmar_ratio = annualized_return / max_drawdown if max_drawdown != 0 else np.nan
+    
+    # Calculate Maximum Drawdown Period
+    if not drawdown.empty:
+        # Find the peak before the deepest trough
+        i = drawdown.idxmax()
+        # Find the last time the equity curve was at a peak before the drawdown
+        j = drawdown[:i][::-1].idxmin()
+        # Find the recovery point (when drawdown returns to 0 after the trough)
+        try:
+            k = drawdown[i:][drawdown[i:] <= 0.0001].index[0]
+        except IndexError:
+            # If no recovery point is found, use the last date
+            k = drawdown.index[-1]
+        
+        max_dd_start = j
+        max_dd_end = i
+        max_dd_recovery = k
+        max_dd_length = (max_dd_end - max_dd_start).days
+        max_dd_recovery_length = (max_dd_recovery - max_dd_end).days if max_dd_recovery != max_dd_end else np.nan
+        max_dd_total_length = (max_dd_recovery - max_dd_start).days if max_dd_recovery != max_dd_start else np.nan
+    else:
+        max_dd_start = np.nan
+        max_dd_end = np.nan
+        max_dd_recovery = np.nan
+        max_dd_length = np.nan
+        max_dd_recovery_length = np.nan
+        max_dd_total_length = np.nan
+    
+    # Load trade log for trade metrics
+    trade_log_path = os.path.join(results_dir, 'trade_log.csv')
+    trade_metrics = {}
+    if os.path.exists(trade_log_path):
+        trade_log = pd.read_csv(trade_log_path)
+        
+        # Calculate trade metrics
+        closed_trades = trade_log[trade_log['type'] == 'close']
+        if not closed_trades.empty:
+            total_trades = len(closed_trades)
+            winning_trades = len(closed_trades[closed_trades['pnl'] > 0])
+            losing_trades = len(closed_trades[closed_trades['pnl'] <= 0])
+            
+            # Win Rate
+            win_rate = winning_trades / total_trades if total_trades > 0 else np.nan
+            
+            # Profit Factor
+            gross_profit = closed_trades[closed_trades['pnl'] > 0]['pnl'].sum()
+            gross_loss = abs(closed_trades[closed_trades['pnl'] <= 0]['pnl'].sum())
+            profit_factor = gross_profit / gross_loss if gross_loss != 0 else np.inf
+            
+            # Average Win/Loss Ratio
+            avg_win = gross_profit / winning_trades if winning_trades > 0 else np.nan
+            avg_loss = gross_loss / losing_trades if losing_trades > 0 else np.nan
+            avg_win_loss_ratio = avg_win / avg_loss if avg_loss != 0 else np.inf
+            
+            # Calculate Maximum Consecutive Wins/Losses
+            # First, sort trades by date
+            closed_trades_sorted = closed_trades.sort_values('date')
+            # Create a series of 1 (win) and 0 (loss)
+            win_loss_series = (closed_trades_sorted['pnl'] > 0).astype(int)
+            
+            # Calculate consecutive wins
+            win_streaks = []
+            current_streak = 0
+            for win in win_loss_series:
+                if win == 1:
+                    current_streak += 1
+                else:
+                    if current_streak > 0:
+                        win_streaks.append(current_streak)
+                    current_streak = 0
+            if current_streak > 0:
+                win_streaks.append(current_streak)
+            
+            # Calculate consecutive losses
+            loss_streaks = []
+            current_streak = 0
+            for win in win_loss_series:
+                if win == 0:
+                    current_streak += 1
+                else:
+                    if current_streak > 0:
+                        loss_streaks.append(current_streak)
+                    current_streak = 0
+            if current_streak > 0:
+                loss_streaks.append(current_streak)
+            
+            max_consecutive_wins = max(win_streaks) if win_streaks else 0
+            max_consecutive_losses = max(loss_streaks) if loss_streaks else 0
+            
+            # Calculate average holding period
+            # First, we need to match open and close trades
+            open_trades = trade_log[trade_log['type'] == 'open']
+            
+            # This is a simplified approach - in a real system, you'd need more sophisticated matching
+            # based on trade IDs or other identifiers
+            trade_metrics = {
+                'total_trades': total_trades,
+                'winning_trades': winning_trades,
+                'losing_trades': losing_trades,
+                'win_rate': win_rate,
+                'profit_factor': profit_factor,
+                'avg_win': avg_win,
+                'avg_loss': avg_loss,
+                'avg_win_loss_ratio': avg_win_loss_ratio,
+                'gross_profit': gross_profit,
+                'gross_loss': gross_loss,
+                'max_consecutive_wins': max_consecutive_wins,
+                'max_consecutive_losses': max_consecutive_losses
+            }
+    
+    # Calculate Monthly Returns Table
+    monthly_returns = daily_returns.resample('ME').apply(lambda x: (1 + x).prod() - 1)
+    monthly_returns_table = pd.DataFrame(monthly_returns)
+    monthly_returns_table.index = pd.MultiIndex.from_arrays([
+        monthly_returns_table.index.year,
+        monthly_returns_table.index.month
+    ], names=['Year', 'Month'])
+    monthly_returns_table = monthly_returns_table.unstack('Month')
+    monthly_returns_table.columns = monthly_returns_table.columns.droplevel()
+    monthly_returns_table.columns = [calendar.month_abbr[m] for m in monthly_returns_table.columns]
+    
+    # Add annual returns
+    annual_returns = daily_returns.resample('YE').apply(lambda x: (1 + x).prod() - 1)
+    annual_returns.index = annual_returns.index.year
+    monthly_returns_table['Annual'] = annual_returns
     
     stock_data_path = 'input/stock_data.csv'
     if not os.path.exists(stock_data_path):
@@ -85,9 +220,33 @@ def evaluate_performance(results_path):
     print(f"Annualized Return: {annualized_return:.2%}")
     print(f"Annualized Volatility: {annualized_volatility:.2%}")
     print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+    print(f"Sortino Ratio: {sortino_ratio:.2f}")
+    print(f"Calmar Ratio: {calmar_ratio:.2f}")
     print(f"Maximum Drawdown: {max_drawdown:.2%}")
+    
+    # Print max drawdown period info if available
+    if max_dd_start is not None and not pd.isna(max_dd_start) and max_dd_end is not None and not pd.isna(max_dd_end):
+        print(f"Maximum Drawdown Period: {max_dd_length} days (from {max_dd_start.strftime('%Y-%m-%d')} to {max_dd_end.strftime('%Y-%m-%d')})")
+        if max_dd_recovery is not None and not pd.isna(max_dd_recovery) and max_dd_recovery != max_dd_end:
+            print(f"Recovery Period: {max_dd_recovery_length} days (until {max_dd_recovery.strftime('%Y-%m-%d')})")
+    
+    if trade_metrics:
+        print("\nTrade Metrics:")
+        print(f"Total Trades: {trade_metrics['total_trades']}")
+        print(f"Win Rate: {trade_metrics['win_rate']:.2%}")
+        print(f"Profit Factor: {trade_metrics['profit_factor']:.2f}")
+        print(f"Average Win: ${trade_metrics['avg_win']:.2f}")
+        print(f"Average Loss: ${trade_metrics['avg_loss']:.2f}")
+        print(f"Average Win/Loss Ratio: {trade_metrics['avg_win_loss_ratio']:.2f}")
+        print(f"Maximum Consecutive Wins: {trade_metrics['max_consecutive_wins']}")
+        print(f"Maximum Consecutive Losses: {trade_metrics['max_consecutive_losses']}")
+    
     print("\nBenchmark Metrics (S&P 500):")
     print(f"Benchmark Total Return: {benchmark_total_return:.2%}")
+    
+    # Print Monthly Returns Table
+    print("\nMonthly Returns:")
+    print(monthly_returns_table.to_string(float_format=lambda x: f"{x:.2%}" if not np.isnan(x) else "N/A"))
     
     # Save metrics to a text file for easier comparison later
     results_txt_path = os.path.join(results_dir, 'results.txt')
@@ -97,14 +256,45 @@ def evaluate_performance(results_path):
         f.write(f"Annualized Return: {annualized_return*100:.2f}%\n")
         f.write(f"Annualized Volatility: {annualized_volatility*100:.2f}%\n")
         f.write(f"Sharpe Ratio: {sharpe_ratio:.2f}\n")
+        f.write(f"Sortino Ratio: {sortino_ratio:.2f}\n")
+        f.write(f"Calmar Ratio: {calmar_ratio:.2f}\n")
         f.write(f"Maximum Drawdown: {max_drawdown*100:.2f}%\n")
+        
+        # Write max drawdown period info if available
+        if max_dd_start is not None and not pd.isna(max_dd_start) and max_dd_end is not None and not pd.isna(max_dd_end):
+            f.write(f"Maximum Drawdown Period: {max_dd_length} days (from {max_dd_start.strftime('%Y-%m-%d')} to {max_dd_end.strftime('%Y-%m-%d')})\n")
+            if max_dd_recovery is not None and not pd.isna(max_dd_recovery) and max_dd_recovery != max_dd_end:
+                f.write(f"Recovery Period: {max_dd_recovery_length} days (until {max_dd_recovery.strftime('%Y-%m-%d')})\n")
+        
+        if trade_metrics:
+            f.write("\nTrade Metrics:\n")
+            f.write(f"Total Trades: {trade_metrics['total_trades']}\n")
+            f.write(f"Winning Trades: {trade_metrics['winning_trades']} ({trade_metrics['win_rate']*100:.2f}%)\n")
+            f.write(f"Losing Trades: {trade_metrics['losing_trades']} ({(1-trade_metrics['win_rate'])*100:.2f}%)\n")
+            f.write(f"Profit Factor: {trade_metrics['profit_factor']:.2f}\n")
+            f.write(f"Average Win: ${trade_metrics['avg_win']:.2f}\n")
+            f.write(f"Average Loss: ${trade_metrics['avg_loss']:.2f}\n")
+            f.write(f"Average Win/Loss Ratio: {trade_metrics['avg_win_loss_ratio']:.2f}\n")
+            f.write(f"Gross Profit: ${trade_metrics['gross_profit']:.2f}\n")
+            f.write(f"Gross Loss: ${trade_metrics['gross_loss']:.2f}\n")
+            f.write(f"Maximum Consecutive Wins: {trade_metrics['max_consecutive_wins']}\n")
+            f.write(f"Maximum Consecutive Losses: {trade_metrics['max_consecutive_losses']}\n")
+        
         f.write("\nBenchmark Metrics (S&P 500):\n")
         f.write(f"Benchmark Total Return: {benchmark_total_return*100:.2f}%\n")
         f.write(f"\nBacktest Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}\n")
+        
+        f.write("\nMonthly Returns:\n")
+        f.write(monthly_returns_table.to_string(float_format=lambda x: f"{x*100:.2f}%" if not np.isnan(x) else "N/A"))
     
     plot_equity_curve(equity_curve, sp500_equity, results_dir)
     plot_drawdown(drawdown, sp500_drawdown, results_dir)
     plot_returns_histogram(daily_returns, sp500_returns, results_dir)
+    plot_monthly_returns_heatmap(monthly_returns_table, results_dir)
+    
+    if trade_metrics:
+        plot_win_loss_distribution(trade_metrics, results_dir)
+        plot_underwater_chart(drawdown, results_dir, max_dd_start, max_dd_end, max_dd_recovery)
 
 def plot_equity_curve(equity_curve, sp500_equity, results_dir):
     """Plot equity curves using Seaborn styling with Matplotlib plotting."""
@@ -217,6 +407,81 @@ def plot_returns_histogram(daily_returns, sp500_returns, results_dir):
     plt.ylabel('Density')
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, 'returns_histogram.png'))
+    plt.close()
+
+def plot_win_loss_distribution(trade_metrics, results_dir):
+    """Plot win/loss distribution as a pie chart."""
+    # Create a pie chart of winning vs losing trades
+    plt.figure(figsize=(8, 8))
+    labels = [f"Winning Trades\n{trade_metrics['winning_trades']} ({trade_metrics['win_rate']:.1%})", 
+              f"Losing Trades\n{trade_metrics['losing_trades']} ({1-trade_metrics['win_rate']:.1%})"]
+    sizes = [trade_metrics['winning_trades'], trade_metrics['losing_trades']]
+    colors = ['#4CAF50', '#F44336']  # Green for wins, red for losses
+    
+    plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90, wedgeprops={'edgecolor': 'white'})
+    plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+    plt.title('Win/Loss Distribution')
+    plt.tight_layout()
+    plt.savefig(os.path.join(results_dir, 'win_loss_distribution.png'))
+    plt.close()
+
+def plot_monthly_returns_heatmap(monthly_returns_table, results_dir):
+    """Plot monthly returns as a heatmap."""
+    # Drop the Annual column for the heatmap
+    monthly_data = monthly_returns_table.drop('Annual', axis=1).copy()
+    
+    # Create a custom colormap (green for positive, red for negative)
+    cmap = LinearSegmentedColormap.from_list('rg', ["#F44336", "#FFFFFF", "#4CAF50"], N=256)
+    
+    plt.figure(figsize=(12, 8))
+    ax = sns.heatmap(monthly_data, annot=True, cmap=cmap, center=0,
+                     fmt=".1%", linewidths=.5, cbar_kws={"shrink": .8})
+    
+    # Customize the plot
+    plt.title('Monthly Returns Heatmap')
+    plt.tight_layout()
+    plt.savefig(os.path.join(results_dir, 'monthly_returns_heatmap.png'))
+    plt.close()
+
+def plot_underwater_chart(drawdown, results_dir, max_dd_start, max_dd_end, max_dd_recovery):
+    """Plot underwater chart (enhanced drawdown visualization)."""
+    plt.figure(figsize=(12, 6))
+    
+    # Convert drawdown to percentage for better visualization
+    underwater = drawdown * -100
+    
+    # Convert pandas DatetimeIndex to numpy arrays before plotting
+    dates = underwater.index.to_numpy()
+    values = underwater.to_numpy()
+    
+    # Plot the underwater chart
+    plt.fill_between(dates, values, 0, color='red', alpha=0.3)
+    plt.plot(dates, values, color='red', linewidth=1)
+    
+    # Highlight the maximum drawdown period if available
+    if (max_dd_start is not None and not pd.isna(max_dd_start) and 
+        max_dd_end is not None and not pd.isna(max_dd_end)):
+        plt.axvspan(max_dd_start, max_dd_end, color='red', alpha=0.2)
+        
+        # Add recovery period if available
+        if max_dd_recovery is not None and not pd.isna(max_dd_recovery) and max_dd_recovery != max_dd_end:
+            plt.axvspan(max_dd_end, max_dd_recovery, color='orange', alpha=0.2)
+            
+        # Add annotations
+        max_dd_value = drawdown.loc[max_dd_end] * -100
+        plt.annotate(f'Max DD: {max_dd_value:.1f}%', 
+                     xy=(max_dd_end, max_dd_value),
+                     xytext=(10, -30),
+                     textcoords='offset points',
+                     arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2'))
+    
+    # Customize the plot
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.title('Underwater Chart (Drawdown)')
+    plt.xlabel('Date')
+    plt.ylabel('Drawdown (%)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(results_dir, 'underwater_chart.png'))
     plt.close()
 
 if __name__ == "__main__":
