@@ -3,6 +3,93 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
+class AuctionMarketParameters:
+    """Parameters for Auction Market Theory trading strategy."""
+    
+    def __init__(self):
+        # Time-based parameters
+        self.trading_hours_start = "09:30"  # Market open (EST)
+        self.trading_hours_end = "16:00"    # Market close (EST)
+        self.profile_period = "D"           # Market profile timeframe (D=Daily)
+        
+        # Value Area parameters
+        self.value_area_volume_percent = 0.70  # Standard 70% of volume
+        self.poc_volume_threshold = 0.15       # Minimum volume for POC
+        
+        # Price levels and zones
+        self.price_levels = {
+            'tick_size': 0.01,          # Minimum price movement
+            'value_area_extension': 2,   # Number of std devs for value area
+            'price_bucket_size': 0.25    # Size of price buckets for distribution
+        }
+        
+        # Volume profile parameters
+        self.volume_profile = {
+            'lookback_period': 20,       # Days to look back for volume profile
+            'volume_threshold': 1000,    # Minimum volume for significant level
+            'bucket_size': 100           # Size of volume buckets
+        }
+        
+        # Trading parameters
+        self.position_size = {
+            'max_position': 100,         # Maximum position size
+            'initial_size': 20,          # Initial position size
+            'scaling_size': 10           # Size for scaling in/out
+        }
+        
+        # Risk management
+        self.risk_params = {
+            'max_loss_percent': 0.02,    # Maximum loss per trade (2%)
+            'profit_target_ratio': 2.0,  # Profit target ratio (risk:reward)
+            'max_daily_loss': 0.05,      # Maximum daily loss (5%)
+            'position_heat': 0.01        # Maximum heat per position (1%)
+        }
+        
+        # Market conditions
+        self.market_conditions = {
+            'min_daily_volume': 1000000,  # Minimum daily volume
+            'min_daily_range': 0.5,       # Minimum daily range (%)
+            'max_spread': 0.05            # Maximum bid-ask spread
+        }
+        
+        # Auction zones
+        self.auction_zones = {
+            'excess_threshold': 2.0,      # Standard deviations for excess
+            'balance_threshold': 0.5,     # Balance area threshold
+            'rotation_factor': 1.5        # Rotation detection factor
+        }
+        
+        # Technical indicators
+        self.indicators = {
+            'volume_ma_period': 20,       # Volume moving average period
+            'price_ma_period': 50,        # Price moving average period
+            'volatility_period': 20       # Volatility calculation period
+        }
+
+def get_default_parameters():
+    """Return default parameters for Auction Market Theory strategy."""
+    return AuctionMarketParameters()
+
+def get_aggressive_parameters():
+    """Return more aggressive parameters for Auction Market Theory strategy."""
+    params = AuctionMarketParameters()
+    params.value_area_volume_percent = 0.60  # Smaller value area
+    params.auction_zones['excess_threshold'] = 1.5  # Lower threshold for excess
+    params.auction_zones['rotation_factor'] = 1.2  # More sensitive to rotation
+    params.risk_params['max_loss_percent'] = 0.03  # Higher risk per trade
+    params.risk_params['profit_target_ratio'] = 1.5  # Lower profit target
+    return params
+
+def get_conservative_parameters():
+    """Return more conservative parameters for Auction Market Theory strategy."""
+    params = AuctionMarketParameters()
+    params.value_area_volume_percent = 0.80  # Larger value area
+    params.auction_zones['excess_threshold'] = 2.5  # Higher threshold for excess
+    params.auction_zones['rotation_factor'] = 2.0  # Less sensitive to rotation
+    params.risk_params['max_loss_percent'] = 0.01  # Lower risk per trade
+    params.risk_params['profit_target_ratio'] = 3.0  # Higher profit target
+    return params
+
 class AuctionMarketStrategy(bt.Strategy):
     """
     Auction Market Theory trading strategy.
@@ -13,6 +100,9 @@ class AuctionMarketStrategy(bt.Strategy):
     - Balance/Imbalance detection
     - Excess move identification
     - Rotation analysis
+    
+    The strategy can be configured using the AuctionMarketParameters class,
+    which provides default, aggressive, and conservative parameter presets.
     """
     
     params = (
@@ -27,9 +117,14 @@ class AuctionMarketStrategy(bt.Strategy):
         ('scaling_size', 10),             # Size for scaling in/out
         ('max_loss_percent', 0.02),       # Maximum loss per trade (2%)
         ('profit_target_ratio', 2.0),     # Profit target ratio (risk:reward)
+        ('parameters', None),             # Optional AuctionMarketParameters instance
     )
     
     def __init__(self):
+        # Initialize parameters from AuctionMarketParameters if provided
+        if self.p.parameters is not None:
+            self._init_from_parameters(self.p.parameters)
+        
         # Initialize indicators and variables
         self.value_areas = {}  # Store value areas by date
         self.poc_levels = {}   # Store Points of Control by date
@@ -54,6 +149,28 @@ class AuctionMarketStrategy(bt.Strategy):
             
             # Store daily OHLCV for value area calculation
             data.daily_bars = []
+    
+    def _init_from_parameters(self, params):
+        """Initialize strategy parameters from AuctionMarketParameters instance"""
+        self.p.value_area_percent = params.value_area_volume_percent
+        self.p.price_bucket_size = params.price_levels['price_bucket_size']
+        self.p.lookback_period = params.volume_profile['lookback_period']
+        self.p.excess_threshold = params.auction_zones['excess_threshold']
+        self.p.balance_threshold = params.auction_zones['balance_threshold']
+        self.p.rotation_factor = params.auction_zones['rotation_factor']
+        self.p.max_position = params.position_size['max_position']
+        self.p.initial_size = params.position_size['initial_size']
+        self.p.scaling_size = params.position_size['scaling_size']
+        self.p.max_loss_percent = params.risk_params['max_loss_percent']
+        self.p.profit_target_ratio = params.risk_params['profit_target_ratio']
+        
+        print("Strategy initialized with custom parameters:")
+        print(f"  Value Area: {self.p.value_area_percent}")
+        print(f"  Excess Threshold: {self.p.excess_threshold}")
+        print(f"  Balance Threshold: {self.p.balance_threshold}")
+        print(f"  Rotation Factor: {self.p.rotation_factor}")
+        print(f"  Max Loss: {self.p.max_loss_percent}")
+        print(f"  Profit Target Ratio: {self.p.profit_target_ratio}")
     
     def next(self):
         # Log portfolio value for the equity curve

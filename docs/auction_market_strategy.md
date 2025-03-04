@@ -38,7 +38,7 @@ Rotation refers to the movement of price from one end of the Value Area to the o
 
 ## Strategy Implementation
 
-The `AuctionMarketStrategy` class implements these concepts in a systematic trading approach:
+The `AuctionMarketStrategy` class implements these concepts in a systematic trading approach. The strategy is now fully contained in a single file (`auction_market_strategy.py`) which includes both the strategy implementation and the parameter management:
 
 ```python
 class AuctionMarketStrategy(bt.Strategy):
@@ -51,7 +51,41 @@ class AuctionMarketStrategy(bt.Strategy):
     - Balance/Imbalance detection
     - Excess move identification
     - Rotation analysis
+    
+    The strategy can be configured using the AuctionMarketParameters class,
+    which provides default, aggressive, and conservative parameter presets.
     """
+```
+
+## Parameter Management
+
+The strategy uses the `AuctionMarketParameters` class for parameter management, which is now integrated into the same file:
+
+```python
+class AuctionMarketParameters:
+    """Parameters for Auction Market Theory trading strategy."""
+    
+    def __init__(self):
+        # Time-based parameters
+        self.trading_hours_start = "09:30"  # Market open (EST)
+        self.trading_hours_end = "16:00"    # Market close (EST)
+        # ... other parameters ...
+```
+
+The file also includes functions to get predefined parameter sets:
+
+```python
+def get_default_parameters():
+    """Return default parameters for Auction Market Theory strategy."""
+    return AuctionMarketParameters()
+
+def get_aggressive_parameters():
+    """Return more aggressive parameters for Auction Market Theory strategy."""
+    # ... parameter customization ...
+
+def get_conservative_parameters():
+    """Return more conservative parameters for Auction Market Theory strategy."""
+    # ... parameter customization ...
 ```
 
 ## Strategy Parameters
@@ -196,6 +230,22 @@ To use specific parameter presets:
 
 ```bash
 python grok_code/src/engine/run_backtest.py --strategy_name AuctionMarket --param_preset aggressive
+```
+
+## Using Custom Parameters
+
+You can also create custom parameters and pass them to the strategy:
+
+```python
+from strategies.auction_market_strategy import AuctionMarketParameters, AuctionMarketStrategy
+
+# Create custom parameters
+params = AuctionMarketParameters()
+params.value_area_volume_percent = 0.65
+params.auction_zones['excess_threshold'] = 1.8
+
+# Initialize strategy with custom parameters
+strategy = AuctionMarketStrategy(parameters=params)
 ```
 
 ## Performance Metrics

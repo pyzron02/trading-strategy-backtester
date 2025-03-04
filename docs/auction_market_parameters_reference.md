@@ -2,11 +2,16 @@
 
 This document provides a quick reference for the parameters used in the Auction Market Theory strategy.
 
+> **Note:** The `AuctionMarketParameters` class is now integrated directly into the `auction_market_strategy.py` file. There is no longer a separate `auction_market_parameters.py` file.
+
 ## Parameter Presets
 
 The strategy includes three built-in parameter presets that can be used out of the box:
 
 ```python
+# Import from the combined file
+from strategies.auction_market_strategy import get_default_parameters, get_aggressive_parameters, get_conservative_parameters
+
 # Use default parameters
 params = get_default_parameters()
 
@@ -109,7 +114,7 @@ python grok_code/src/engine/run_backtest.py --strategy_name AuctionMarket --para
 To use custom parameters, create a new instance of `AuctionMarketParameters` and modify the desired values:
 
 ```python
-from strategies.auction_market_parameters import AuctionMarketParameters
+from strategies.auction_market_strategy import AuctionMarketParameters, AuctionMarketStrategy
 
 # Start with default parameters
 params = AuctionMarketParameters()
@@ -120,7 +125,7 @@ params.lookback_days = 12
 params.max_positions = 4
 
 # Use the custom parameters in the strategy
-strategy = AuctionMarketStrategy(params=params)
+strategy = AuctionMarketStrategy(parameters=params)
 ```
 
 ## Parameter Optimization
