@@ -136,6 +136,9 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
     elif strategy_name == 'MultiPosition':
         from multi_position_strategy import MultiPositionStrategy
         cerebro.addstrategy(MultiPositionStrategy)
+    elif strategy_name == 'AuctionMarket':
+        from auction_market_strategy import AuctionMarketStrategy
+        cerebro.addstrategy(AuctionMarketStrategy)
     else:
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
@@ -242,7 +245,7 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run a backtest with a specified strategy on multiple tickers.")
     parser.add_argument('--strategy_name', type=str, default='SimpleStock',
-                        help="Name of the strategy to run (e.g., SimpleStock)")
+                        help="Name of the strategy to run (e.g., SimpleStock, MultiPosition, AuctionMarket)")
     parser.add_argument('--output_dir', type=str, default='output',
                         help="Directory to save backtest results")
     parser.add_argument('--tickers', type=str, default=None,
