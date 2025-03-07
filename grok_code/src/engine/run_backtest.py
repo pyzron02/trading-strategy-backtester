@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# run_backtest.py - Run a backtest for a strategy
+
 import os
 import sys
 import argparse
@@ -6,6 +9,14 @@ import pandas as pd
 from datetime import datetime
 import pickle
 import re
+
+# Add the parent directory to the path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
+
+from strategies import registry
 
 class TradeLogger(bt.Analyzer):
     def __init__(self):
@@ -32,7 +43,7 @@ class TradeLogger(bt.Analyzer):
     def get_analysis(self):
         return self.trades
 
-def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None):
+def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None, parameters=None, start_date=None, end_date=None):
     """
     Run a backtest with the specified strategy on multiple tickers using a single CSV file.
     
@@ -40,14 +51,22 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
         output_dir (str): Directory to save results.
         strategy_name (str): Name of the strategy to run (e.g., 'SimpleStock').
         tickers (list): List of stock ticker symbols. If None, will use all tickers found in the CSV except SP500.
+        parameters (dict): Dictionary of parameters to pass to the strategy.
+        start_date (str): Start date for the backtest in format 'YYYY-MM-DD'.
+        end_date (str): End date for the backtest in format 'YYYY-MM-DD'.
     """
     # Get the project root directory (3 levels up from this file)
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
     
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    strategy_dir = f"{timestamp}_{strategy_name}_portfolio"
-    results_dir = os.path.join(project_root, output_dir, strategy_dir)
+    # Use the provided output_dir directly
+    # If it's a relative path, make it absolute
+    if not os.path.isabs(output_dir):
+        output_dir = os.path.join(project_root, output_dir)
+    
+    # Create a subdirectory for this specific parameter set
+    param_hash = hash(str(parameters)) % 10000  # Simple hash to identify parameter set
+    results_dir = os.path.join(output_dir, f"params_{param_hash}")
     os.makedirs(results_dir, exist_ok=True)
 
     cerebro = bt.Cerebro()
@@ -61,6 +80,17 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
     
     # Read CSV to map column positions
     df = pd.read_csv(stock_csv)
+    
+    # Filter data by date range if provided
+    if start_date or end_date:
+        df['Date'] = pd.to_datetime(df['Date'])
+        if start_date:
+            df = df[df['Date'] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df['Date'] <= pd.to_datetime(end_date)]
+        # Reset index after filtering
+        df = df.reset_index(drop=True)
+    
     column_map = {col: idx for idx, col in enumerate(df.columns)}
     print("CSV columns:", list(column_map.keys()))  # Debug output
 
@@ -105,8 +135,8 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
                 close=column_map[f'{ticker}_Close'],
                 volume=column_map[f'{ticker}_Volume'],
                 openinterest=-1,
-                fromdate=datetime(2020, 1, 1),
-                todate=datetime(2025, 2, 25),
+                fromdate=pd.to_datetime(start_date).to_pydatetime() if start_date else None,
+                todate=pd.to_datetime(end_date).to_pydatetime() if end_date else None,
                 nullvalue=0.0
             )
             cerebro.adddata(data, name=ticker)
@@ -128,17 +158,29 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
 
     # Add strategy based on name
     if strategy_name == 'SimpleStock':
-        from simple_stock_strategy import SimpleStockStrategy
-        cerebro.addstrategy(SimpleStockStrategy)
-    elif strategy_name == 'CoveredCall':
-        from strategy import CoveredCallStrategy
-        cerebro.addstrategy(CoveredCallStrategy)
+        from strategies.simplestock import SimpleStock
+        if parameters:
+            cerebro.addstrategy(SimpleStock, **parameters)
+        else:
+            cerebro.addstrategy(SimpleStock)
     elif strategy_name == 'MultiPosition':
-        from multi_position_strategy import MultiPositionStrategy
-        cerebro.addstrategy(MultiPositionStrategy)
+        from strategies.multi_position_strategy import MultiPositionStrategy
+        if parameters:
+            cerebro.addstrategy(MultiPositionStrategy, **parameters)
+        else:
+            cerebro.addstrategy(MultiPositionStrategy)
     elif strategy_name == 'AuctionMarket':
-        from auction_market_strategy import AuctionMarketStrategy
-        cerebro.addstrategy(AuctionMarketStrategy)
+        from strategies.auction_market_strategy import AuctionMarketStrategy
+        if parameters:
+            cerebro.addstrategy(AuctionMarketStrategy, **parameters)
+        else:
+            cerebro.addstrategy(AuctionMarketStrategy)
+    elif strategy_name == 'MACrossover':
+        from strategies.ma_crossover import MACrossover
+        if parameters:
+            cerebro.addstrategy(MACrossover, **parameters)
+        else:
+            cerebro.addstrategy(MACrossover)
     else:
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
@@ -191,56 +233,29 @@ def run_backtest(output_dir='output', strategy_name='SimpleStock', tickers=None)
         except Exception as e:
             print(f"Warning: Could not calculate benchmark return: {e}")
         
-        # Calculate annualized metrics
-        start_date = df['Date'].iloc[0]
-        end_date = df['Date'].iloc[-1]
-        if isinstance(start_date, str):
-            start_date = datetime.strptime(start_date, '%Y-%m-%d')
-        if isinstance(end_date, str):
-            end_date = datetime.strptime(end_date, '%Y-%m-%d')
-        
-        years = (end_date - start_date).days / 365.25
-        annual_return = ((1 + total_return/100) ** (1/years) - 1) * 100 if years > 0 else 0
-        
-        # Calculate volatility and Sharpe ratio if equity curve is available
-        volatility = 0.0
-        sharpe_ratio = 0.0
-        max_drawdown = 0.0
-        
-        if hasattr(strat, 'equity_curve'):
-            # Calculate daily returns
-            equity_df = pd.DataFrame(strat.equity_curve, columns=['Date', 'Value'])
-            equity_df['Date'] = pd.to_datetime(equity_df['Date'])
-            equity_df.set_index('Date', inplace=True)
-            equity_df['Return'] = equity_df['Value'].pct_change()
-            
-            # Calculate annualized volatility
-            daily_volatility = equity_df['Return'].std()
-            volatility = daily_volatility * (252 ** 0.5) * 100  # Annualized and as percentage
-            
-            # Calculate Sharpe ratio (assuming risk-free rate of 0)
-            sharpe_ratio = annual_return / volatility if volatility > 0 else 0
-            
-            # Calculate maximum drawdown
-            equity_df['Peak'] = equity_df['Value'].cummax()
-            equity_df['Drawdown'] = (equity_df['Value'] - equity_df['Peak']) / equity_df['Peak'] * 100
-            max_drawdown = abs(equity_df['Drawdown'].min())
-        
-        # Write results to file
+        # Write metrics to file
         f.write(f"Strategy: {strategy_name}\n")
-        f.write(f"Tickers: {', '.join(tickers)}\n")
-        f.write(f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}\n")
-        f.write(f"Initial Capital: ${initial_value:.2f}\n")
-        f.write(f"Final Capital: ${final_value:.2f}\n")
+        f.write(f"Parameters: {parameters}\n")
+        f.write(f"Tickers: {tickers}\n")
+        f.write(f"Initial Value: ${initial_value:.2f}\n")
+        f.write(f"Final Value: ${final_value:.2f}\n")
         f.write(f"Total Return: {total_return:.2f}%\n")
-        f.write(f"Annualized Return: {annual_return:.2f}%\n")
-        f.write(f"Annualized Volatility: {volatility:.2f}%\n")
-        f.write(f"Sharpe Ratio: {sharpe_ratio:.2f}\n")
-        f.write(f"Maximum Drawdown: {max_drawdown:.2f}%\n")
-        f.write(f"Benchmark Total Return: {benchmark_return:.2f}%\n")
+        f.write(f"Benchmark Return (SP500): {benchmark_return:.2f}%\n")
+        f.write(f"Alpha: {total_return - benchmark_return:.2f}%\n")
     
-    print(f"Results summary saved to {results_dir}/results.txt")
-    return results_dir
+    # Return results as a dictionary
+    return {
+        'strategy': strategy_name,
+        'parameters': parameters,
+        'tickers': tickers,
+        'initial_value': cerebro.broker.startingcash,
+        'final_value': cerebro.broker.getvalue(),
+        'total_return': total_return,
+        'benchmark_return': benchmark_return,
+        'alpha': total_return - benchmark_return,
+        'equity_curve': strat.equity_curve if hasattr(strat, 'equity_curve') else [],
+        'trades': trade_logger.get_analysis()
+    }
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run a backtest with a specified strategy on multiple tickers.")
@@ -250,7 +265,11 @@ if __name__ == "__main__":
                         help="Directory to save backtest results")
     parser.add_argument('--tickers', type=str, default=None,
                         help="Comma-separated list of stock tickers (e.g., MSFT,AAPL,GOOG). If not provided, will use all tickers in the CSV except SP500.")
+    parser.add_argument('--start_date', type=str, default=None,
+                        help="Start date for the backtest in format 'YYYY-MM-DD'")
+    parser.add_argument('--end_date', type=str, default=None,
+                        help="End date for the backtest in format 'YYYY-MM-DD'")
     args = parser.parse_args()
     
     tickers = args.tickers.split(',') if args.tickers else None
-    run_backtest(output_dir=args.output_dir, strategy_name=args.strategy_name, tickers=tickers)
+    run_backtest(output_dir=args.output_dir, strategy_name=args.strategy_name, tickers=tickers, start_date=args.start_date, end_date=args.end_date)
