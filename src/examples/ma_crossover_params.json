@@ -1,0 +1,5 @@
+{
+    "fast_period": [5, 10, 15, 20],
+    "slow_period": [20, 30, 40, 50],
+    "position_size": [50, 100, 150]
+} 

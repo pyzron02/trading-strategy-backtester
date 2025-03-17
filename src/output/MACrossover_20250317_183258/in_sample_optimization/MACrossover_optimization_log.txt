@@ -1,0 +1,8 @@
+Parameter Optimization Log for MACrossover
+Started at: 2025-03-17 18:32:58
+Tickers: ['AAPL']
+Period: 2020-01-01 to 2021-12-31
+
+Parameters 0:
+  sharpe_ratio: 0.590148759592847
+
