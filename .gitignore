@@ -67,3 +67,6 @@ output/*/
 input/*.csv
 !input/.gitkeep
 *.pkl 
+# Runtime data
+cache/
+logs/
