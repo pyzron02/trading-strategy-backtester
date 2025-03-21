@@ -186,11 +186,22 @@ class InSampleExcellence:
                     f.write(f"{param}: {value}\n")
             
             # Run backtest with these parameters
+            # Calculate warmup period based on strategy and parameters
+            warmup_period = 60  # Default
+            if self.strategy_name == 'MACrossover':
+                if params and 'slow_period' in params:
+                    warmup_period = params['slow_period'] * 2
+                else:
+                    warmup_period = 60  # Default is twice the default slow period (30)
+            
             results = run_backtest(
                 strategy_name=self.strategy_name,
                 tickers=self.tickers,
                 parameters=params,
-                output_dir=param_dir
+                start_date=self.start_date,
+                end_date=self.end_date,
+                output_dir=param_dir,
+                warmup_period=warmup_period
             )
             
             # Save results to a file

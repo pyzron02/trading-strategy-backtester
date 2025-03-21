@@ -94,6 +94,14 @@ class WalkForwardTest:
         in_sample_dir = os.path.join(self.output_dir, 'in_sample')
         os.makedirs(in_sample_dir, exist_ok=True)
         
+        # Calculate warmup period based on strategy
+        warmup_period = 60  # Default warmup period
+        if self.strategy_name == 'MACrossover':
+            if self.parameters and 'slow_period' in self.parameters:
+                warmup_period = self.parameters['slow_period'] * 2
+            else:
+                warmup_period = 60  # Default - twice the default slow period (30)
+        
         # Run backtest with in-sample date range
         in_sample_results = run_backtest(
             output_dir=in_sample_dir,
@@ -101,7 +109,8 @@ class WalkForwardTest:
             tickers=self.tickers,
             parameters=self.parameters,
             start_date=self.in_sample_start.strftime('%Y-%m-%d'),
-            end_date=self.in_sample_end.strftime('%Y-%m-%d')
+            end_date=self.in_sample_end.strftime('%Y-%m-%d'),
+            warmup_period=warmup_period
         )
         
         return in_sample_results
@@ -114,6 +123,14 @@ class WalkForwardTest:
         out_sample_dir = os.path.join(self.output_dir, 'out_sample')
         os.makedirs(out_sample_dir, exist_ok=True)
         
+        # Calculate warmup period based on strategy
+        warmup_period = 60  # Default warmup period
+        if self.strategy_name == 'MACrossover':
+            if self.parameters and 'slow_period' in self.parameters:
+                warmup_period = self.parameters['slow_period'] * 2
+            else:
+                warmup_period = 60  # Default - twice the default slow period (30)
+        
         # Run backtest with out-of-sample date range
         out_sample_results = run_backtest(
             output_dir=out_sample_dir,
@@ -121,7 +138,8 @@ class WalkForwardTest:
             tickers=self.tickers,
             parameters=self.parameters,
             start_date=self.out_sample_start.strftime('%Y-%m-%d'),
-            end_date=self.out_sample_end.strftime('%Y-%m-%d')
+            end_date=self.out_sample_end.strftime('%Y-%m-%d'),
+            warmup_period=warmup_period
         )
         
         return out_sample_results
