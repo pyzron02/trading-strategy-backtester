@@ -150,6 +150,38 @@ The visualization settings can be customized by modifying the plotting functions
 - `plot_equity_curve`, `plot_drawdown`, and `plot_returns_histogram` in `evaluate_performance.py`
 - `plot_combined_equity_curves` and `plot_metrics_comparison` in `compare_strategies.py`
 
+## Monte Carlo Testing
+
+The backtester now includes a direct Monte Carlo implementation for strategy validation. This implementation:
+
+- Tests if a strategy has real predictive power by comparing original backtest results with permutation results
+- Uses Backtrader's native functionality for reliable backtesting
+- Implements permutation testing with returns shuffling or block shuffling
+- Calculates p-values and generates distribution plots for various metrics
+
+### Running Monte Carlo Tests
+
+You can run Monte Carlo tests directly using the workflow system:
+
+```bash
+python -m src.workflows.unified_workflow --workflow-type monte-carlo --strategy MACrossover --tickers AAPL --num_permutations 10
+```
+
+Or run the direct implementation:
+
+```bash
+python direct_monte_carlo.py --strategy MACrossover --tickers AAPL --num_permutations 5 --in_sample_start 2015-01-01 --in_sample_end 2019-12-31
+```
+
+For more details on the direct Monte Carlo implementation, see [README_MONTE_CARLO.md](README_MONTE_CARLO.md).
+
+### Key Features
+
+- **Reliability**: The direct implementation avoids index errors and other issues that can occur in more complex frameworks
+- **Flexibility**: Easily accommodates different strategies and permutation methods
+- **Visualization**: Generates histograms and plots to visually assess strategy performance
+- **Statistical Validation**: Calculates p-values to determine if strategy results are statistically significant
+
 ## License
 
 [Specify your license information here]
