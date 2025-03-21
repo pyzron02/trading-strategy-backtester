@@ -1,8 +1,0 @@
-Strategy: MACrossover
-Parameters: {}
-Tickers: ['AAPL']
-Initial Value: $100000.00
-Final Value: $102055.79
-Total Return: 2.06%
-Benchmark Return (SP500): 28.56%
-Alpha: -26.50%
