@@ -70,3 +70,4 @@ input/*.csv
 # Runtime data
 cache/
 logs/
+src/output/
