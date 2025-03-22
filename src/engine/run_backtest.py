@@ -81,7 +81,7 @@ class CustomJSONEncoder(json.JSONEncoder):
             return obj.strftime('%Y-%m-%d %H:%M:%S')
         elif isinstance(obj, datetime):
             return obj.strftime('%Y-%m-%d %H:%M:%S')
-        elif isinstance(obj, datetime.date):
+        elif isinstance(obj, date):
             return obj.strftime('%Y-%m-%d')
         elif hasattr(obj, 'to_dict'):
             return obj.to_dict()
