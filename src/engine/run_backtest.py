@@ -243,36 +243,124 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
     # Ensures that strategy modules can be imported
 
     # Add strategy based on name
-    if strategy_name == 'SimpleStock':
-        from strategies.simplestock import SimpleStock
-        if parameters:
-            cerebro.addstrategy(SimpleStock, **parameters)
+    try:
+        if strategy_name == 'SimpleStock':
+            from strategies.simplestock import SimpleStock
+            if parameters:
+                cerebro.addstrategy(SimpleStock, **parameters)
+            else:
+                cerebro.addstrategy(SimpleStock)
+        elif strategy_name == 'MultiPosition':
+            try:
+                from strategies.multi_position_strategy import MultiPositionStrategy
+                if parameters:
+                    cerebro.addstrategy(MultiPositionStrategy, **parameters)
+                else:
+                    cerebro.addstrategy(MultiPositionStrategy)
+            except Exception as e:
+                print(f"Error loading MultiPositionStrategy from strategies directory: {e}")
+                print("Using fallback MultiPosition strategy from direct_monte_carlo.py")
+                # Get path to direct_monte_carlo.py
+                monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
+                # Add the directory to sys.path temporarily
+                if os.path.dirname(monte_carlo_path) not in sys.path:
+                    sys.path.append(os.path.dirname(monte_carlo_path))
+                # Import the strategy from direct_monte_carlo
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
+                monte_carlo = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(monte_carlo)
+                # Use the MultiPosition strategy from direct_monte_carlo
+                if parameters:
+                    cerebro.addstrategy(monte_carlo.MultiPosition, **parameters)
+                else:
+                    cerebro.addstrategy(monte_carlo.MultiPosition)
+        elif strategy_name == 'AuctionMarket':
+            try:
+                from strategies.auction_market_strategy import AuctionMarketStrategy
+                if parameters:
+                    cerebro.addstrategy(AuctionMarketStrategy, **parameters)
+                else:
+                    cerebro.addstrategy(AuctionMarketStrategy)
+            except Exception as e:
+                print(f"Error loading AuctionMarketStrategy from strategies directory: {e}")
+                print("Using fallback AuctionMarket strategy from direct_monte_carlo.py")
+                # Get path to direct_monte_carlo.py
+                monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
+                # Add the directory to sys.path temporarily
+                if os.path.dirname(monte_carlo_path) not in sys.path:
+                    sys.path.append(os.path.dirname(monte_carlo_path))
+                # Import the strategy from direct_monte_carlo
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
+                monte_carlo = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(monte_carlo)
+                # Use the AuctionMarket strategy from direct_monte_carlo
+                if parameters:
+                    cerebro.addstrategy(monte_carlo.AuctionMarket, **parameters)
+                else:
+                    cerebro.addstrategy(monte_carlo.AuctionMarket)
+        elif strategy_name == 'MACrossover':
+            try:
+                from strategies.ma_crossover import MACrossover
+                if parameters:
+                    cerebro.addstrategy(MACrossover, **parameters)
+                else:
+                    cerebro.addstrategy(MACrossover)
+            except Exception as e:
+                print(f"Error loading MACrossover from strategies directory: {e}")
+                print("Using fallback MACrossover strategy from direct_monte_carlo.py")
+                # Get path to direct_monte_carlo.py
+                monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
+                # Add the directory to sys.path temporarily
+                if os.path.dirname(monte_carlo_path) not in sys.path:
+                    sys.path.append(os.path.dirname(monte_carlo_path))
+                # Import the strategy from direct_monte_carlo
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
+                monte_carlo = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(monte_carlo)
+                # Use the MACrossover strategy from direct_monte_carlo
+                if parameters:
+                    cerebro.addstrategy(monte_carlo.MACrossover, **parameters)
+                else:
+                    cerebro.addstrategy(monte_carlo.MACrossover)
         else:
-            cerebro.addstrategy(SimpleStock)
-    elif strategy_name == 'MultiPosition':
-        from strategies.multi_position_strategy import MultiPositionStrategy
-        if parameters:
-            cerebro.addstrategy(MultiPositionStrategy, **parameters)
-        else:
-            cerebro.addstrategy(MultiPositionStrategy)
-    elif strategy_name == 'AuctionMarket':
-        from strategies.auction_market_strategy import AuctionMarketStrategy
-        if parameters:
-            cerebro.addstrategy(AuctionMarketStrategy, **parameters)
-        else:
-            cerebro.addstrategy(AuctionMarketStrategy)
-    elif strategy_name == 'MACrossover':
-        from strategies.ma_crossover import MACrossover
-        if parameters:
-            cerebro.addstrategy(MACrossover, **parameters)
-        else:
-            cerebro.addstrategy(MACrossover)
-    else:
-        raise ValueError(f"Unknown strategy: {strategy_name}")
-    # Imports and adds the specified strategy to the Cerebro engine
-    # Passes parameters to the strategy if provided
-    # Handles different strategy types (SimpleStock, MultiPosition, AuctionMarket, MACrossover)
-    # Raises an error if the strategy is unknown
+            raise ValueError(f"Unknown strategy: {strategy_name}")
+    except Exception as e:
+        print(f"Error loading strategy: {e}")
+        print("Attempting to load fallback strategy from direct_monte_carlo.py")
+        
+        # Get path to direct_monte_carlo.py
+        monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
+        
+        # Check if the file exists
+        if not os.path.exists(monte_carlo_path):
+            raise FileNotFoundError(f"Could not find direct_monte_carlo.py at {monte_carlo_path}")
+        
+        # Add the directory to sys.path temporarily
+        if os.path.dirname(monte_carlo_path) not in sys.path:
+            sys.path.append(os.path.dirname(monte_carlo_path))
+        
+        # Import the module dynamically
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
+            monte_carlo = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(monte_carlo)
+            
+            # Check if the strategy exists in the module
+            if hasattr(monte_carlo, strategy_name):
+                strategy_class = getattr(monte_carlo, strategy_name)
+                print(f"Using {strategy_name} strategy from direct_monte_carlo.py")
+                if parameters:
+                    cerebro.addstrategy(strategy_class, **parameters)
+                else:
+                    cerebro.addstrategy(strategy_class)
+            else:
+                raise ValueError(f"Strategy {strategy_name} not found in direct_monte_carlo.py")
+        except Exception as e2:
+            raise ValueError(f"Failed to load strategy from direct_monte_carlo.py: {e2}. Original error: {e}")
 
     # Add TradeLogger analyzer
     cerebro.addanalyzer(TradeLogger, _name='tradelogger')
