@@ -33,6 +33,22 @@ class CustomJSONEncoder(json.JSONEncoder):
             return obj.item()
         return super().default(obj)
 
+def convert_timestamps_in_dict(obj):
+    """Recursively convert any Timestamp keys in dictionaries to strings."""
+    if isinstance(obj, dict):
+        new_obj = {}
+        for k, v in obj.items():
+            # Convert key if it's a Timestamp
+            if isinstance(k, pd.Timestamp):
+                k = k.strftime('%Y-%m-%d %H:%M:%S')
+            # Recursively convert value
+            new_obj[k] = convert_timestamps_in_dict(v)
+        return new_obj
+    elif isinstance(obj, list):
+        return [convert_timestamps_in_dict(item) for item in obj]
+    else:
+        return obj
+
 def run_strategy_backtest(strategy_name, tickers=None, start_date=None, end_date=None, 
                          parameters=None, output_dir=None, detailed_analysis=False,
                          save_results=True, verbose=False):
@@ -119,6 +135,9 @@ def run_strategy_backtest(strategy_name, tickers=None, start_date=None, end_date
                 serializable_result[key] = value.to_dict(orient='records')
             else:
                 serializable_result[key] = value
+        
+        # Recursively convert any Timestamp keys to strings
+        serializable_result = convert_timestamps_in_dict(serializable_result)
         
         results_file = os.path.join(output_dir, f"{strategy_name}_results.json")
         with open(results_file, 'w') as f:
