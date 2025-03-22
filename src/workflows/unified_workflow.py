@@ -287,7 +287,7 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
         start_date (str): Start date for the entire test period (YYYY-MM-DD)
         end_date (str): End date for the entire test period (YYYY-MM-DD)
         param_file (str): Path to parameter file for optimization
-        num_workers (int): Number of parallel workers for optimization
+        num_workers (int): Number of parallel workers for optimization (CPU cores to use)
         output_dir (str): Directory to save output files
         in_sample_ratio (float): Ratio of data to use for in-sample period
         num_permutations (int): Number of permutations for Monte Carlo testing
@@ -360,12 +360,21 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
         output_dir=optimization_dir
     )
     
-    # If num_workers is provided, use it as max_combinations
+    # If num_workers is provided, use it for parallelization
+    # Otherwise use a default of 100 max combinations
     max_combinations = 100  # Default value
     if num_workers is not None:
-        max_combinations = num_workers
+        logger.info('workflow', f"Using {num_workers} CPU cores for parallel optimization")
+    else:
+        import multiprocessing
+        num_workers = max(1, multiprocessing.cpu_count() - 1)  # Use all cores except one by default
+        logger.info('workflow', f"Using {num_workers} of {multiprocessing.cpu_count()} available CPU cores for parallel optimization")
     
-    optimization_results = optimizer.run_optimization(metric='sharpe_ratio', max_combinations=max_combinations)
+    optimization_results = optimizer.run_optimization(
+        metric='sharpe_ratio', 
+        max_combinations=max_combinations,
+        n_jobs=num_workers
+    )
     best_params = optimization_results.get('best_parameters', {})
     
     # Step 2: Walk-Forward Testing
@@ -476,20 +485,20 @@ def main():
                         help='Start date for backtesting (YYYY-MM-DD)')
     parser.add_argument('--end-date', default='2021-12-31', 
                         help='End date for backtesting (YYYY-MM-DD)')
-    parser.add_argument('--param-file', 
-                        help='Path to parameter file')
-    parser.add_argument('--output-dir', 
+    parser.add_argument('--output-dir', default=None, 
                         help='Directory to save output files')
-    parser.add_argument('--verbose', '-v', action='store_true', 
-                        help='Print detailed information')
+    parser.add_argument('--param-file', default=None, 
+                        help='Path to parameter file for optimization')
+    parser.add_argument('--verbose', action='store_true', 
+                        help='Print verbose output')
+    parser.add_argument('--num-cores', type=int, default=None,
+                        help='Number of CPU cores to use for parallel processing')
     
     # Workflow-specific arguments
     parser.add_argument('--in-sample-ratio', type=float, default=0.7, 
                         help='Ratio of data to use for in-sample period')
-    parser.add_argument('--num-permutations', type=int, default=0, 
-                        help='Number of permutations for Monte Carlo testing (0 to disable)')
-    parser.add_argument('--num-workers', type=int, 
-                        help='Number of parallel workers for optimization')
+    parser.add_argument('--num-permutations', type=int, default=10, 
+                        help='Number of permutations for Monte Carlo testing')
     parser.add_argument('--detailed-analysis', action='store_true', 
                         help='Run detailed performance analysis')
     
@@ -588,109 +597,19 @@ def main():
                 else:
                     print("\nTrade logs summary saved to the output directory")
     elif args.workflow_type == 'complete':
-        # Check if it's a strategy with known issues with complete workflow
-        # For MACrossover and AuctionMarket, use simple workflow with verbose output
-        if args.strategy == 'MACrossover' or args.strategy == 'AuctionMarket':
-            print(f"Note: Using simple workflow for {args.strategy} due to known issues with complete workflow")
-            # Run the simple workflow
-            simple_results = run_simple_workflow(
-                strategy_name=args.strategy,
-                tickers=args.tickers,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                param_file=args.param_file,
-                output_dir=args.output_dir,
-                detailed_analysis=args.detailed_analysis,
-                verbose=args.verbose
-            )
-            
-            # If Monte Carlo testing is requested, run it separately
-            if args.num_permutations > 0:
-                print(f"Running Monte Carlo test with {args.num_permutations} permutations...")
-                
-                # Create Monte Carlo output directory
-                if args.output_dir:
-                    monte_carlo_dir = os.path.join(args.output_dir, 'monte_carlo')
-                else:
-                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    monte_carlo_dir = os.path.join(os.path.dirname(src_dir), 'output', 
-                                               f"{args.strategy}_monte_carlo_{timestamp}")
-                
-                # Ensure directory exists
-                os.makedirs(monte_carlo_dir, exist_ok=True)
-                print(f"Monte Carlo results will be saved to: {monte_carlo_dir}")
-                
-                # Use parameters from param file if provided
-                parameters = None
-                if args.param_file:
-                    try:
-                        param_manager = ParameterManager()
-                        parameters = param_manager.load_parameter_file(args.param_file)
-                        if args.verbose:
-                            print(f"Using parameters from file: {parameters}")
-                    except Exception as e:
-                        print(f"Error loading parameters: {e}")
-                        # Use default parameters
-                        if args.strategy == 'MACrossover':
-                            parameters = {'fast_period': 5, 'slow_period': 20, 'position_size': 10}
-                        else:
-                            parameters = None
-                
-                try:
-                    # Run Monte Carlo test
-                    mc_results = run_monte_carlo_safely(
-                        strategy_name=args.strategy,
-                        tickers=args.tickers,
-                        start_date=args.start_date,
-                        end_date=args.end_date,
-                        num_permutations=args.num_permutations,
-                        best_params=parameters,
-                        output_dir=monte_carlo_dir,
-                        verbose=args.verbose
-                    )
-                    
-                    if not mc_results or not mc_results.get('success', False):
-                        error_msg = mc_results.get('error', 'Unknown error') if mc_results else 'No results returned'
-                        print(f"Monte Carlo testing error: {error_msg}")
-                    else:
-                        print(f"Monte Carlo testing completed successfully.")
-                        
-                        # Summary of p-values
-                        if (mc_results and 'results' in mc_results and mc_results['results'] and 
-                            'analysis' in mc_results['results'] and 'p_values' in mc_results['results']['analysis']):
-                            p_values = mc_results['results']['analysis']['p_values']
-                            print("\nP-values for performance metrics:")
-                            for metric, p_value in p_values.items():
-                                if p_value is not None:
-                                    significance = "Significant" if p_value < 0.05 else "Not significant"
-                                    print(f"  {metric.replace('_', ' ').title()}: {p_value:.4f} ({significance})")
-                        else:
-                            print("No p-values available in the results.")
-                    
-                    # Save Monte Carlo results to JSON
-                    results_file = os.path.join(monte_carlo_dir, f"{args.strategy}_monte_carlo_results.json")
-                    with open(results_file, 'w') as f:
-                        json.dump(mc_results, f, indent=4, cls=CustomJSONEncoder)
-                    
-                    print(f"Monte Carlo results saved to: {results_file}")
-                except Exception as e:
-                    print(f"Error during Monte Carlo testing: {e}")
-                    import traceback
-                    traceback.print_exc()
-        else:
-            # Run the complete workflow with optimization and Monte Carlo
-            run_complete_workflow(
-                strategy_name=args.strategy,
-                tickers=args.tickers,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                param_file=args.param_file,
-                output_dir=args.output_dir,
-                in_sample_ratio=args.in_sample_ratio,
-                num_permutations=args.num_permutations,
-                num_workers=args.num_workers,
-                verbose=args.verbose
-            )
+        # Run the complete workflow with optimization and Monte Carlo
+        run_complete_workflow(
+            strategy_name=args.strategy,
+            tickers=args.tickers,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            param_file=args.param_file,
+            num_workers=args.num_cores,
+            output_dir=args.output_dir,
+            in_sample_ratio=args.in_sample_ratio,
+            num_permutations=args.num_permutations,
+            verbose=args.verbose
+        )
     elif args.workflow_type == 'walk-forward':
         # Calculate dates based on in-sample ratio
         date_range = (datetime.strptime(args.end_date, '%Y-%m-%d') - datetime.strptime(args.start_date, '%Y-%m-%d')).days

@@ -14,6 +14,8 @@ import itertools
 from datetime import datetime
 from tqdm import tqdm
 import random
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Add the current directory to the path
 current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,6 +24,51 @@ if current_dir not in sys.path:
 
 from engine.run_backtest import run_backtest
 from engine.logging_system import logger
+
+# Function to execute a single backtest (used for parallel processing)
+def _run_single_backtest(args):
+    """
+    Run a single backtest with the given parameters.
+    
+    Args:
+        args (tuple): Tuple containing (strategy_name, tickers, params, start_date, 
+                      end_date, param_dir, warmup_period, i)
+                      
+    Returns:
+        tuple: (i, results, params) - index, backtest results, and parameters
+    """
+    strategy_name, tickers, params, start_date, end_date, param_dir, warmup_period, i = args
+    
+    # Create directory if it doesn't exist
+    os.makedirs(param_dir, exist_ok=True)
+    
+    # Save parameters to file
+    params_file = os.path.join(param_dir, "parameters.txt")
+    with open(params_file, 'w') as f:
+        for param, value in params.items():
+            f.write(f"{param}: {value}\n")
+    
+    try:
+        # Run backtest with these parameters
+        results = run_backtest(
+            strategy_name=strategy_name,
+            tickers=tickers,
+            parameters=params,
+            start_date=start_date,
+            end_date=end_date,
+            output_dir=param_dir,
+            warmup_period=warmup_period
+        )
+        
+        # Save results to a file
+        results_file = os.path.join(param_dir, "backtest_results.pkl")
+        with open(results_file, 'wb') as f:
+            pickle.dump(results, f)
+        
+        return (i, results, params)
+    except Exception as e:
+        print(f"Error in backtest {i} with params {params}: {e}")
+        return (i, None, params)
 
 class InSampleExcellence:
     """
@@ -145,20 +192,27 @@ class InSampleExcellence:
         
         return param_combinations
     
-    def run_optimization(self, metric='sharpe_ratio', max_combinations=100):
+    def run_optimization(self, metric='sharpe_ratio', max_combinations=100, n_jobs=None):
         """
         Run the parameter optimization process.
         
         Args:
             metric (str): Metric to optimize for (e.g., 'sharpe_ratio', 'profit_factor', 'total_return')
             max_combinations (int): Maximum number of parameter combinations to test
+            n_jobs (int): Number of parallel jobs. If None, will use all available CPU cores.
             
         Returns:
             dict: Results of the optimization process
         """
+        # Determine number of parallel jobs to use
+        if n_jobs is None:
+            n_jobs = multiprocessing.cpu_count()
+        n_jobs = max(1, min(n_jobs, multiprocessing.cpu_count()))  # Ensure valid range
+        
         print(f"Starting parameter optimization for {self.strategy_name}")
         print(f"Optimizing for {metric}")
         print(f"Testing up to {max_combinations} parameter combinations")
+        print(f"Using {n_jobs} CPU cores for parallel processing")
         
         # Get parameter grid
         param_grid = self.param_grid
@@ -173,19 +227,12 @@ class InSampleExcellence:
         test_dir = os.path.join(self.output_dir, f"test_{timestamp}")
         os.makedirs(test_dir, exist_ok=True)
         
-        # Run backtest for each parameter combination
-        for i, params in enumerate(tqdm(param_combinations, desc="Testing parameters")):
+        # Prepare arguments for parallel processing
+        backtest_args = []
+        for i, params in enumerate(param_combinations):
             # Create a unique directory for this parameter set
             param_dir = os.path.join(test_dir, f"params_{i}")
-            os.makedirs(param_dir, exist_ok=True)
             
-            # Save parameters to file
-            params_file = os.path.join(param_dir, "parameters.txt")
-            with open(params_file, 'w') as f:
-                for param, value in params.items():
-                    f.write(f"{param}: {value}\n")
-            
-            # Run backtest with these parameters
             # Calculate warmup period based on strategy and parameters
             warmup_period = 60  # Default
             if self.strategy_name == 'MACrossover':
@@ -194,37 +241,40 @@ class InSampleExcellence:
                 else:
                     warmup_period = 60  # Default is twice the default slow period (30)
             
-            results = run_backtest(
-                strategy_name=self.strategy_name,
-                tickers=self.tickers,
-                parameters=params,
-                start_date=self.start_date,
-                end_date=self.end_date,
-                output_dir=param_dir,
-                warmup_period=warmup_period
-            )
+            # Prepare args tuple
+            args = (self.strategy_name, self.tickers, params, self.start_date, 
+                   self.end_date, param_dir, warmup_period, i)
+            backtest_args.append(args)
+        
+        # Run backtests in parallel
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+            # Submit all jobs
+            future_to_idx = {executor.submit(_run_single_backtest, args): i 
+                            for i, args in enumerate(backtest_args)}
             
-            # Save results to a file
-            results_file = os.path.join(param_dir, "backtest_results.pkl")
-            with open(results_file, 'wb') as f:
-                pickle.dump(results, f)
-            
-            # Calculate metrics from the results dictionary directly
-            metrics = self._extract_metrics_from_results(results)
-            
-            # Add parameters and metrics to results
-            result = {
-                'parameters': params,
-                **metrics
-            }
-            self.results.append(result)
-            
-            # Log results
-            with open(self.log_file, 'a') as f:
-                f.write(f"Parameters {i}:\n")
-                for param, value in params.items():
-                    f.write(f"  {param}: {value}\n")
-                f.write(f"  {metric}: {metrics.get(metric, 'N/A')}\n\n")
+            # Process results as they complete
+            with tqdm(total=len(param_combinations), desc="Testing parameters") as pbar:
+                for future in as_completed(future_to_idx):
+                    i, results, params = future.result()
+                    pbar.update(1)
+                    
+                    if results is not None:
+                        # Calculate metrics from the results dictionary directly
+                        metrics = self._extract_metrics_from_results(results)
+                        
+                        # Add parameters and metrics to results
+                        result = {
+                            'parameters': params,
+                            **metrics
+                        }
+                        self.results.append(result)
+                        
+                        # Log results
+                        with open(self.log_file, 'a') as f:
+                            f.write(f"Parameters {i}:\n")
+                            for param, value in params.items():
+                                f.write(f"  {param}: {value}\n")
+                            f.write(f"  {metric}: {metrics.get(metric, 'N/A')}\n\n")
         
         # Find best parameters based on the specified metric
         if self.results:
@@ -249,19 +299,15 @@ class InSampleExcellence:
                 'best_sharpe': best_result.get('sharpe_ratio', 0),
                 'best_profit_factor': best_result.get('profit_factor', 0),
                 'best_total_return': best_result.get('total_return', 0),
-                'best_max_drawdown': best_result.get('max_drawdown', 0),
-                'best_win_rate': best_result.get('win_rate', 0),
                 'all_results': self.results
             }
         else:
-            print("No valid results found.")
+            print("No valid results were found during optimization")
             return {
                 'best_parameters': {},
                 'best_sharpe': 0,
                 'best_profit_factor': 0,
                 'best_total_return': 0,
-                'best_max_drawdown': 0,
-                'best_win_rate': 0,
                 'all_results': []
             }
     
