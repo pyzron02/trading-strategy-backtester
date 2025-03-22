@@ -111,6 +111,7 @@ def run_simple_workflow(strategy_name, tickers=None, start_date=None, end_date=N
         verbose=verbose
     )
 
+@log_execution_time('workflow')
 def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
                            num_permutations=10, parameters=None, best_params=None, 
                            output_dir=None, verbose=False):
@@ -597,19 +598,19 @@ def main():
                 else:
                     print("\nTrade logs summary saved to the output directory")
     elif args.workflow_type == 'complete':
-        # Run the complete workflow with optimization and Monte Carlo
-        run_complete_workflow(
-            strategy_name=args.strategy,
-            tickers=args.tickers,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            param_file=args.param_file,
+            # Run the complete workflow with optimization and Monte Carlo
+            run_complete_workflow(
+                strategy_name=args.strategy,
+                tickers=args.tickers,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                param_file=args.param_file,
             num_workers=args.num_cores,
-            output_dir=args.output_dir,
-            in_sample_ratio=args.in_sample_ratio,
-            num_permutations=args.num_permutations,
-            verbose=args.verbose
-        )
+                output_dir=args.output_dir,
+                in_sample_ratio=args.in_sample_ratio,
+                num_permutations=args.num_permutations,
+                verbose=args.verbose
+            )
     elif args.workflow_type == 'walk-forward':
         # Calculate dates based on in-sample ratio
         date_range = (datetime.strptime(args.end_date, '%Y-%m-%d') - datetime.strptime(args.start_date, '%Y-%m-%d')).days

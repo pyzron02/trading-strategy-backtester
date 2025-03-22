@@ -115,15 +115,25 @@ class MACrossover(bt.Strategy):
     )
 
     def __init__(self):
-        # Calculate warmup period
-        self.warmup_period = max(self.params.slow_period * 2, 50)
+        # Calculate warmup period - ensure it's long enough for safe use
+        self.warmup_period = max(self.params.slow_period, self.params.fast_period) * 3
         
-        # Use standard SMA indicators
-        self.fast_ma = bt.indicators.SMA(self.data.close, period=self.params.fast_period)
-        self.slow_ma = bt.indicators.SMA(self.data.close, period=self.params.slow_period)
+        # Set minimum periods to ensure indicators have enough data
+        self.addminperiod(self.warmup_period)
         
-        # Use standard CrossOver indicator
-        self.crossover = bt.indicators.CrossOver(self.fast_ma, self.slow_ma)
+        # Use dictionary-based indicators for safety
+        self.fast_ma = {}
+        self.slow_ma = {}
+        self.crossover = {}
+        
+        # Initialize indicators for data feeds
+        for data in self.datas:
+            # Use standard SMA indicators
+            self.fast_ma[data] = bt.indicators.SMA(data.close, period=self.params.fast_period)
+            self.slow_ma[data] = bt.indicators.SMA(data.close, period=self.params.slow_period)
+            
+            # Use standard CrossOver indicator
+            self.crossover[data] = bt.indicators.CrossOver(self.fast_ma[data], self.slow_ma[data])
         
         # Keep track of the equity curve for analysis
         self.equity_curve = []
@@ -137,28 +147,43 @@ class MACrossover(bt.Strategy):
         self.bars_processed += 1
         
         # Log portfolio value for the equity curve
-        date = self.data.datetime.date(0).isoformat()
-        value = self.broker.getvalue()
-        self.equity_curve.append({'Date': date, 'Value': value})
+        try:
+            date = self.data.datetime.date(0).isoformat()
+            value = self.broker.getvalue()
+            self.equity_curve.append({'Date': date, 'Value': value})
+        except Exception as e:
+            print(f"Error logging portfolio value: {e}")
         
         # Skip trading until we have enough bars for reliable indicator values
         if self.bars_processed < self.min_bars_required:
             return
-        
-        # Skip if not enough data
-        if len(self.data) < self.warmup_period:
-            return
             
-        # Get current position size
-        position = self.getposition().size
-        
-        # Trading logic based on crossover
-        if self.crossover > 0 and position == 0:
-            # Buy signal: crossover is positive
-            self.buy(size=self.params.position_size)
-        elif self.crossover < 0 and position > 0:
-            # Sell signal: crossover is negative
-            self.sell(size=position)
+        # Process each data feed
+        for data in self.datas:
+            try:
+                # Skip if not enough data
+                if len(data) < self.warmup_period:
+                    continue
+                
+                # Safety check to ensure all indicators have valid values
+                if (not self.fast_ma[data] or not self.fast_ma[data][0] or 
+                    not self.slow_ma[data] or not self.slow_ma[data][0] or
+                    not self.crossover[data] or not isinstance(self.crossover[data][0], (int, float))):
+                    continue
+                
+                # Get current position size
+                position = self.getposition(data).size
+                
+                # Trading logic based on crossover
+                if self.crossover[data] > 0 and position == 0:
+                    # Buy signal: crossover is positive
+                    self.buy(data=data, size=self.params.position_size)
+                elif self.crossover[data] < 0 and position > 0:
+                    # Sell signal: crossover is negative
+                    self.sell(data=data, size=position)
+            except Exception as e:
+                print(f"Error in next() for {data._name}: {e}")
+                continue
 
 # Add basic AuctionMarket strategy
 class AuctionMarket(bt.Strategy):
@@ -176,54 +201,75 @@ class AuctionMarket(bt.Strategy):
     
     def __init__(self):
         # Calculate warmup period - ensure it's long enough for safe use
-        self.warmup_period = max(self.params.volume_period, self.params.price_period) + 20
+        self.warmup_period = max(self.params.volume_period, self.params.price_period) * 3
         
-        # Volume indicators - use SafeSMA for volume indicator
-        self.volume_ma = bt.indicators.SMA(self.data.volume, period=self.params.volume_period)
-        self.addminperiod(self.params.volume_period + 5)  # Add extra bars for safety
+        # Set minimum periods to ensure indicators have enough data
+        self.addminperiod(self.warmup_period)
         
-        # Price indicators - use SafeSMA for price indicator
-        self.price_ma = bt.indicators.SMA(self.data.close, period=self.params.price_period)
+        # Use dictionary-based indicator storage for safety
+        self.volume_ma = {}
+        self.price_ma = {}
+        
+        # Initialize indicators for data feeds
+        for data in self.datas:
+            # Volume indicators
+            self.volume_ma[data] = bt.indicators.SMA(data.volume, period=self.params.volume_period)
+            
+            # Price indicators
+            self.price_ma[data] = bt.indicators.SMA(data.close, period=self.params.price_period)
         
         # Keep track of the equity curve for analysis
         self.equity_curve = []
         
         # State for trading logic and ensure minimum bars processed
         self.bars_processed = 0
-        self.min_bars_required = max(self.params.volume_period, self.params.price_period) + 20  # Extra safety margin
+        self.min_bars_required = self.warmup_period
     
     def next(self):
         # Increment bars processed counter
         self.bars_processed += 1
         
         # Log portfolio value for the equity curve
-        date = self.data.datetime.date(0).isoformat()
-        value = self.broker.getvalue()
-        self.equity_curve.append({'Date': date, 'Value': value})
+        try:
+            date = self.data.datetime.date(0).isoformat()
+            value = self.broker.getvalue()
+            self.equity_curve.append({'Date': date, 'Value': value})
+        except Exception as e:
+            print(f"Error logging portfolio value: {e}")
         
         # Skip trading until we have enough bars for reliable indicator values
         if self.bars_processed < self.min_bars_required:
             return
         
-        # Safety check to ensure all indicators have valid values
-        if (not math.isfinite(self.price_ma[0]) or
-            not math.isfinite(self.volume_ma[0])):
-            return
-            
-        # Current position
-        position = self.getposition().size
-        
-        # Simple trading logic based on price and volume
-        if position == 0:
-            # Entry condition: price above MA and volume above average
-            if (self.data.close[0] > self.price_ma[0] and 
-                self.data.volume[0] > self.volume_ma[0]):
-                self.buy(size=self.params.position_size)
-        else:
-            # Exit condition: price below MA or volume below average
-            if (self.data.close[0] < self.price_ma[0] or 
-                self.data.volume[0] < self.volume_ma[0] * 0.8):
-                self.sell(size=position)
+        # Process each data feed
+        for data in self.datas:
+            try:
+                # Skip if not enough data
+                if len(data) < self.warmup_period:
+                    continue
+                
+                # Safety check to ensure all indicators have valid values
+                if (not self.price_ma[data] or not self.price_ma[data][0] or
+                    not self.volume_ma[data] or not self.volume_ma[data][0]):
+                    continue
+                
+                # Current position
+                position = self.getposition(data).size
+                
+                # Simple trading logic based on price and volume
+                if position == 0:
+                    # Entry condition: price above MA and volume above average
+                    if (data.close[0] > self.price_ma[data][0] and 
+                        data.volume[0] > self.volume_ma[data][0]):
+                        self.buy(data=data, size=self.params.position_size)
+                else:
+                    # Exit condition: price below MA or volume below average
+                    if (data.close[0] < self.price_ma[data][0] or 
+                        data.volume[0] < self.volume_ma[data][0] * 0.8):
+                        self.sell(data=data, size=position)
+            except Exception as e:
+                print(f"Error in next() for {data._name}: {e}")
+                continue
 
 
 # Add basic MultiPosition strategy
