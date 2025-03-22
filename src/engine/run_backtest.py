@@ -261,22 +261,23 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                     cerebro.addstrategy(MultiPositionStrategy)
             except Exception as e:
                 print(f"Error loading MultiPositionStrategy from strategies directory: {e}")
-                print("Using fallback MultiPosition strategy from direct_monte_carlo.py")
-                # Get path to direct_monte_carlo.py
-                monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
-                # Add the directory to sys.path temporarily
-                if os.path.dirname(monte_carlo_path) not in sys.path:
-                    sys.path.append(os.path.dirname(monte_carlo_path))
-                # Import the strategy from direct_monte_carlo
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
-                monte_carlo = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(monte_carlo)
-                # Use the MultiPosition strategy from direct_monte_carlo
-                if parameters:
-                    cerebro.addstrategy(monte_carlo.MultiPosition, **parameters)
-                else:
-                    cerebro.addstrategy(monte_carlo.MultiPosition)
+                print("Using fallback MultiPosition strategy from src.monte_carlo.direct_monte_carlo")
+                # Get path to monte_carlo directory
+                monte_carlo_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'monte_carlo')
+                # Add the directory to sys.path if needed
+                if monte_carlo_dir not in sys.path:
+                    sys.path.append(monte_carlo_dir)
+                
+                # Import the strategy
+                try:
+                    from src.monte_carlo.direct_monte_carlo import MultiPosition
+                    if parameters:
+                        cerebro.addstrategy(MultiPosition, **parameters)
+                    else:
+                        cerebro.addstrategy(MultiPosition)
+                except Exception as e2:
+                    print(f"Error importing from src.monte_carlo: {e2}")
+                    raise
         elif strategy_name == 'AuctionMarket':
             try:
                 from strategies.auction_market_strategy import AuctionMarketStrategy
@@ -286,22 +287,23 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                     cerebro.addstrategy(AuctionMarketStrategy)
             except Exception as e:
                 print(f"Error loading AuctionMarketStrategy from strategies directory: {e}")
-                print("Using fallback AuctionMarket strategy from direct_monte_carlo.py")
-                # Get path to direct_monte_carlo.py
-                monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
-                # Add the directory to sys.path temporarily
-                if os.path.dirname(monte_carlo_path) not in sys.path:
-                    sys.path.append(os.path.dirname(monte_carlo_path))
-                # Import the strategy from direct_monte_carlo
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
-                monte_carlo = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(monte_carlo)
-                # Use the AuctionMarket strategy from direct_monte_carlo
-                if parameters:
-                    cerebro.addstrategy(monte_carlo.AuctionMarket, **parameters)
-                else:
-                    cerebro.addstrategy(monte_carlo.AuctionMarket)
+                print("Using fallback AuctionMarket strategy from src.monte_carlo.direct_monte_carlo")
+                # Get path to monte_carlo directory
+                monte_carlo_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'monte_carlo')
+                # Add the directory to sys.path if needed
+                if monte_carlo_dir not in sys.path:
+                    sys.path.append(monte_carlo_dir)
+                
+                # Import the strategy
+                try:
+                    from src.monte_carlo.direct_monte_carlo import AuctionMarket
+                    if parameters:
+                        cerebro.addstrategy(AuctionMarket, **parameters)
+                    else:
+                        cerebro.addstrategy(AuctionMarket)
+                except Exception as e2:
+                    print(f"Error importing from src.monte_carlo: {e2}")
+                    raise
         elif strategy_name == 'MACrossover':
             try:
                 from strategies.ma_crossover import MACrossover
@@ -311,58 +313,46 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                     cerebro.addstrategy(MACrossover)
             except Exception as e:
                 print(f"Error loading MACrossover from strategies directory: {e}")
-                print("Using fallback MACrossover strategy from direct_monte_carlo.py")
-                # Get path to direct_monte_carlo.py
-                monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
-                # Add the directory to sys.path temporarily
-                if os.path.dirname(monte_carlo_path) not in sys.path:
-                    sys.path.append(os.path.dirname(monte_carlo_path))
-                # Import the strategy from direct_monte_carlo
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
-                monte_carlo = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(monte_carlo)
-                # Use the MACrossover strategy from direct_monte_carlo
-                if parameters:
-                    cerebro.addstrategy(monte_carlo.MACrossover, **parameters)
-                else:
-                    cerebro.addstrategy(monte_carlo.MACrossover)
+                print("Using fallback MACrossover strategy from src.monte_carlo.direct_monte_carlo")
+                # Get path to monte_carlo directory
+                monte_carlo_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'monte_carlo')
+                # Add the directory to sys.path if needed
+                if monte_carlo_dir not in sys.path:
+                    sys.path.append(monte_carlo_dir)
+                
+                # Import the strategy
+                try:
+                    from src.monte_carlo.direct_monte_carlo import MACrossover
+                    if parameters:
+                        cerebro.addstrategy(MACrossover, **parameters)
+                    else:
+                        cerebro.addstrategy(MACrossover)
+                except Exception as e2:
+                    print(f"Error importing from src.monte_carlo: {e2}")
+                    raise
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}")
     except Exception as e:
         print(f"Error loading strategy: {e}")
-        print("Attempting to load fallback strategy from direct_monte_carlo.py")
+        print("Attempting to load fallback strategy from src.monte_carlo.direct_monte_carlo")
         
-        # Get path to direct_monte_carlo.py
-        monte_carlo_path = os.path.join(project_root, 'direct_monte_carlo.py')
-        
-        # Check if the file exists
-        if not os.path.exists(monte_carlo_path):
-            raise FileNotFoundError(f"Could not find direct_monte_carlo.py at {monte_carlo_path}")
-        
-        # Add the directory to sys.path temporarily
-        if os.path.dirname(monte_carlo_path) not in sys.path:
-            sys.path.append(os.path.dirname(monte_carlo_path))
-        
-        # Import the module dynamically
         try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("direct_monte_carlo", monte_carlo_path)
-            monte_carlo = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(monte_carlo)
+            # Import dynamically from the src.monte_carlo package
+            module_name = f"src.monte_carlo.direct_monte_carlo"
+            imported_module = importlib.import_module(module_name)
             
             # Check if the strategy exists in the module
-            if hasattr(monte_carlo, strategy_name):
-                strategy_class = getattr(monte_carlo, strategy_name)
-                print(f"Using {strategy_name} strategy from direct_monte_carlo.py")
+            if hasattr(imported_module, strategy_name):
+                strategy_class = getattr(imported_module, strategy_name)
+                print(f"Using {strategy_name} strategy from src.monte_carlo.direct_monte_carlo")
                 if parameters:
                     cerebro.addstrategy(strategy_class, **parameters)
                 else:
                     cerebro.addstrategy(strategy_class)
             else:
-                raise ValueError(f"Strategy {strategy_name} not found in direct_monte_carlo.py")
+                raise ValueError(f"Strategy {strategy_name} not found in src.monte_carlo.direct_monte_carlo")
         except Exception as e2:
-            raise ValueError(f"Failed to load strategy from direct_monte_carlo.py: {e2}. Original error: {e}")
+            raise ValueError(f"Failed to load strategy from src.monte_carlo.direct_monte_carlo: {e2}. Original error: {e}")
 
     # Add TradeLogger analyzer
     cerebro.addanalyzer(TradeLogger, _name='tradelogger')

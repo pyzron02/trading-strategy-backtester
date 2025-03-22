@@ -12,6 +12,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import logging
 import time
+import traceback
+import multiprocessing
 
 # Add the parent directory to the path so we can import from engine
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,8 +33,8 @@ from strategies import registry
 from engine.run_backtest import run_backtest
 
 # Import the direct Monte Carlo implementation
-sys.path.append(project_root)
-from direct_monte_carlo import DirectMonteCarloTest
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from src.monte_carlo.direct_monte_carlo import DirectMonteCarloTest
 
 # Add imports from runners
 sys.path.append(os.path.join(src_dir, 'runners'))
@@ -248,7 +250,6 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         print(error_msg)
         traceback_str = ""
         try:
-            import traceback
             traceback_str = traceback.format_exc()
             print(traceback_str)
         except:
@@ -367,7 +368,6 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
     if num_workers is not None:
         logger.info('workflow', f"Using {num_workers} CPU cores for parallel optimization")
     else:
-        import multiprocessing
         num_workers = max(1, multiprocessing.cpu_count() - 1)  # Use all cores except one by default
         logger.info('workflow', f"Using {num_workers} of {multiprocessing.cpu_count()} available CPU cores for parallel optimization")
     
