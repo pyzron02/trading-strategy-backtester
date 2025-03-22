@@ -11,6 +11,8 @@ from datetime import datetime
 import pickle
 import re
 import numpy as np
+import json
+import matplotlib.pyplot as plt
 # Importing necessary libraries:
 # - os/sys: For file and path operations
 # - argparse: For parsing command-line arguments
@@ -20,6 +22,8 @@ import numpy as np
 # - pickle: For serialization of Python objects
 # - re: For regular expressions
 # - numpy (np): For numerical operations
+# - json: For JSON serialization
+# - matplotlib.pyplot (plt): For plotting
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +67,25 @@ class TradeLogger(bt.Analyzer):
     def get_analysis(self):
         return self.trades
     # Returns the collected trade information when analysis is requested
+
+# Custom JSON encoder to handle NumPy types and other non-serializable objects
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, pd.Timestamp):
+            return obj.strftime('%Y-%m-%d %H:%M:%S')
+        elif isinstance(obj, datetime):
+            return obj.strftime('%Y-%m-%d %H:%M:%S')
+        elif hasattr(obj, 'to_dict'):
+            return obj.to_dict()
+        elif pd.isna(obj):  # Handle NaN/None values
+            return None
+        return super(CustomJSONEncoder, self).default(obj)
 
 def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, parameters=None, 
                 start_date='2015-01-01', end_date='2019-12-31', stock_csv=None, window=False, plot=False,
@@ -288,12 +311,161 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
     # Gets the trade logger analyzer from the strategy
     # Converts the trade log to a DataFrame and saves it
 
-    # Save full results
-    with open(os.path.join(output_dir, 'backtest_results.pkl'), 'wb') as f:
-        pickle.dump(results, f)
-    print(f"Backtest results saved to {output_dir}/backtest_results.pkl")
-    # Saves the full backtest results as a pickle file
-    # Allows for later reloading of the complete results object
+    # Create a serializable results dictionary instead of saving the full strategy objects
+    serializable_results = {
+        'strategy_name': strategy_name,
+        'tickers': tickers,
+        'parameters': parameters,
+        'start_date': start_date,
+        'end_date': end_date,
+        'initial_cash': cerebro.broker.startingcash,
+        'final_value': cerebro.broker.getvalue(),
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    # Handle equity curve
+    if hasattr(strat, 'equity_curve'):
+        # Convert the equity curve to a serializable format
+        equity_curve_data = []
+        for item in strat.equity_curve:
+            equity_curve_data.append({
+                'Date': item['Date'] if isinstance(item, dict) else item[0],
+                'Value': item['Value'] if isinstance(item, dict) else item[1]
+            })
+        serializable_results['equity_curve'] = equity_curve_data
+    else:
+        serializable_results['equity_curve'] = None
+    
+    # Add trade log
+    serializable_results['trade_log'] = trade_log_df.to_dict(orient='records')
+
+    # Add analyzer results in a serializable format
+    try:
+        # Extract key metrics from analyzers
+        serializable_results['metrics'] = {}
+        
+        # Sharpe ratio
+        if hasattr(strat.analyzers, 'sharpe'):
+            sharpe_ratio = strat.analyzers.sharpe.get_analysis()
+            serializable_results['metrics']['sharpe_ratio'] = sharpe_ratio.get('sharperatio', 0.0)
+        
+        # Returns
+        if hasattr(strat.analyzers, 'returns'):
+            returns = strat.analyzers.returns.get_analysis()
+            serializable_results['metrics']['total_return'] = returns.get('rtot', 0.0)
+            serializable_results['metrics']['average_return'] = returns.get('ravg', 0.0)
+        
+        # Drawdown
+        if hasattr(strat.analyzers, 'drawdown'):
+            drawdown = strat.analyzers.drawdown.get_analysis()
+            serializable_results['metrics']['max_drawdown'] = drawdown.get('max', {}).get('drawdown', 0.0)
+            serializable_results['metrics']['max_drawdown_length'] = drawdown.get('max', {}).get('len', 0)
+        
+        # SQN
+        if hasattr(strat.analyzers, 'sqn'):
+            sqn = strat.analyzers.sqn.get_analysis()
+            serializable_results['metrics']['sqn'] = sqn.get('sqn', 0.0)
+        
+        # Trade analysis
+        if hasattr(strat.analyzers, 'tradeanalyzer'):
+            ta = strat.analyzers.tradeanalyzer.get_analysis()
+            
+            # Extract trade stats in a more reliable way
+            trade_stats = {}
+            
+            # Total trades
+            trade_stats['total_trades'] = ta.get('total', {}).get('total', 0) if isinstance(ta.get('total', {}), dict) else 0
+            
+            # Won trades
+            if 'won' in ta and isinstance(ta['won'], dict):
+                trade_stats['won_trades'] = ta['won'].get('total', 0)
+                trade_stats['won_pnl'] = ta['won'].get('pnl', 0.0) if 'pnl' in ta['won'] else 0.0
+            else:
+                trade_stats['won_trades'] = 0
+                trade_stats['won_pnl'] = 0.0
+            
+            # Lost trades
+            if 'lost' in ta and isinstance(ta['lost'], dict):
+                trade_stats['lost_trades'] = ta['lost'].get('total', 0)
+                trade_stats['lost_pnl'] = ta['lost'].get('pnl', 0.0) if 'pnl' in ta['lost'] else 0.0
+            else:
+                trade_stats['lost_trades'] = 0
+                trade_stats['lost_pnl'] = 0.0
+            
+            # Calculate win rate
+            if trade_stats['total_trades'] > 0:
+                trade_stats['win_rate'] = trade_stats['won_trades'] / trade_stats['total_trades']
+            else:
+                trade_stats['win_rate'] = 0.0
+            
+            # Calculate profit factor
+            if abs(trade_stats['lost_pnl']) > 0:
+                trade_stats['profit_factor'] = abs(trade_stats['won_pnl']) / abs(trade_stats['lost_pnl'])
+            else:
+                trade_stats['profit_factor'] = 0.0 if trade_stats['won_pnl'] == 0 else float('inf')
+            
+            serializable_results['metrics']['trade_analysis'] = trade_stats
+    except Exception as e:
+        print(f"Warning: Could not extract analyzer metrics: {str(e)}")
+        serializable_results['metrics'] = {'error': str(e)}
+
+    # Save serializable results as JSON (more reliable than pickle)
+    with open(os.path.join(output_dir, 'backtest_results.json'), 'w') as f:
+        json.dump(serializable_results, f, indent=4, cls=CustomJSONEncoder)
+    print(f"Backtest results saved to {output_dir}/backtest_results.json")
+
+    # For backwards compatibility, try to save a simplified version with pickle
+    try:
+        # Make a copy of the serializable results, converting NumPy arrays and other problematic types
+        pickle_safe_results = {}
+        for key, value in serializable_results.items():
+            if key == 'equity_curve' and value is not None:
+                # Convert equity curve data to simpler format
+                pickle_safe_results[key] = [
+                    {'Date': str(entry['Date']), 'Value': float(entry['Value'])} 
+                    for entry in value
+                ]
+            elif key == 'trade_log':
+                # Convert trade log to simple list of dicts with strings and basic types
+                pickle_safe_results[key] = []
+                for trade in value:
+                    safe_trade = {}
+                    for k, v in trade.items():
+                        if isinstance(v, (int, float, str, bool, type(None))):
+                            safe_trade[k] = v
+                        else:
+                            safe_trade[k] = str(v)
+                    pickle_safe_results[key].append(safe_trade)
+            elif key == 'metrics' and isinstance(value, dict):
+                # Handle metrics dict
+                pickle_safe_results[key] = {}
+                for k, v in value.items():
+                    if isinstance(v, dict):
+                        # Handle nested dicts (like trade_analysis)
+                        pickle_safe_results[key][k] = {}
+                        for sub_k, sub_v in v.items():
+                            if isinstance(sub_v, (int, float, str, bool, type(None))):
+                                pickle_safe_results[key][k][sub_k] = sub_v
+                            else:
+                                pickle_safe_results[key][k][sub_k] = str(sub_v)
+                    elif isinstance(v, (int, float, str, bool, type(None))):
+                        pickle_safe_results[key][k] = v
+                    else:
+                        pickle_safe_results[key][k] = str(v)
+            else:
+                # For other fields, use simple conversion
+                if isinstance(value, (int, float, str, bool, type(None), list, dict)):
+                    pickle_safe_results[key] = value
+                else:
+                    pickle_safe_results[key] = str(value)
+        
+        # Save the pickle-safe results
+        with open(os.path.join(output_dir, 'backtest_results.pkl'), 'wb') as f:
+            pickle.dump(pickle_safe_results, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"Pickle results also saved to {output_dir}/backtest_results.pkl")
+    except Exception as e:
+        print(f"Warning: Could not save pickle file: {str(e)}")
+        print("JSON results file can be used instead.")
 
     # Save a summary of results to a text file
     with open(os.path.join(output_dir, 'results.txt'), 'w') as f:
