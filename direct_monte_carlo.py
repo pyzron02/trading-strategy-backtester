@@ -646,8 +646,12 @@ class DirectMonteCarloTest:
         win_rate = 0.0
         profit_factor = 0.0
         
-        # Safely get trade statistics
         try:
+            # Initialize trade_data list to avoid referenced before assignment error
+            trade_data = []
+            header = ['Type', 'Direction', 'Count', 'PnL Total', 'PnL Avg', 'PnL Max', 'Length Avg', 'Length Max']
+            trade_data.append(header)
+            
             trades_analysis = strat.analyzers.trades.get_analysis() if hasattr(strat.analyzers, 'trades') else {}
             
             # Get total trades
