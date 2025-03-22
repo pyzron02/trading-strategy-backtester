@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+# Python cache files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -55,19 +55,20 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDE specific files
+# IDE files
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# Project specific
-output/*/
-!output/.gitkeep
-input/*.csv
-!input/.gitkeep
-*.pkl 
+# Project specific files
+*.log
+logs/
+output/
+backtest_output.txt
+params.json
+rc.*
+
 # Runtime data
 cache/
-logs/
 src/output/
