@@ -619,17 +619,17 @@ class DirectMonteCarloTest:
         strat = results[0]
         
         # Get analyzer results
-        sharpe_ratio = strat.analyzers.sharpe.get_analysis()['sharperatio'] if hasattr(strat.analyzers.sharpe, 'get_analysis') else 0.0
-        returns = strat.analyzers.returns.get_analysis()
-        drawdown = strat.analyzers.drawdown.get_analysis()
-        trades_analysis = strat.analyzers.trades.get_analysis()
+        sharpe_ratio = strat.analyzers.sharpe.get_analysis().get('sharperatio', 0.0) if hasattr(strat.analyzers.sharpe, 'get_analysis') else 0.0
+        returns = strat.analyzers.returns.get_analysis() if hasattr(strat.analyzers.returns, 'get_analysis') else {}
+        drawdown = strat.analyzers.drawdown.get_analysis() if hasattr(strat.analyzers.drawdown, 'get_analysis') else {}
+        trades_analysis = strat.analyzers.trades.get_analysis() if hasattr(strat.analyzers.trades, 'get_analysis') else {}
         
         # Calculate key metrics
-        total_return = returns['rtot'] if 'rtot' in returns else 0.0
-        max_drawdown = drawdown['max']['drawdown'] if 'max' in drawdown else 0.0
+        total_return = returns.get('rtot', 0.0)
+        max_drawdown = drawdown.get('max', {}).get('drawdown', 0.0)
         
         # Get trade stats
-        total_trades = trades_analysis.total.closed if hasattr(trades_analysis, 'total') else 0
+        total_trades = trades_analysis.get('total', {}).get('closed', 0) if hasattr(trades_analysis, 'total') else 0
         
         # Calculate win rate
         if hasattr(trades_analysis, 'won') and hasattr(trades_analysis, 'lost'):
@@ -673,17 +673,31 @@ class DirectMonteCarloTest:
         # Get equity curve
         equity_curve = strat.equity_curve if hasattr(strat, 'equity_curve') else []
         
-        # Store results in a dictionary
-        result_dict = {
-            'sharpe_ratio': float(sharpe_ratio),
-            'total_return': float(total_return),
-            'max_drawdown': float(max_drawdown),
-            'total_trades': int(total_trades),
-            'win_rate': float(win_rate),
-            'profit_factor': float(profit_factor),
-            'equity_curve': equity_curve,
-            'final_value': float(cerebro.broker.getvalue())
-        }
+        # Store results in a dictionary with safe conversion to float
+        try:
+            result_dict = {
+                'sharpe_ratio': float(sharpe_ratio) if sharpe_ratio is not None else 0.0,
+                'total_return': float(total_return) if total_return is not None else 0.0,
+                'max_drawdown': float(max_drawdown) if max_drawdown is not None else 0.0,
+                'total_trades': int(total_trades) if total_trades is not None else 0,
+                'win_rate': float(win_rate) if win_rate is not None else 0.0,
+                'profit_factor': float(profit_factor) if profit_factor is not None else 0.0,
+                'equity_curve': equity_curve,
+                'final_value': float(cerebro.broker.getvalue())
+            }
+        except (TypeError, ValueError) as e:
+            print(f"Error converting values: {e}")
+            # Fallback with safe defaults
+            result_dict = {
+                'sharpe_ratio': 0.0,
+                'total_return': 0.0,
+                'max_drawdown': 0.0,
+                'total_trades': 0,
+                'win_rate': 0.0,
+                'profit_factor': 0.0,
+                'equity_curve': equity_curve,
+                'final_value': float(cerebro.broker.getvalue())
+            }
         
         # Save the results
         if is_permutation:
@@ -707,12 +721,12 @@ class DirectMonteCarloTest:
             json.dump(serializable_results, f, indent=4)
         
         print(f"Backtest results for {suffix}:")
-        print(f"  Sharpe Ratio: {sharpe_ratio:.4f}")
-        print(f"  Total Return: {total_return:.4f}")
-        print(f"  Max Drawdown: {max_drawdown:.4f}")
-        print(f"  Win Rate: {win_rate:.4f}")
-        print(f"  Profit Factor: {profit_factor:.4f}")
-        print(f"  Final Value: ${cerebro.broker.getvalue():.2f}")
+        print(f"  Sharpe Ratio: {result_dict['sharpe_ratio']:.4f}")
+        print(f"  Total Return: {result_dict['total_return']:.4f}")
+        print(f"  Max Drawdown: {result_dict['max_drawdown']:.4f}")
+        print(f"  Win Rate: {result_dict['win_rate']:.4f}")
+        print(f"  Profit Factor: {result_dict['profit_factor']:.4f}")
+        print(f"  Final Value: ${result_dict['final_value']:.2f}")
         print(f"  Trades logged to: {os.path.join(results_dir, f'trade_log_{suffix}.csv')}")
         
         return result_dict
