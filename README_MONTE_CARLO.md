@@ -62,8 +62,45 @@ The framework generates the following outputs:
 4. Statistical analysis of all tests
 5. Distribution plots for each metric
 6. Equity curves for the original and permutation tests
+7. Trade logs for the original strategy and each permutation
 
 All outputs are saved in the designated output directory with a timestamp.
+
+## Trade Logging
+
+The Monte Carlo framework now includes detailed trade logging for both the original strategy and each permutation. This allows for deeper analysis of how trading behavior changes across different market conditions.
+
+### Trade Log Features:
+
+- **Comprehensive Statistics**: Records trade counts, profit/loss metrics, and trade durations
+- **Trade Classification**: Breaks down trades by type (win/loss) and direction (long/short)
+- **Per-Permutation Analysis**: Separate trade logs for each Monte Carlo permutation
+- **Summary File**: A JSON summary file that lists paths to all trade logs
+
+### Trade Log Format:
+
+Each trade log is a CSV file with the following columns:
+```
+Type, Direction, Count, PnL Total, PnL Avg, PnL Max, Length Avg, Length Max
+```
+
+Where:
+- **Type**: Category of trade (All, Won, Lost)
+- **Direction**: Trade direction (All, Long, Short)
+- **Count**: Number of trades in this category
+- **PnL Total**: Total profit/loss for these trades
+- **PnL Avg**: Average profit/loss per trade
+- **PnL Max**: Maximum profit/loss from a single trade
+- **Length Avg**: Average number of bars a trade was held
+- **Length Max**: Maximum number of bars a trade was held
+
+### Accessing Trade Logs:
+
+When running the Monte Carlo workflow, trade logs are stored in:
+- `{output_dir}/original/trade_log_original.csv` for the original strategy
+- `{output_dir}/permutation_{i}/trade_log_permutation_{i}.csv` for each permutation
+
+A summary file `trade_log_summary.json` is also created in the output directory, providing an index to all trade logs.
 
 ## Implementation Benefits
 
@@ -73,10 +110,12 @@ This direct Monte Carlo implementation offers several advantages:
 2. **Flexibility**: Easily accommodates different strategies and permutation methods
 3. **Transparency**: Clear processing of results with detailed output
 4. **Visual Analysis**: Generates histograms to visually assess strategy performance
+5. **Trade Analysis**: Detailed trade logs for deeper understanding of strategy behavior across permutations
 
 ## Future Enhancements
 
 - Add support for more permutation techniques
 - Implement walk-forward optimization
 - Add more trading strategies
-- Enhance visualization capabilities 
+- Enhance visualization capabilities
+- Expand trade logging with more detailed metrics and transaction-level data 

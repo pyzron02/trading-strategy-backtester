@@ -20,6 +20,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import traceback
+import csv
 
 # Add the project root to the path
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -693,6 +694,9 @@ class DirectMonteCarloTest:
         results_dir = os.path.join(self.output_dir, suffix)
         os.makedirs(results_dir, exist_ok=True)
         
+        # Save trade details to CSV
+        self._save_trade_log(trades_analysis, results_dir, suffix)
+        
         with open(os.path.join(results_dir, "results.json"), "w") as f:
             # Convert equity curve to list of dicts for JSON serialization
             serializable_results = result_dict.copy()
@@ -709,8 +713,134 @@ class DirectMonteCarloTest:
         print(f"  Win Rate: {win_rate:.4f}")
         print(f"  Profit Factor: {profit_factor:.4f}")
         print(f"  Final Value: ${cerebro.broker.getvalue():.2f}")
+        print(f"  Trades logged to: {os.path.join(results_dir, f'trade_log_{suffix}.csv')}")
         
         return result_dict
+    
+    def _save_trade_log(self, trades_analysis, results_dir, suffix):
+        """
+        Save detailed trade information to CSV.
+        
+        Args:
+            trades_analysis: The TradeAnalyzer results
+            results_dir: Directory to save results
+            suffix: Suffix for the file name
+        """
+        trade_log_path = os.path.join(results_dir, f"trade_log_{suffix}.csv")
+        
+        # Extract trade information
+        trade_data = []
+        
+        # Check if we have trade details to log
+        if hasattr(trades_analysis, 'total') and trades_analysis.total.total > 0:
+            # We can't directly access individual trades from TradeAnalyzer
+            # Instead, we'll log the summary statistics by trade type
+            
+            # Header row
+            header = ['Type', 'Direction', 'Count', 'PnL Total', 'PnL Avg', 'PnL Max', 'Length Avg', 'Length Max']
+            trade_data.append(header)
+            
+            # Overall statistics
+            trade_data.append(['All', 'All', 
+                             str(trades_analysis.total.total), 
+                             str(getattr(trades_analysis, 'pnl', {}).get('total', 0.0)),
+                             str(getattr(trades_analysis, 'pnl', {}).get('average', 0.0)),
+                             str(getattr(trades_analysis, 'pnl', {}).get('max', 0.0)),
+                             str(getattr(trades_analysis, 'len', {}).get('average', 0)),
+                             str(getattr(trades_analysis, 'len', {}).get('max', 0))])
+            
+            # Winning trades
+            if hasattr(trades_analysis, 'won') and trades_analysis.won.total > 0:
+                trade_data.append(['Won', 'All', 
+                                 str(trades_analysis.won.total), 
+                                 str(getattr(trades_analysis.won, 'pnl', {}).get('total', 0.0)),
+                                 str(getattr(trades_analysis.won, 'pnl', {}).get('average', 0.0)),
+                                 str(getattr(trades_analysis.won, 'pnl', {}).get('max', 0.0)),
+                                 str(getattr(trades_analysis.won, 'len', {}).get('average', 0)),
+                                 str(getattr(trades_analysis.won, 'len', {}).get('max', 0))])
+            
+            # Losing trades
+            if hasattr(trades_analysis, 'lost') and trades_analysis.lost.total > 0:
+                trade_data.append(['Lost', 'All', 
+                                 str(trades_analysis.lost.total), 
+                                 str(getattr(trades_analysis.lost, 'pnl', {}).get('total', 0.0)),
+                                 str(getattr(trades_analysis.lost, 'pnl', {}).get('average', 0.0)),
+                                 str(getattr(trades_analysis.lost, 'pnl', {}).get('max', 0.0)),
+                                 str(getattr(trades_analysis.lost, 'len', {}).get('average', 0)),
+                                 str(getattr(trades_analysis.lost, 'len', {}).get('max', 0))])
+                
+            # Long trades
+            if hasattr(trades_analysis, 'long') and trades_analysis.long.total > 0:
+                trade_data.append(['All', 'Long', 
+                                 str(trades_analysis.long.total), 
+                                 str(getattr(trades_analysis.long, 'pnl', {}).get('total', 0.0)),
+                                 str(getattr(trades_analysis.long, 'pnl', {}).get('average', 0.0)),
+                                 str(getattr(trades_analysis.long, 'pnl', {}).get('max', 0.0)),
+                                 str(getattr(trades_analysis.long, 'len', {}).get('average', 0)),
+                                 str(getattr(trades_analysis.long, 'len', {}).get('max', 0))])
+                
+                # Long winning trades
+                if hasattr(trades_analysis.long, 'won') and trades_analysis.long.won.total > 0:
+                    trade_data.append(['Won', 'Long', 
+                                     str(trades_analysis.long.won.total), 
+                                     str(getattr(trades_analysis.long.won, 'pnl', {}).get('total', 0.0)),
+                                     str(getattr(trades_analysis.long.won, 'pnl', {}).get('average', 0.0)),
+                                     str(getattr(trades_analysis.long.won, 'pnl', {}).get('max', 0.0)),
+                                     str(getattr(trades_analysis.long.won, 'len', {}).get('average', 0)),
+                                     str(getattr(trades_analysis.long.won, 'len', {}).get('max', 0))])
+                
+                # Long losing trades
+                if hasattr(trades_analysis.long, 'lost') and trades_analysis.long.lost.total > 0:
+                    trade_data.append(['Lost', 'Long', 
+                                     str(trades_analysis.long.lost.total), 
+                                     str(getattr(trades_analysis.long.lost, 'pnl', {}).get('total', 0.0)),
+                                     str(getattr(trades_analysis.long.lost, 'pnl', {}).get('average', 0.0)),
+                                     str(getattr(trades_analysis.long.lost, 'pnl', {}).get('max', 0.0)),
+                                     str(getattr(trades_analysis.long.lost, 'len', {}).get('average', 0)),
+                                     str(getattr(trades_analysis.long.lost, 'len', {}).get('max', 0))])
+            
+            # Short trades
+            if hasattr(trades_analysis, 'short') and trades_analysis.short.total > 0:
+                trade_data.append(['All', 'Short', 
+                                 str(trades_analysis.short.total), 
+                                 str(getattr(trades_analysis.short, 'pnl', {}).get('total', 0.0)),
+                                 str(getattr(trades_analysis.short, 'pnl', {}).get('average', 0.0)),
+                                 str(getattr(trades_analysis.short, 'pnl', {}).get('max', 0.0)),
+                                 str(getattr(trades_analysis.short, 'len', {}).get('average', 0)),
+                                 str(getattr(trades_analysis.short, 'len', {}).get('max', 0))])
+                
+                # Short winning trades
+                if hasattr(trades_analysis.short, 'won') and trades_analysis.short.won.total > 0:
+                    trade_data.append(['Won', 'Short', 
+                                     str(trades_analysis.short.won.total), 
+                                     str(getattr(trades_analysis.short.won, 'pnl', {}).get('total', 0.0)),
+                                     str(getattr(trades_analysis.short.won, 'pnl', {}).get('average', 0.0)),
+                                     str(getattr(trades_analysis.short.won, 'pnl', {}).get('max', 0.0)),
+                                     str(getattr(trades_analysis.short.won, 'len', {}).get('average', 0)),
+                                     str(getattr(trades_analysis.short.won, 'len', {}).get('max', 0))])
+                
+                # Short losing trades
+                if hasattr(trades_analysis.short, 'lost') and trades_analysis.short.lost.total > 0:
+                    trade_data.append(['Lost', 'Short', 
+                                     str(trades_analysis.short.lost.total), 
+                                     str(getattr(trades_analysis.short.lost, 'pnl', {}).get('total', 0.0)),
+                                     str(getattr(trades_analysis.short.lost, 'pnl', {}).get('average', 0.0)),
+                                     str(getattr(trades_analysis.short.lost, 'pnl', {}).get('max', 0.0)),
+                                     str(getattr(trades_analysis.short.lost, 'len', {}).get('average', 0)),
+                                     str(getattr(trades_analysis.short.lost, 'len', {}).get('max', 0))])
+        else:
+            # No trades executed
+            header = ['Type', 'Direction', 'Count', 'PnL Total', 'PnL Avg', 'PnL Max', 'Length Avg', 'Length Max']
+            trade_data.append(header)
+            trade_data.append(['No trades', 'N/A', '0', '0.0', '0.0', '0.0', '0', '0'])
+        
+        # Write to CSV
+        with open(trade_log_path, 'w', newline='') as csvfile:
+            csv_writer = csv.writer(csvfile)
+            for row in trade_data:
+                csv_writer.writerow(row)
+        
+        return trade_log_path
     
     def _analyze_results(self, original_results, permutation_results):
         """

@@ -177,6 +177,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
     try:
         if verbose:
             print("Using Direct Monte Carlo implementation")
+            print(f"Trade logs will be generated for each permutation in subdirectories of {output_dir}")
         
         # Initialize the Direct Monte Carlo test
         monte_carlo_test = DirectMonteCarloTest(
@@ -195,6 +196,27 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         results = monte_carlo_test.run_test()
         
         if results:
+            # Create a summary of trade logs
+            trade_log_summary = {
+                'original': os.path.join(output_dir, 'original', 'trade_log_original.csv'),
+                'permutations': []
+            }
+            
+            # Add permutation trade logs
+            for i in range(num_permutations):
+                perm_log_path = os.path.join(output_dir, f'permutation_{i}', f'trade_log_permutation_{i}.csv')
+                if os.path.exists(perm_log_path):
+                    trade_log_summary['permutations'].append(perm_log_path)
+            
+            # Save the trade log summary
+            with open(os.path.join(output_dir, 'trade_log_summary.json'), 'w') as f:
+                json.dump(trade_log_summary, f, indent=4, cls=CustomJSONEncoder)
+            
+            if verbose:
+                print(f"Trade logs summary saved to: {os.path.join(output_dir, 'trade_log_summary.json')}")
+                print(f"Original strategy trade log: {trade_log_summary['original']}")
+                print(f"Generated {len(trade_log_summary['permutations'])} permutation trade logs")
+            
             return {
                 'success': True,
                 'results': results,
@@ -204,7 +226,8 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
                     'in_sample_end': in_sample_end,
                     'out_sample_start': out_sample_start,
                     'out_sample_end': end_date
-                }
+                },
+                'trade_logs': trade_log_summary
             }
         else:
             return {
@@ -547,6 +570,20 @@ def main():
                         print(f"  {metric.replace('_', ' ').title()}: {p_value:.4f} ({significance})")
             else:
                 print("No p-values available in the results.")
+            
+            # Display trade log information
+            if 'trade_logs' in results:
+                trade_logs = results['trade_logs']
+                print("\nTrade logs generated:")
+                print(f"  Original strategy: {os.path.basename(trade_logs['original'])}")
+                print(f"  Number of permutation logs: {len(trade_logs['permutations'])}")
+                if args.verbose and trade_logs['permutations']:
+                    print("  Permutation trade logs:")
+                    for i, log_path in enumerate(trade_logs['permutations'][:5]):  # Show first 5 for brevity
+                        print(f"    - Permutation {i}: {os.path.basename(log_path)}")
+                    if len(trade_logs['permutations']) > 5:
+                        print(f"    - ... and {len(trade_logs['permutations']) - 5} more")
+                print(f"\nTrade logs summary saved to: {os.path.join(args.output_dir, 'trade_log_summary.json')}")
     elif args.workflow_type == 'complete':
         # Check if it's a strategy with known issues with complete workflow
         # For MACrossover, use simple workflow with verbose output
