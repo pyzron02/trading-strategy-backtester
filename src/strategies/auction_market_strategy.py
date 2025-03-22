@@ -115,8 +115,10 @@ class AuctionMarketStrategy(bt.Strategy):
     """
     
     params = (
-        # Default parameters will be overridden by AuctionMarketParameters
-        ('param_preset', 'default'),  # Options: 'default', 'aggressive', 'conservative'
+        ('param_preset', 'default'),  # Parameter preset (default, aggressive, conservative)
+        ('value_area', 0.7),          # Value Area (percentage of volume)
+        ('use_vwap', True),           # Use VWAP in analysis
+        ('use_volume_profile', True), # Use volume profile analysis
         ('position_size', 100),       # Default position size
         ('risk_percent', 0.01),       # Risk 1% per trade by default
         ('use_atr_sizing', True),     # Use ATR for position sizing
@@ -141,8 +143,15 @@ class AuctionMarketStrategy(bt.Strategy):
         self.daily_bars = {}
         self.value_areas = {}
         
-        # For position sizing
-        self.atr = {data: bt.indicators.ATR(data, period=self.params.atr_period) for data in self.datas}
+        # Set minimum periods to ensure indicators have enough data
+        # Use the largest required period + safety margin
+        min_period = max(self.params.atr_period, 50) + 20
+        self.addminperiod(min_period)
+        
+        # For position sizing - use safe indicator initialization
+        self.atr = {}
+        self.volume_ma = {}
+        self.sma50 = {}
         
         # Keep track of the equity curve for analysis
         self.equity_curve = []
@@ -154,25 +163,29 @@ class AuctionMarketStrategy(bt.Strategy):
         self.value_areas = {}  # Store value areas by date
         self.poc_levels = {}   # Store Points of Control by date
         
+        # Variables to track if we have enough data for trading
+        self.bars_processed = 0
+        self.min_bars_required = min_period  # Ensure sufficient warmup
+
         # Create indicators for each data feed
         for data in self.datas:
             # Volume moving average
-            data.volume_ma = bt.indicators.SimpleMovingAverage(
+            self.volume_ma[data] = bt.indicators.SimpleMovingAverage(
                 data.volume, period=self.amt_params.volume_profile['lookback_period']
             )
             
             # Price moving averages
-            data.sma50 = bt.indicators.SimpleMovingAverage(
+            self.sma50[data] = bt.indicators.SimpleMovingAverage(
                 data.close, period=50
             )
             
             # Volatility indicator (ATR)
-            data.atr = bt.indicators.ATR(
-                data, period=14
+            self.atr[data] = bt.indicators.ATR(
+                data, period=self.params.atr_period
             )
             
             # Store daily OHLCV for value area calculation
-            data.daily_bars = []
+            self.daily_bars[data] = []
     
     def _init_from_parameters(self, params):
         """Initialize strategy parameters from AuctionMarketParameters instance"""
@@ -197,27 +210,50 @@ class AuctionMarketStrategy(bt.Strategy):
         print(f"  Profit Target Ratio: {self.amt_params.risk_params['profit_target_ratio']}")
     
     def next(self):
-        # Log portfolio value for the equity curve
-        date = self.data.datetime.date(0).isoformat()
-        value = self.broker.getvalue()
-        self.equity_curve.append({'Date': date, 'Value': value})
+        # Increment bars processed counter
+        self.bars_processed += 1
         
-        # Process each data feed (ticker)
+        # Log portfolio value for the equity curve
+        try:
+            date = self.data.datetime.date(0).isoformat()
+            value = self.broker.getvalue()
+            self.equity_curve.append({'Date': date, 'Value': value})
+        except Exception as e:
+            print(f"Error logging portfolio value: {e}")
+        
+        # Skip trading until we have enough bars for indicators to be reliable
+        if self.bars_processed < self.min_bars_required:
+            return
+            
+        # Process each data feed
         for data in self.datas:
-            # Store daily bar data
-            self._store_daily_bar(data)
-            
-            # Calculate value area if we have enough data
-            if len(data.daily_bars) >= 1:
-                self._calculate_value_area(data)
-            
-            # Get current value area if available
-            current_date = data.datetime.date(0)
-            value_area = self.value_areas.get(current_date, None)
-            
-            # Trading logic
-            if value_area:
+            try:
+                # Safety check to ensure all indicators have valid values
+                if (not self.atr[data] or not self.atr[data][0] or 
+                    not self.volume_ma[data] or not self.volume_ma[data][0] or
+                    not self.sma50[data] or not self.sma50[data][0]):
+                    continue
+                    
+                # Store the daily bar for value area calculation
+                self._store_daily_bar(data)
+                
+                # Only proceed if we have enough daily bars
+                if len(self.daily_bars[data]) < self.amt_params.volume_profile['lookback_period']:
+                    continue
+                
+                # Calculate value area if available
+                value_area = self._calculate_value_area(data)
+                if not value_area:
+                    continue
+                
+                # Apply auction market logic
                 self._apply_auction_market_logic(data, value_area)
+                
+            except Exception as e:
+                print(f"Error in next() for {data._name}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
     
     def _store_daily_bar(self, data):
         """Store daily bar data for value area calculation"""
@@ -234,18 +270,18 @@ class AuctionMarketStrategy(bt.Strategy):
         }
         
         # Add to daily bars list
-        data.daily_bars.append(bar)
+        self.daily_bars[data].append(bar)
         
         # Keep only the lookback period
-        if len(data.daily_bars) > self.amt_params.volume_profile['lookback_period']:
-            data.daily_bars.pop(0)
+        if len(self.daily_bars[data]) > self.amt_params.volume_profile['lookback_period']:
+            self.daily_bars[data].pop(0)
     
     def _calculate_value_area(self, data):
         """Calculate Value Area and Point of Control"""
         current_date = data.datetime.date(0)
         
         # Get the most recent daily bar
-        daily_bar = data.daily_bars[-1]
+        daily_bar = self.daily_bars[data][-1]
         
         # Create price buckets
         price_range = np.arange(
@@ -316,177 +352,157 @@ class AuctionMarketStrategy(bt.Strategy):
         self.poc_levels[current_date] = poc
         
         print(f"{current_date} - {data._name}: Value Area: {val:.2f} - {vah:.2f}, POC: {poc:.2f}")
+        
+        return self.value_areas[current_date]
     
     def _detect_auction_excess(self, data):
-        """Detect excess moves beyond the value area"""
+        """Detect price excesses outside the value area."""
+        # Get current value area
         current_date = data.datetime.date(0)
         value_area = self.value_areas.get(current_date, None)
         
         if not value_area:
-            return {'above': False, 'below': False}
+            return None
         
         # Calculate price volatility
-        price_std = data.atr[0]
+        price_std = self.atr[data][0]
         
         # Check for excess above value area
-        above_excess = data.high[0] > value_area['vah'] + (price_std * self.amt_params.auction_zones['excess_threshold'])
+        if data.high[0] > value_area['vah'] + (price_std * self.amt_params.auction_zones['excess_threshold']):
+            return "up"
         
         # Check for excess below value area
-        below_excess = data.low[0] < value_area['val'] - (price_std * self.amt_params.auction_zones['excess_threshold'])
+        if data.low[0] < value_area['val'] - (price_std * self.amt_params.auction_zones['excess_threshold']):
+            return "down"
         
-        return {
-            'above': above_excess,
-            'below': below_excess
-        }
-    
+        return None
+
     def _identify_balance_area(self, data):
-        """Identify balanced trading ranges"""
-        # Calculate price movement statistics
-        price_range = data.high[0] - data.low[0]
-        
+        """Identify balanced vs. imbalanced market conditions."""
         # Use ATR as a measure of average range
-        avg_range = data.atr[0]
+        avg_range = self.atr[data][0]
         
         # Check for balanced conditions
-        is_balanced = price_range < avg_range * self.amt_params.auction_zones['balance_threshold']
+        range_today = data.high[0] - data.low[0]
         
-        return {
-            'is_balanced': is_balanced,
-            'balance_high': data.high[0] if is_balanced else None,
-            'balance_low': data.low[0] if is_balanced else None
-        }
+        if range_today < avg_range * self.amt_params.auction_zones['balance_threshold']:
+            return "tight"
+        elif range_today > avg_range * (2.0 / self.amt_params.auction_zones['balance_threshold']):
+            return "wide"
+        else:
+            return "normal"
     
     def _detect_rotation(self, data):
-        """Detect price rotation between value areas"""
-        current_date = data.datetime.date(0)
-        value_area = self.value_areas.get(current_date, None)
+        """Detect rotations in the market by analyzing price movement patterns."""
+        # Detect price rotation using ATR and moving averages
+        current_close = data.close[0]
+        current_open = data.open[0]
         
-        if not value_area:
-            return {'detected': False, 'direction': None}
+        # Check for rotation from below value area to above
+        current_ma = self.sma50[data][0]  # Use 50-period SMA as trend reference
         
-        # Calculate price movement
-        price_change = data.close[0] - data.close[-1]
-        
-        # Calculate rotation factor
-        value_area_size = value_area['vah'] - value_area['val']
-        
-        if value_area_size > 0 and abs(price_change) > value_area_size * self.amt_params.auction_zones['rotation_factor']:
-            return {
-                'detected': True,
-                'direction': 'up' if price_change > 0 else 'down'
-            }
-        
-        return {'detected': False, 'direction': None}
+        if data.close[-1] < current_ma and current_close > current_ma:
+            return "up"
+        elif data.close[-1] > current_ma and current_close < current_ma:
+            return "down"
+        else:
+            return None
     
     def _calculate_position_size(self, data, risk_level):
-        """Calculate position size based on risk parameters"""
-        account_size = self.broker.getvalue()
-        risk_amount = account_size * self.amt_params.risk_params['max_loss_percent']
+        """Calculate position size based on risk parameters."""
+        # Base position size on account equity and volatility
+        portfolio_value = self.broker.getvalue()
+        risk_amount = portfolio_value * self.amt_params.risk_params['max_loss_percent']
         
-        # Ensure risk level is not zero
-        risk_level = max(0.001, risk_level)
-        
-        position_size = min(
-            self.amt_params.position_size['max_position'],
-            int(risk_amount / (data.close[0] * risk_level))
-        )
-        
-        return max(1, position_size)  # Ensure at least 1 share
+        # Use ATR for volatility-based position sizing
+        if self.params.use_atr_sizing and self.atr[data][0]:
+            # Calculate risk per share based on ATR
+            risk_per_share = self.atr[data][0] * risk_level
+            if risk_per_share > 0:
+                return int(risk_amount / risk_per_share)
+            else:
+                return self.amt_params.position_size['initial_size']
+        else:
+            # Use fixed position size from parameters
+            return self.amt_params.position_size['initial_size']
     
     def _apply_auction_market_logic(self, data, value_area):
         """Apply Auction Market Theory trading logic."""
-        ticker = data._name
-        current_close = data.close[0]
-        current_high = data.high[0]
-        current_low = data.low[0]
+        # Current position
         position = self.getposition(data).size
         
-        # Get market conditions
+        # Current price and value area
+        close = data.close[0]
+        vah = value_area['vah']  # Value area high
+        val = value_area['val']  # Value area low
+        poc = value_area['poc']  # Point of control
+        
+        # Check for excess moves
         excess = self._detect_auction_excess(data)
+        
+        # Check for balance/imbalance
         balance = self._identify_balance_area(data)
+        
+        # Check for rotation
         rotation = self._detect_rotation(data)
         
-        print(f"{data.datetime.date(0)} - {ticker}: Price: {current_close:.2f}, Position: {position}")
-        print(f"  Value Area: {value_area['val']:.2f} - {value_area['vah']:.2f}, POC: {value_area['poc']:.2f}")
-        print(f"  Excess: Above={excess['above']}, Below={excess['below']}")
-        print(f"  Balance: {balance['is_balanced']}")
-        print(f"  Rotation: {rotation['detected']} {rotation['direction'] if rotation['detected'] else ''}")
+        # Calculate appropriate position size
+        risk_level = 1.0  # Standard risk level
+        if excess:
+            # Reduce risk if in excess area
+            risk_level = 0.5
         
-        # Long signal conditions
-        if (current_close < value_area['val'] and 
-            not excess['below'] and 
-            not balance['is_balanced'] and
-            position <= 0):
-            
-            risk_level = (value_area['val'] - current_close) / current_close
-            position_size = self._calculate_position_size(data, risk_level)
-            
-            self.buy(data=data, size=position_size)
-            print(f"{data.datetime.date(0)} - BUY signal for {ticker}: Size={position_size}, Price={current_close:.2f}")
-            print(f"  Reason: Price below value area without excess")
-            
-            # Track trade
-            dt = data.datetime.date(0)
-            self.trades.append({
-                'type': 'open',
-                'ticker': ticker,
-                'date': dt,
-                'price': current_close,
-                'size': position_size,
-                'reason': 'Value Area High breakout'  # Adjust based on actual condition
-            })
+        pos_size = self._calculate_position_size(data, risk_level)
         
-        # Short signal conditions
-        elif (current_close > value_area['vah'] and 
-              not excess['above'] and 
-              not balance['is_balanced'] and
-              position >= 0):
+        # Trading logic based on auction market principles
+        if position == 0:  # No position
+            if close > vah:  # Price above value area high
+                if excess == "up":
+                    # Excess above value area - potential reversal
+                    if balance == "tight" and rotation == "down":
+                        # Short when we see excess up, tight balance, and downward rotation
+                        self.sell(data=data, size=pos_size)
+                else:
+                    # No excess - potential breakout
+                    if rotation == "up" and close > self.sma50[data][0]:
+                        # Go long above value area with upward rotation and above MA
+                        self.buy(data=data, size=pos_size)
             
-            risk_level = (current_close - value_area['vah']) / current_close
-            position_size = self._calculate_position_size(data, risk_level)
+            elif close < val:  # Price below value area low
+                if excess == "down":
+                    # Excess below value area - potential reversal
+                    if balance == "tight" and rotation == "up":
+                        # Go long when we see excess down, tight balance, and upward rotation
+                        self.buy(data=data, size=pos_size)
+                else:
+                    # No excess - potential breakdown
+                    if rotation == "down" and close < self.sma50[data][0]:
+                        # Go short below value area with downward rotation and below MA
+                        self.sell(data=data, size=pos_size)
             
-            self.sell(data=data, size=position_size)
-            print(f"{data.datetime.date(0)} - SELL signal for {ticker}: Size={position_size}, Price={current_close:.2f}")
-            print(f"  Reason: Price above value area without excess")
-            
-            # Calculate P&L
-            buy_price = next((t['price'] for t in reversed(self.trades) 
-                             if t['ticker'] == ticker and t['type'] == 'open'), None)
-            
-            # Track trade
-            dt = data.datetime.date(0)
-            if buy_price:
-                pnl = (current_close - buy_price) * position_size
-            else:
-                pnl = 0
-                
-            self.trades.append({
-                'type': 'close',
-                'ticker': ticker,
-                'date': dt,
-                'price': current_close,
-                'size': position_size,
-                'pnl': pnl,
-                'reason': 'Value Area Low breakdown'  # Adjust based on actual condition
-            })
+            else:  # Price inside value area
+                if close > poc and rotation == "up" and self.volume_ma[data][0] < data.volume[0]:
+                    # Go long above POC with upward rotation and above-average volume
+                    self.buy(data=data, size=int(pos_size * 0.7))  # Reduced size in value area
+                elif close < poc and rotation == "down" and self.volume_ma[data][0] < data.volume[0]:
+                    # Go short below POC with downward rotation and above-average volume
+                    self.sell(data=data, size=int(pos_size * 0.7))  # Reduced size in value area
         
-        # Exit long position
-        elif position > 0 and (
-            current_close > value_area['poc'] or  # Price above POC
-            excess['below'] or                    # Excess below value area
-            rotation['detected'] and rotation['direction'] == 'down'  # Downward rotation
-        ):
-            self.close(data=data)
-            print(f"{data.datetime.date(0)} - CLOSE LONG position for {ticker}: Price={current_close:.2f}")
+        elif position > 0:  # Long position
+            if (close < val and balance != "wide") or close < (val - self.atr[data][0]):
+                # Exit long if price drops below value area low or too far below
+                self.close(data=data)
+            elif excess == "up" and balance == "tight":
+                # Take partial profits on excess above value area
+                self.sell(data=data, size=int(position * 0.5))
         
-        # Exit short position
-        elif position < 0 and (
-            current_close < value_area['poc'] or  # Price below POC
-            excess['above'] or                    # Excess above value area
-            rotation['detected'] and rotation['direction'] == 'up'  # Upward rotation
-        ):
-            self.close(data=data)
-            print(f"{data.datetime.date(0)} - CLOSE SHORT position for {ticker}: Price={current_close:.2f}")
+        elif position < 0:  # Short position
+            if (close > vah and balance != "wide") or close > (vah + self.atr[data][0]):
+                # Exit short if price rises above value area high or too far above
+                self.close(data=data)
+            elif excess == "down" and balance == "tight":
+                # Take partial profits on excess below value area
+                self.buy(data=data, size=int(abs(position) * 0.5))
     
     def notify_order(self, order):
         """Log order execution information"""

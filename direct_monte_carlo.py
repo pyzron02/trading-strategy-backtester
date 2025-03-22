@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import traceback
 import csv
+import math
 
 # Add the project root to the path
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -174,20 +175,22 @@ class AuctionMarket(bt.Strategy):
     )
     
     def __init__(self):
-        # Calculate warmup period
-        self.warmup_period = max(self.params.volume_period, self.params.price_period) + 10
+        # Calculate warmup period - ensure it's long enough for safe use
+        self.warmup_period = max(self.params.volume_period, self.params.price_period) + 20
         
-        # Volume indicators
+        # Volume indicators - use SafeSMA for volume indicator
         self.volume_ma = bt.indicators.SMA(self.data.volume, period=self.params.volume_period)
+        self.addminperiod(self.params.volume_period + 5)  # Add extra bars for safety
         
-        # Price indicators
+        # Price indicators - use SafeSMA for price indicator
         self.price_ma = bt.indicators.SMA(self.data.close, period=self.params.price_period)
         
         # Keep track of the equity curve for analysis
         self.equity_curve = []
         
-        # State for trading logic
+        # State for trading logic and ensure minimum bars processed
         self.bars_processed = 0
+        self.min_bars_required = max(self.params.volume_period, self.params.price_period) + 20  # Extra safety margin
     
     def next(self):
         # Increment bars processed counter
@@ -199,9 +202,14 @@ class AuctionMarket(bt.Strategy):
         self.equity_curve.append({'Date': date, 'Value': value})
         
         # Skip trading until we have enough bars for reliable indicator values
-        if self.bars_processed < self.warmup_period:
+        if self.bars_processed < self.min_bars_required:
             return
         
+        # Safety check to ensure all indicators have valid values
+        if (not math.isfinite(self.price_ma[0]) or
+            not math.isfinite(self.volume_ma[0])):
+            return
+            
         # Current position
         position = self.getposition().size
         
