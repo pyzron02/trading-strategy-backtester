@@ -550,11 +550,15 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                     pickle_safe_results[key] = str(value)
         
         # Save the pickle-safe results
-        with open(os.path.join(output_dir, 'backtest_results.pkl'), 'wb') as f:
-            pickle.dump(pickle_safe_results, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f"Pickle results also saved to {output_dir}/backtest_results.pkl")
+        try:
+            with open(os.path.join(output_dir, 'backtest_results.pkl'), 'wb') as f:
+                pickle.dump(pickle_safe_results, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"Pickle results also saved to {output_dir}/backtest_results.pkl")
+        except Exception as e:
+            print(f"Warning: Could not save pickle file: {str(e)}")
+            print("JSON results file can be used instead.")
     except Exception as e:
-        print(f"Warning: Could not save pickle file: {str(e)}")
+        print(f"Warning: Could not create pickle-safe results: {str(e)}")
         print("JSON results file can be used instead.")
 
     # Save a summary of results to a text file
