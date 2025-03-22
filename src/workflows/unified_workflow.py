@@ -589,8 +589,8 @@ def main():
                     print("\nTrade logs summary saved to the output directory")
     elif args.workflow_type == 'complete':
         # Check if it's a strategy with known issues with complete workflow
-        # For MACrossover, use simple workflow with verbose output
-        if args.strategy == 'MACrossover':
+        # For MACrossover and AuctionMarket, use simple workflow with verbose output
+        if args.strategy == 'MACrossover' or args.strategy == 'AuctionMarket':
             print(f"Note: Using simple workflow for {args.strategy} due to known issues with complete workflow")
             # Run the simple workflow
             simple_results = run_simple_workflow(
