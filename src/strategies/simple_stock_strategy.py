@@ -122,3 +122,6 @@ class SimpleStockStrategy(bt.Strategy):
                     'size': position,
                     'pnl': pnl
                 })
+
+# Create an alias for SimpleStockStrategy for backward compatibility
+SimpleStock = SimpleStockStrategy

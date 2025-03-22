@@ -583,7 +583,10 @@ def main():
                         print(f"    - Permutation {i}: {os.path.basename(log_path)}")
                     if len(trade_logs['permutations']) > 5:
                         print(f"    - ... and {len(trade_logs['permutations']) - 5} more")
-                print(f"\nTrade logs summary saved to: {os.path.join(args.output_dir, 'trade_log_summary.json')}")
+                if args.output_dir:
+                    print(f"\nTrade logs summary saved to: {os.path.join(args.output_dir, 'trade_log_summary.json')}")
+                else:
+                    print("\nTrade logs summary saved to the output directory")
     elif args.workflow_type == 'complete':
         # Check if it's a strategy with known issues with complete workflow
         # For MACrossover, use simple workflow with verbose output
