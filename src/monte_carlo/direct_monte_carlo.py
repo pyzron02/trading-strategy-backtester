@@ -17,11 +17,16 @@ import backtrader as bt
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')  # Use the 'Agg' backend which doesn't require a display
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import traceback
 import csv
 import math
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import shutil
 
 # Add the project root to the path
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -52,47 +57,135 @@ except ImportError as e:
     print(f"Warning: Could not import strategy: {e}")
     STRATEGY_CLASSES = {}
 
-# Define strategies directly for backtrader to avoid import issues
+# Add PortfolioValue observer
+class PortfolioValue(bt.Observer):
+    """Observer that tracks portfolio value throughout the backtest"""
+    lines = ('value',)
+    
+    def next(self):
+        self.lines.value[0] = self._owner.broker.getvalue()
+
+# Define TradeLog analyzer
+class TradeLog(bt.Analyzer):
+    """Analyzer that logs all trades during a backtest"""
+    
+    def __init__(self):
+        self.log = []
+    
+    def notify_trade(self, trade):
+        if trade.isclosed:
+            self.log.append({
+                'date': bt.num2date(trade.dtclose).strftime('%Y-%m-%d'),
+                'type': 'SELL',
+                'price': trade.price,
+                'size': trade.size,
+                'value': trade.price * trade.size,
+                'pnl': trade.pnl,
+                'commission': trade.commission
+            })
+        elif trade.justopened:
+            self.log.append({
+                'date': bt.num2date(trade.dtopen).strftime('%Y-%m-%d'),
+                'type': 'BUY',
+                'price': trade.price,
+                'size': trade.size,
+                'value': trade.price * trade.size,
+                'pnl': 0.0,
+                'commission': trade.commission
+            })
+
+# Helper function to save JSON data
+def save_to_json(data, filepath):
+    """Save data to a JSON file"""
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+        return True
+    except Exception as e:
+        print(f"Error saving JSON data: {e}")
+        return False
+
+# Strategy Classes
 class SimpleStock(bt.Strategy):
     """
-    A simple strategy that buys when price is above SMA and sells when price is below SMA.
+    A simple stock trading strategy based on a SMA.
     """
     params = (
         ('sma_period', 20),
-        ('position_size', 10),
+        ('position_size', 100),
     )
 
     def __init__(self):
-        # Calculate warmup period
-        self.warmup_period = self.params.sma_period + 5
+        # Define the SMA indicator
+        self.sma = bt.indicators.SimpleMovingAverage(
+            self.data.close, period=self.params.sma_period
+        )
         
-        # Use standard Backtrader SMA for stability
-        self.sma = bt.indicators.SMA(self.data.close, period=self.params.sma_period)
+        # Track portfolio values every day
+        self.val_start = self.broker.getvalue()
+        self.daily_values = []
         
-        # Keep track of the equity curve for analysis
-        self.equity_curve = []
-        
-        # Variables to track if we have enough data for trading
-        self.min_bars_required = max(self.params.sma_period + 10, 30)  # Ensure sufficient warmup
-        self.bars_processed = 0
-
-    def next(self):
-        # Increment bars processed counter
-        self.bars_processed += 1
-        
-        # Log portfolio value for the equity curve
-        date = self.data.datetime.date(0).isoformat()
-        value = self.broker.getvalue()
-        self.equity_curve.append({'Date': date, 'Value': value})
-
-        # Skip trading until we have enough bars for indicators to be reliable
-        if self.bars_processed < self.min_bars_required:
-            return
-
-        # Skip if not enough data
-        if len(self.data) < self.warmup_period:
-            return
+        # Keep track of all active positions and cash
+        self.positions_info = {}  # ticker -> quantity
+        self.cash = self.val_start
+    
+    def notify_order(self, order):
+        """Track order executions to update positions accurately"""
+        if order.status in [order.Completed]:
+            # Get the data name
+            data_name = order.data._name
             
+            # Update position info for this ticker
+            if order.isbuy():
+                # Add to position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty + order.size
+                
+                # Update cash (subtract cost + commission)
+                self.cash -= order.executed.price * order.size + order.executed.comm
+            else:
+                # Reduce position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty - order.size
+                
+                # Update cash (add proceeds - commission)
+                self.cash += order.executed.price * order.size - order.executed.comm
+    
+    def log_values(self):
+        """Log portfolio values for each day"""
+        # Get current date
+        dt = self.data.datetime.date(0)
+        
+        # Use broker's getvalue() method which accounts for cash + position values
+        value = self.broker.getvalue()
+        
+        # Store the date and value
+        self.daily_values.append({
+            'date': dt,
+            'value': value,
+            'cash': self.broker.get_cash(),
+            'positions': self.get_position_values()
+        })
+    
+    def get_position_values(self):
+        """Get the current value of all positions"""
+        position_values = {}
+        for data in self.datas:
+            pos = self.getposition(data)
+            if pos.size != 0:
+                ticker = data._name
+                position_values[ticker] = {
+                    'size': pos.size,
+                    'price': pos.price,
+                    'value': pos.size * data.close[0]
+                }
+        return position_values
+        
+    def next(self):
+        # Log portfolio value at each bar
+        self.log_values()
+        
         # Trading logic
         position = self.getposition().size
         
@@ -102,7 +195,6 @@ class SimpleStock(bt.Strategy):
         elif self.data.close[0] < self.sma[0] and position > 0:
             # Sell signal
             self.sell(size=position)
-
 
 class MACrossover(bt.Strategy):
     """
@@ -135,24 +227,69 @@ class MACrossover(bt.Strategy):
             # Use standard CrossOver indicator
             self.crossover[data] = bt.indicators.CrossOver(self.fast_ma[data], self.slow_ma[data])
         
-        # Keep track of the equity curve for analysis
-        self.equity_curve = []
+        # Track portfolio values every day
+        self.daily_values = []
+        self.val_start = self.broker.getvalue()
+        
+        # Keep track of positions
+        self.positions_info = {}  # ticker -> quantity
         
         # Variables to track if we have enough data for trading
         self.min_bars_required = self.warmup_period
         self.bars_processed = 0
 
+    def notify_order(self, order):
+        """Track order executions to update positions accurately"""
+        if order.status in [order.Completed]:
+            # Get the data name
+            data_name = order.data._name
+            
+            # Update position info for this ticker
+            if order.isbuy():
+                # Add to position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty + order.size
+            else:
+                # Reduce position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty - order.size
+    
+    def log_values(self):
+        """Log portfolio values for each day"""
+        # Get current date
+        dt = self.data.datetime.date(0)
+        
+        # Use broker's getvalue() method which accounts for cash + position values
+        value = self.broker.getvalue()
+        
+        # Store the date and value
+        self.daily_values.append({
+            'date': dt,
+            'value': value,
+            'cash': self.broker.get_cash(),
+            'positions': self.get_position_values()
+        })
+    
+    def get_position_values(self):
+        """Get the current value of all positions"""
+        position_values = {}
+        for data in self.datas:
+            pos = self.getposition(data)
+            if pos.size != 0:
+                ticker = data._name
+                position_values[ticker] = {
+                    'size': pos.size,
+                    'price': pos.price,
+                    'value': pos.size * data.close[0]
+                }
+        return position_values
+
     def next(self):
         # Increment bars processed counter
         self.bars_processed += 1
         
-        # Log portfolio value for the equity curve
-        try:
-            date = self.data.datetime.date(0).isoformat()
-            value = self.broker.getvalue()
-            self.equity_curve.append({'Date': date, 'Value': value})
-        except Exception as e:
-            print(f"Error logging portfolio value: {e}")
+        # Log portfolio value
+        self.log_values()
         
         # Skip trading until we have enough bars for reliable indicator values
         if self.bars_processed < self.min_bars_required:
@@ -184,6 +321,7 @@ class MACrossover(bt.Strategy):
             except Exception as e:
                 print(f"Error in next() for {data._name}: {e}")
                 continue
+
 
 # Add basic AuctionMarket strategy
 class AuctionMarket(bt.Strategy):
@@ -218,24 +356,69 @@ class AuctionMarket(bt.Strategy):
             # Price indicators
             self.price_ma[data] = bt.indicators.SMA(data.close, period=self.params.price_period)
         
-        # Keep track of the equity curve for analysis
-        self.equity_curve = []
+        # Track portfolio values every day
+        self.daily_values = []
+        self.val_start = self.broker.getvalue()
+        
+        # Keep track of positions
+        self.positions_info = {}  # ticker -> quantity
         
         # State for trading logic and ensure minimum bars processed
         self.bars_processed = 0
         self.min_bars_required = self.warmup_period
     
+    def notify_order(self, order):
+        """Track order executions to update positions accurately"""
+        if order.status in [order.Completed]:
+            # Get the data name
+            data_name = order.data._name
+            
+            # Update position info for this ticker
+            if order.isbuy():
+                # Add to position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty + order.size
+            else:
+                # Reduce position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty - order.size
+    
+    def log_values(self):
+        """Log portfolio values for each day"""
+        # Get current date
+        dt = self.data.datetime.date(0)
+        
+        # Use broker's getvalue() method which accounts for cash + position values
+        value = self.broker.getvalue()
+        
+        # Store the date and value
+        self.daily_values.append({
+            'date': dt,
+            'value': value,
+            'cash': self.broker.get_cash(),
+            'positions': self.get_position_values()
+        })
+    
+    def get_position_values(self):
+        """Get the current value of all positions"""
+        position_values = {}
+        for data in self.datas:
+            pos = self.getposition(data)
+            if pos.size != 0:
+                ticker = data._name
+                position_values[ticker] = {
+                    'size': pos.size,
+                    'price': pos.price,
+                    'value': pos.size * data.close[0]
+                }
+        return position_values
+    
     def next(self):
         # Increment bars processed counter
         self.bars_processed += 1
         
-        # Log portfolio value for the equity curve
-        try:
-            date = self.data.datetime.date(0).isoformat()
-            value = self.broker.getvalue()
-            self.equity_curve.append({'Date': date, 'Value': value})
-        except Exception as e:
-            print(f"Error logging portfolio value: {e}")
+        # Log portfolio value
+        self.log_values()
         
         # Skip trading until we have enough bars for reliable indicator values
         if self.bars_processed < self.min_bars_required:
@@ -299,21 +482,69 @@ class MultiPosition(bt.Strategy):
         self.slow_ma = bt.indicators.SMA(self.data.close, period=self.params.slow_period)
         self.rsi = bt.indicators.RSI(self.data.close, period=self.params.rsi_period)
         
-        # Keep track of the equity curve for analysis
-        self.equity_curve = []
+        # Track portfolio values every day
+        self.daily_values = []
+        self.val_start = self.broker.getvalue()
+        
+        # Keep track of positions by ticker
+        self.positions_info = {}  # ticker -> quantity
         
         # State for trading logic
         self.bars_processed = 0
         self.position_tracker = {}  # Track positions by entry price
+    
+    def notify_order(self, order):
+        """Track order executions to update positions accurately"""
+        if order.status in [order.Completed]:
+            # Get the data name
+            data_name = order.data._name
+            
+            # Update position info for this ticker
+            if order.isbuy():
+                # Add to position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty + order.size
+            else:
+                # Reduce position
+                current_qty = self.positions_info.get(data_name, 0)
+                self.positions_info[data_name] = current_qty - order.size
+    
+    def log_values(self):
+        """Log portfolio values for each day"""
+        # Get current date
+        dt = self.data.datetime.date(0)
+        
+        # Use broker's getvalue() method which accounts for cash + position values
+        value = self.broker.getvalue()
+        
+        # Store the date and value
+        self.daily_values.append({
+            'date': dt,
+            'value': value,
+            'cash': self.broker.get_cash(),
+            'positions': self.get_position_values()
+        })
+    
+    def get_position_values(self):
+        """Get the current value of all positions"""
+        position_values = {}
+        for data in self.datas:
+            pos = self.getposition(data)
+            if pos.size != 0:
+                ticker = data._name
+                position_values[ticker] = {
+                    'size': pos.size,
+                    'price': pos.price,
+                    'value': pos.size * data.close[0]
+                }
+        return position_values
         
     def next(self):
         # Increment bars processed counter
         self.bars_processed += 1
         
-        # Log portfolio value for the equity curve
-        date = self.data.datetime.date(0).isoformat()
-        value = self.broker.getvalue()
-        self.equity_curve.append({'Date': date, 'Value': value})
+        # Log portfolio value
+        self.log_values()
         
         # Skip trading until we have enough bars for reliable indicator values
         if self.bars_processed < self.warmup_period:
@@ -434,29 +665,54 @@ class DirectMonteCarloTest:
         print(f"Using parameters: {self.parameters}")
     
     def _load_stock_data(self):
-        """Load stock data for the specified tickers."""
+        """Load stock data for the specified tickers from a CSV file."""
         print("\nLoading stock data...")
         
-        # Get project root directory
-        project_root = os.path.dirname(os.path.abspath(__file__))
-        
-        # Define path to stock data
-        data_path = os.path.join(project_root, 'input', 'stock_data.csv')
-        
-        # Check if file exists
-        if not os.path.exists(data_path):
-            print(f"Error: Stock data file not found at {data_path}")
-            return None
-        
         try:
+            # Get the absolute path of the project root
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            
+            # Define paths to look for stock data
+            potential_paths = [
+                # First check if data is in the data_dir (output directory)
+                os.path.join(self.data_dir, 'stock_data.csv'),
+                
+                # Then check in the standard input location
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'input', 'stock_data.csv'),
+                
+                # Check project root
+                os.path.join(project_root, 'input', 'stock_data.csv'),
+                
+                # Check current directory
+                os.path.join(os.getcwd(), 'input', 'stock_data.csv'),
+                
+                # Check relative to current working directory
+                'input/stock_data.csv',
+                'stock_data.csv'
+            ]
+            
+            # Find the first path that exists
+            data_path = None
+            for path in potential_paths:
+                if os.path.exists(path):
+                    data_path = path
+                    break
+            
+            if data_path is None:
+                print("Error: stock_data.csv file not found in any of the following locations:")
+                for path in potential_paths:
+                    print(f" - {path}")
+                return None
+            
             # Load the data
+            print(f"Loading stock data from {data_path}")
             data = pd.read_csv(data_path)
             
             # Convert Date column to datetime
             if 'Date' in data.columns:
                 data['Date'] = pd.to_datetime(data['Date'])
             
-            print(f"Loaded stock data from {data_path} with {len(data)} rows and {len(data.columns)} columns.")
+            print(f"Loaded stock data with {len(data)} rows and {len(data.columns)} columns.")
             
             # Process the data for each ticker
             ticker_data = {}
@@ -498,6 +754,9 @@ class DirectMonteCarloTest:
                 # Add adjusted close if it doesn't exist
                 if 'Adj Close' not in df.columns and 'Close' in df.columns:
                     df['Adj Close'] = df['Close']
+                
+                # Create the data directory if it doesn't exist
+                os.makedirs(self.data_dir, exist_ok=True)
                 
                 # Save processed data
                 ticker_data[ticker] = df
@@ -606,625 +865,161 @@ class DirectMonteCarloTest:
         
         return df
     
-    def _run_backtest(self, data, is_permutation=False, permutation_id=None):
-        """
-        Run a backtest with the given data.
+    def _run_single_permutation(self, permutation_index):
+        """Run a single permutation test.
         
         Args:
-            data (pd.DataFrame): Price data for backtesting
-            is_permutation (bool): Whether this is a permutation test
-            permutation_id (int): ID of the permutation if applicable
+            permutation_index (int): The index of this permutation
             
         Returns:
-            dict: Backtest results
+            dict: The results of this permutation
         """
-        # Create a cerebro instance
-        cerebro = bt.Cerebro()
+        print(f"Running permutation {permutation_index}...")
         
-        # Set initial cash
-        cerebro.broker.setcash(100000.0)
+        # Create output directory for this permutation
+        perm_output_dir = os.path.join(self.output_dir, f"permutation_{permutation_index}")
+        os.makedirs(perm_output_dir, exist_ok=True)
         
-        # Add data feed for each ticker
-        for ticker, df in data.items():
-            # Save data to CSV for backtrader
-            csv_path = os.path.join(self.data_dir, f"{ticker}_{'permuted' if is_permutation else 'original'}.csv")
-            df.to_csv(csv_path, index=False)
-            
-            # Create a data feed
-            data_feed = bt.feeds.GenericCSVData(
-                dataname=csv_path,
-                dtformat='%Y-%m-%d',
-                datetime=0,  # Date column index
-                open=1,
-                high=2,
-                low=3,
-                close=4,
-                volume=5,
-                openinterest=-1,  # No open interest column
-                fromdate=self.in_sample_start.to_pydatetime(),
-                todate=self.out_sample_end.to_pydatetime()
-            )
-            
-            # Add data feed
-            cerebro.adddata(data_feed, name=ticker)
-        
-        # Add the strategy
-        if self.strategy_name in STRATEGY_CLASSES:
-            cerebro.addstrategy(STRATEGY_CLASSES[self.strategy_name], **self.parameters)
-        else:
-            print(f"Error: Unknown strategy {self.strategy_name}")
-            return None
-        
-        # Add analyzers
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
-        cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
-        
-        # Run the backtest
-        print(f"Running {'permutation' if is_permutation else 'original'} backtest...")
-        results = cerebro.run()
-        
-        if not results:
-            print("Error: No results from backtest")
-            return None
-        
-        # Extract results
-        strat = results[0]
-        
-        # Get analyzer results - safely with defensive programming
-        try:
-            sharpe_analysis = strat.analyzers.sharpe.get_analysis() if hasattr(strat.analyzers, 'sharpe') else {}
-            sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0)
-        except Exception as e:
-            print(f"Error getting sharpe ratio: {e}")
-            sharpe_ratio = 0.0
-        
-        try:
-            returns = strat.analyzers.returns.get_analysis() if hasattr(strat.analyzers, 'returns') else {}
-            total_return = returns.get('rtot', 0.0)
-        except Exception as e:
-            print(f"Error getting returns: {e}")
-            total_return = 0.0
-        
-        try:
-            drawdown = strat.analyzers.drawdown.get_analysis() if hasattr(strat.analyzers, 'drawdown') else {}
-            max_dd_dict = drawdown.get('max', {})
-            max_drawdown = max_dd_dict.get('drawdown', 0.0)
-        except Exception as e:
-            print(f"Error getting drawdown: {e}")
-            max_drawdown = 0.0
-        
-        # Initialize trade metrics with safe defaults
-        total_trades = 0
-        win_rate = 0.0
-        profit_factor = 0.0
-        
-        try:
-            # Initialize trade_data list to avoid referenced before assignment error
-            trade_data = []
-            header = ['Type', 'Direction', 'Count', 'PnL Total', 'PnL Avg', 'PnL Max', 'Length Avg', 'Length Max']
-            trade_data.append(header)
-            
-            trades_analysis = strat.analyzers.trades.get_analysis() if hasattr(strat.analyzers, 'trades') else {}
-            
-            # Get total trades
-            if isinstance(trades_analysis, dict) and 'total' in trades_analysis:
-                total_dict = trades_analysis.get('total', {})
-                if isinstance(total_dict, dict):
-                    total_trades = total_dict.get('closed', 0)
-                else:
-                    # Handle case where total is an AutoOrderedDict
-                    try:
-                        total_trades = total_dict.closed
-                    except (AttributeError, KeyError):
-                        total_trades = 0
-            
-            # Calculate win rate
-            won_trades = 0
-            lost_trades = 0
-            
-            if isinstance(trades_analysis, dict) and 'won' in trades_analysis:
-                won_dict = trades_analysis['won']
-                
-                won_count = won_dict.get('total', 0) if isinstance(won_dict, dict) else getattr(won_dict, 'total', 0)
-                
-                won_pnl_dict = won_dict.get('pnl', {}) if isinstance(won_dict, dict) else getattr(won_dict, 'pnl', {})
-                won_pnl_total = won_pnl_dict.get('total', 0.0) if isinstance(won_pnl_dict, dict) else getattr(won_pnl_dict, 'total', 0.0)
-                won_pnl_avg = won_pnl_dict.get('average', 0.0) if isinstance(won_pnl_dict, dict) else getattr(won_pnl_dict, 'average', 0.0)
-                won_pnl_max = won_pnl_dict.get('max', 0.0) if isinstance(won_pnl_dict, dict) else getattr(won_pnl_dict, 'max', 0.0)
-                
-                won_len_dict = won_dict.get('len', {}) if isinstance(won_dict, dict) else getattr(won_dict, 'len', {})
-                won_len_avg = won_len_dict.get('average', 0) if isinstance(won_len_dict, dict) else getattr(won_len_dict, 'average', 0)
-                won_len_max = won_len_dict.get('max', 0) if isinstance(won_len_dict, dict) else getattr(won_len_dict, 'max', 0)
-                
-                trade_data.append(['Won', 'All', str(won_count), str(won_pnl_total), str(won_pnl_avg), str(won_pnl_max), str(won_len_avg), str(won_len_max)])
-            
-            # Losing trades
-            if 'lost' in trades_analysis:
-                lost_dict = trades_analysis['lost']
-                
-                lost_count = lost_dict.get('total', 0) if isinstance(lost_dict, dict) else getattr(lost_dict, 'total', 0)
-                
-                lost_pnl_dict = lost_dict.get('pnl', {}) if isinstance(lost_dict, dict) else getattr(lost_dict, 'pnl', {})
-                lost_pnl_total = lost_pnl_dict.get('total', 0.0) if isinstance(lost_pnl_dict, dict) else getattr(lost_pnl_dict, 'total', 0.0)
-                lost_pnl_avg = lost_pnl_dict.get('average', 0.0) if isinstance(lost_pnl_dict, dict) else getattr(lost_pnl_dict, 'average', 0.0)
-                lost_pnl_max = lost_pnl_dict.get('max', 0.0) if isinstance(lost_pnl_dict, dict) else getattr(lost_pnl_dict, 'max', 0.0)
-                
-                lost_len_dict = lost_dict.get('len', {}) if isinstance(lost_dict, dict) else getattr(lost_dict, 'len', {})
-                lost_len_avg = lost_len_dict.get('average', 0) if isinstance(lost_len_dict, dict) else getattr(lost_len_dict, 'average', 0)
-                lost_len_max = lost_len_dict.get('max', 0) if isinstance(lost_len_dict, dict) else getattr(lost_len_dict, 'max', 0)
-                
-                trade_data.append(['Lost', 'All', str(lost_count), str(lost_pnl_total), str(lost_pnl_avg), str(lost_pnl_max), str(lost_len_avg), str(lost_len_max)])
-            
-            # I'm simplifying the rest of the function to focus on essentials
-            # Long and Short trade statistics could be added in a similar manner but are not critical for this example
-            
-        except Exception as e:
-            print(f"Error processing trade statistics: {e}")
-            # Fall back to basics
-            trade_data = [
-                ['Type', 'Direction', 'Count', 'PnL Total', 'PnL Avg', 'PnL Max', 'Length Avg', 'Length Max'],
-                ['All', 'All', '0', '0.0', '0.0', '0.0', '0', '0']
-            ]
-        
-        # Get equity curve
-        equity_curve = []
-        try:
-            equity_curve = getattr(strat, 'equity_curve', [])
-        except Exception as e:
-            print(f"Error getting equity curve: {e}")
-        
-        # Store results in a dictionary with safe conversion to float
-        try:
-            result_dict = {
-                'sharpe_ratio': float(sharpe_ratio) if sharpe_ratio is not None else 0.0,
-                'total_return': float(total_return) if total_return is not None else 0.0,
-                'max_drawdown': float(max_drawdown) if max_drawdown is not None else 0.0,
-                'total_trades': int(total_trades) if total_trades is not None else 0,
-                'win_rate': float(win_rate) if win_rate is not None else 0.0,
-                'profit_factor': float(profit_factor) if profit_factor is not None else 0.0,
-                'equity_curve': equity_curve,
-                'final_value': float(cerebro.broker.getvalue())
-            }
-        except (TypeError, ValueError) as e:
-            print(f"Error converting values: {e}")
-            # Fallback with safe defaults
-            result_dict = {
-                'sharpe_ratio': 0.0,
-                'total_return': 0.0,
-                'max_drawdown': 0.0,
-                'total_trades': 0,
-                'win_rate': 0.0,
-                'profit_factor': 0.0,
-                'equity_curve': equity_curve,
-                'final_value': float(cerebro.broker.getvalue())
-            }
-        
-        # Save the results
-        if is_permutation:
-            suffix = f"permutation_{permutation_id}"
-        else:
-            suffix = "original"
-        
-        results_dir = os.path.join(self.output_dir, suffix)
-        os.makedirs(results_dir, exist_ok=True)
-        
-        # Save trade details to CSV
-        self._save_trade_log(trades_analysis, results_dir, suffix)
-        
-        with open(os.path.join(results_dir, "results.json"), "w") as f:
-            # Convert equity curve to list of dicts for JSON serialization
-            serializable_results = result_dict.copy()
-            serializable_results['equity_curve'] = [
-                {'date': str(p.get('Date', '')), 'value': float(p.get('Value', 0.0))} 
-                for p in result_dict['equity_curve']
-            ]
-            json.dump(serializable_results, f, indent=4)
-        
-        print(f"Backtest results for {suffix}:")
-        print(f"  Sharpe Ratio: {result_dict['sharpe_ratio']:.4f}")
-        print(f"  Total Return: {result_dict['total_return']:.4f}")
-        print(f"  Max Drawdown: {result_dict['max_drawdown']:.4f}")
-        print(f"  Win Rate: {result_dict['win_rate']:.4f}")
-        print(f"  Profit Factor: {result_dict['profit_factor']:.4f}")
-        print(f"  Final Value: ${result_dict['final_value']:.2f}")
-        print(f"  Trades logged to: {os.path.join(results_dir, f'trade_log_{suffix}.csv')}")
-        
-        return result_dict
-    
-    def _save_trade_log(self, trades_analysis, results_dir, suffix):
-        """
-        Save detailed trade information to CSV.
-        
-        Args:
-            trades_analysis: The TradeAnalyzer results
-            results_dir: Directory to save results
-            suffix: Suffix for the file name
-        """
-        trade_log_path = os.path.join(results_dir, f"trade_log_{suffix}.csv")
-        
-        # Extract trade information
-        trade_data = []
-        
-        # Header row
-        header = ['Type', 'Direction', 'Count', 'PnL Total', 'PnL Avg', 'PnL Max', 'Length Avg', 'Length Max']
-        trade_data.append(header)
-        
-        try:
-            # Check if we have trade details to log - safely extract with dict access
-            has_trades = False
-            try:
-                if hasattr(trades_analysis, 'total'):
-                    has_trades = True
-                elif isinstance(trades_analysis, dict) and 'total' in trades_analysis:
-                    has_trades = True
-            except:
-                has_trades = False
-            
-            if has_trades:
-                # Overall statistics
-                try:
-                    # Get total trades - handle both dict and AutoOrderedDict
-                    if isinstance(trades_analysis, dict):
-                        total_dict = trades_analysis.get('total', {})
-                        total_count = total_dict.get('total', 0) if isinstance(total_dict, dict) else 0
-                    else:
-                        total_count = trades_analysis.total.total if hasattr(trades_analysis.total, 'total') else 0
-                    
-                    # Get PnL data - handle both dict and AutoOrderedDict
-                    if isinstance(trades_analysis, dict):
-                        pnl_dict = trades_analysis.get('pnl', {})
-                        pnl_total = pnl_dict.get('total', 0.0) if isinstance(pnl_dict, dict) else 0.0
-                        pnl_avg = pnl_dict.get('average', 0.0) if isinstance(pnl_dict, dict) else 0.0
-                        pnl_max = pnl_dict.get('max', 0.0) if isinstance(pnl_dict, dict) else 0.0
-                    else:
-                        pnl_total = trades_analysis.pnl.total if hasattr(trades_analysis, 'pnl') and hasattr(trades_analysis.pnl, 'total') else 0.0
-                        pnl_avg = trades_analysis.pnl.average if hasattr(trades_analysis, 'pnl') and hasattr(trades_analysis.pnl, 'average') else 0.0
-                        pnl_max = trades_analysis.pnl.max if hasattr(trades_analysis, 'pnl') and hasattr(trades_analysis.pnl, 'max') else 0.0
-                    
-                    # Get length data - handle both dict and AutoOrderedDict
-                    if isinstance(trades_analysis, dict):
-                        len_dict = trades_analysis.get('len', {})
-                        len_avg = len_dict.get('average', 0) if isinstance(len_dict, dict) else 0
-                        len_max = len_dict.get('max', 0) if isinstance(len_dict, dict) else 0
-                    else:
-                        len_avg = trades_analysis.len.average if hasattr(trades_analysis, 'len') and hasattr(trades_analysis.len, 'average') else 0
-                        len_max = trades_analysis.len.max if hasattr(trades_analysis, 'len') and hasattr(trades_analysis.len, 'max') else 0
-                    
-                    # Add overall row
-                    trade_data.append(['All', 'All', str(total_count), str(pnl_total), str(pnl_avg), str(pnl_max), str(len_avg), str(len_max)])
-                    
-                    # Check for won trades
-                    has_won = False
-                    try:
-                        if hasattr(trades_analysis, 'won'):
-                            has_won = True
-                        elif isinstance(trades_analysis, dict) and 'won' in trades_analysis:
-                            has_won = True
-                    except:
-                        has_won = False
-                    
-                    if has_won:
-                        # Get won trades data - handle both dict and AutoOrderedDict
-                        if isinstance(trades_analysis, dict):
-                            won_dict = trades_analysis.get('won', {})
-                            won_count = won_dict.get('total', 0) if isinstance(won_dict, dict) else 0
-                            
-                            won_pnl_dict = won_dict.get('pnl', {}) if isinstance(won_dict, dict) else {}
-                            won_pnl_total = won_pnl_dict.get('total', 0.0) if isinstance(won_pnl_dict, dict) else 0.0
-                            won_pnl_avg = won_pnl_dict.get('average', 0.0) if isinstance(won_pnl_dict, dict) else 0.0
-                            won_pnl_max = won_pnl_dict.get('max', 0.0) if isinstance(won_pnl_dict, dict) else 0.0
-                            
-                            won_len_dict = won_dict.get('len', {}) if isinstance(won_dict, dict) else {}
-                            won_len_avg = won_len_dict.get('average', 0) if isinstance(won_len_dict, dict) else 0
-                            won_len_max = won_len_dict.get('max', 0) if isinstance(won_len_dict, dict) else 0
-                        else:
-                            won_count = trades_analysis.won.total if hasattr(trades_analysis.won, 'total') else 0
-                            
-                            won_pnl_total = trades_analysis.won.pnl.total if hasattr(trades_analysis.won, 'pnl') and hasattr(trades_analysis.won.pnl, 'total') else 0.0
-                            won_pnl_avg = trades_analysis.won.pnl.average if hasattr(trades_analysis.won, 'pnl') and hasattr(trades_analysis.won.pnl, 'average') else 0.0
-                            won_pnl_max = trades_analysis.won.pnl.max if hasattr(trades_analysis.won, 'pnl') and hasattr(trades_analysis.won.pnl, 'max') else 0.0
-                            
-                            won_len_avg = trades_analysis.won.len.average if hasattr(trades_analysis.won, 'len') and hasattr(trades_analysis.won.len, 'average') else 0
-                            won_len_max = trades_analysis.won.len.max if hasattr(trades_analysis.won, 'len') and hasattr(trades_analysis.won.len, 'max') else 0
-                        
-                        # Add won trades row
-                        trade_data.append(['Won', 'All', str(won_count), str(won_pnl_total), str(won_pnl_avg), str(won_pnl_max), str(won_len_avg), str(won_len_max)])
-                    
-                    # Check for lost trades
-                    has_lost = False
-                    try:
-                        if hasattr(trades_analysis, 'lost'):
-                            has_lost = True
-                        elif isinstance(trades_analysis, dict) and 'lost' in trades_analysis:
-                            has_lost = True
-                    except:
-                        has_lost = False
-                    
-                    if has_lost:
-                        # Get lost trades data - handle both dict and AutoOrderedDict
-                        if isinstance(trades_analysis, dict):
-                            lost_dict = trades_analysis.get('lost', {})
-                            lost_count = lost_dict.get('total', 0) if isinstance(lost_dict, dict) else 0
-                            
-                            lost_pnl_dict = lost_dict.get('pnl', {}) if isinstance(lost_dict, dict) else {}
-                            lost_pnl_total = lost_pnl_dict.get('total', 0.0) if isinstance(lost_pnl_dict, dict) else 0.0
-                            lost_pnl_avg = lost_pnl_dict.get('average', 0.0) if isinstance(lost_pnl_dict, dict) else 0.0
-                            lost_pnl_max = lost_pnl_dict.get('max', 0.0) if isinstance(lost_pnl_dict, dict) else 0.0
-                            
-                            lost_len_dict = lost_dict.get('len', {}) if isinstance(lost_dict, dict) else {}
-                            lost_len_avg = lost_len_dict.get('average', 0) if isinstance(lost_len_dict, dict) else 0
-                            lost_len_max = lost_len_dict.get('max', 0) if isinstance(lost_len_dict, dict) else 0
-                        else:
-                            lost_count = trades_analysis.lost.total if hasattr(trades_analysis.lost, 'total') else 0
-                            
-                            lost_pnl_total = trades_analysis.lost.pnl.total if hasattr(trades_analysis.lost, 'pnl') and hasattr(trades_analysis.lost.pnl, 'total') else 0.0
-                            lost_pnl_avg = trades_analysis.lost.pnl.average if hasattr(trades_analysis.lost, 'pnl') and hasattr(trades_analysis.lost.pnl, 'average') else 0.0
-                            lost_pnl_max = trades_analysis.lost.pnl.max if hasattr(trades_analysis.lost, 'pnl') and hasattr(trades_analysis.lost.pnl, 'max') else 0.0
-                            
-                            lost_len_avg = trades_analysis.lost.len.average if hasattr(trades_analysis.lost, 'len') and hasattr(trades_analysis.lost.len, 'average') else 0
-                            lost_len_max = trades_analysis.lost.len.max if hasattr(trades_analysis.lost, 'len') and hasattr(trades_analysis.lost.len, 'max') else 0
-                        
-                        # Add lost trades row
-                        trade_data.append(['Lost', 'All', str(lost_count), str(lost_pnl_total), str(lost_pnl_avg), str(lost_pnl_max), str(lost_len_avg), str(lost_len_max)])
-                    
-                    # For brevity, we're skipping long/short breakdowns in this version
-                    # Those could be added with similar logic if needed
-                    
-                except Exception as e:
-                    print(f"Error extracting trade data: {e}")
-                    trade_data.append(['Error', 'Error', '0', '0.0', '0.0', '0.0', '0', '0'])
-            else:
-                # No trades executed
-                trade_data.append(['No trades', 'N/A', '0', '0.0', '0.0', '0.0', '0', '0'])
-        except Exception as e:
-            print(f"Error in trade log generation: {e}")
-            trade_data = [
-                ['Type', 'Direction', 'Count', 'PnL Total', 'PnL Avg', 'PnL Max', 'Length Avg', 'Length Max'],
-                ['Error', 'Error', '0', '0.0', '0.0', '0.0', '0', '0']
-            ]
-        
-        # Write to CSV
-        with open(trade_log_path, 'w', newline='') as csvfile:
-            csv_writer = csv.writer(csvfile)
-            for row in trade_data:
-                csv_writer.writerow(row)
-        
-        return trade_log_path
-    
-    def _analyze_results(self, original_results, permutation_results):
-        """
-        Analyze the results of the Monte Carlo test.
-        
-        Args:
-            original_results (dict): Results from original backtest
-            permutation_results (list): List of results from permutation tests
-            
-        Returns:
-            dict: Analysis of results
-        """
-        # Create a results directory
-        analysis_dir = os.path.join(self.output_dir, "analysis")
-        os.makedirs(analysis_dir, exist_ok=True)
-        
-        # Collect metrics from permutations
-        metrics = {
-            'sharpe_ratio': [],
-            'total_return': [],
-            'max_drawdown': [],
-            'win_rate': [],
-            'profit_factor': []
-        }
-        
-        for perm_result in permutation_results:
-            for metric in metrics:
-                if metric in perm_result:
-                    metrics[metric].append(perm_result[metric])
-        
-        # Calculate p-values
-        p_values = {}
-        
-        # For positive metrics (higher is better), p-value is proportion of permutations >= original
-        for metric in ['sharpe_ratio', 'total_return', 'win_rate', 'profit_factor']:
-            original_value = original_results.get(metric, 0.0)
-            values = metrics[metric]
-            
-            if values:
-                # Count how many permutations have value >= original
-                count = sum(1 for v in values if v >= original_value)
-                p_values[metric] = count / len(values)
-            else:
-                p_values[metric] = None
-        
-        # For negative metrics (lower is better), p-value is proportion of permutations <= original
-        for metric in ['max_drawdown']:
-            original_value = original_results.get(metric, 0.0)
-            values = metrics[metric]
-            
-            if values:
-                # Count how many permutations have value <= original
-                count = sum(1 for v in values if v <= original_value)
-                p_values[metric] = count / len(values)
-            else:
-                p_values[metric] = None
-        
-        # Calculate statistics for each metric
-        stats = {}
-        for metric, values in metrics.items():
-            if values:
-                stats[metric] = {
-                    'mean': float(np.mean(values)),
-                    'std': float(np.std(values)),
-                    'min': float(np.min(values)),
-                    'max': float(np.max(values)),
-                    'p_value': p_values.get(metric, None),
-                    'original': float(original_results.get(metric, 0.0))
-                }
-            else:
-                stats[metric] = {
-                    'mean': None,
-                    'std': None,
-                    'min': None,
-                    'max': None,
-                    'p_value': None,
-                    'original': float(original_results.get(metric, 0.0))
-                }
-        
-        # Save analysis
-        with open(os.path.join(analysis_dir, "monte_carlo_analysis.json"), "w") as f:
-            json.dump({
-                'metrics': stats,
-                'original_results': original_results,
-                'num_permutations': len(permutation_results)
-            }, f, indent=4)
-        
-        # Generate plots
-        self._generate_plots(stats, analysis_dir)
-        
-        # Return the analysis
-        return {
-            'metrics': stats,
-            'p_values': p_values
-        }
-    
-    def _generate_plots(self, stats, output_dir):
-        """
-        Generate plots for the Monte Carlo analysis.
-        
-        Args:
-            stats (dict): Statistics for each metric
-            output_dir (str): Directory to save plots
-        """
-        for metric, metric_stats in stats.items():
-            if metric_stats['mean'] is None:
-                continue
-                
-            plt.figure(figsize=(10, 6))
-            
-            # Get values to plot
-            values = []
-            for perm_id in range(self.num_permutations):
-                perm_results_path = os.path.join(self.output_dir, f"permutation_{perm_id+1}", "results.json")
-                if os.path.exists(perm_results_path):
-                    try:
-                        with open(perm_results_path, "r") as f:
-                            perm_results = json.load(f)
-                            if metric in perm_results:
-                                values.append(perm_results[metric])
-                    except:
-                        pass
-            
-            # Plot histogram of permutation values
-            if values:
-                plt.hist(values, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
-                
-                # Add original value as vertical line
-                original_value = metric_stats['original']
-                plt.axvline(x=original_value, color='red', linestyle='--', 
-                            label=f'Original: {original_value:.4f}')
-                
-                # Add p-value
-                p_value = metric_stats['p_value']
-                if p_value is not None:
-                    plt.text(0.05, 0.95, f'p-value: {p_value:.4f}', transform=plt.gca().transAxes,
-                            fontsize=12, verticalalignment='top', 
-                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-                
-                # Format plot
-                plt.title(f'Distribution of {metric.replace("_", " ").title()}')
-                plt.xlabel(metric.replace("_", " ").title())
-                plt.ylabel('Frequency')
-                plt.grid(True, alpha=0.3)
-                plt.legend()
-                
-                # Save plot
-                plt.savefig(os.path.join(output_dir, f"{metric}_distribution.png"), dpi=120, bbox_inches='tight')
-                plt.close()
-    
-    def run_test(self):
-        """
-        Run the Monte Carlo test.
-        
-        Returns:
-            dict: Test results and analysis
-        """
-        print("\nStarting Direct Monte Carlo Test...\n")
-        
-        # Create output directory
-        os.makedirs(self.output_dir, exist_ok=True)
-        
-        # Save test parameters
-        self.save_test_parameters()
-        
-        # Load and process stock data
+        # Load the stock data
         ticker_data = self._load_stock_data()
-        if not ticker_data:
-            print("Error: Failed to load stock data")
+        if ticker_data is None:
+            print(f"Failed to load stock data for permutation {permutation_index}")
             return None
         
-        # Run original backtest
-        print("\nRunning original backtest...")
-        original_results = self._run_backtest(ticker_data, is_permutation=False)
+        # Apply permutation to each ticker's data
+        permuted_ticker_data = {}
+        for ticker, df in ticker_data.items():
+            permuted_df = self._permute_data(df, permutation_seed=permutation_index)
+            permuted_ticker_data[ticker] = permuted_df
+            
+            # Save permuted data for reference
+            permuted_df.to_csv(os.path.join(perm_output_dir, f"permuted_data_{ticker}.csv"), index=False)
         
-        if not original_results:
-            print("Error: Original backtest failed")
+        # Run backtest on permuted data
+        permutation_results = self._run_backtest(
+            ticker_data=permuted_ticker_data,
+            output_dir=perm_output_dir,
+            label=f"permutation_{permutation_index}"
+        )
+        
+        # Rename trade log for clarity
+        trade_log = os.path.join(perm_output_dir, "trade_log.csv")
+        if os.path.exists(trade_log):
+            new_name = os.path.join(perm_output_dir, f"trade_log_permutation_{permutation_index}.csv")
+            shutil.copy(trade_log, new_name)
+        
+        return permutation_results
+
+    def run_test(self, n_jobs=None):
+        """
+        Run the Monte Carlo testing with the specified parameters.
+        
+        Args:
+            n_jobs (int, optional): Number of parallel jobs to run. If None, defaults to all available cores - 1.
+            
+        Returns:
+            dict: Results of the testing
+        """
+        # Determine the number of cores to use
+        available_cores = multiprocessing.cpu_count()
+        
+        if n_jobs is None:
+            # Default to using all cores except one
+            n_jobs = max(1, available_cores - 1)
+        else:
+            # Ensure n_jobs is valid
+            n_jobs = min(max(1, n_jobs), available_cores)
+        
+        print(f"Running Monte Carlo test with {self.num_permutations} permutations using {n_jobs} CPU cores")
+        
+        # Create output directory for original results
+        original_output_dir = os.path.join(self.output_dir, "original")
+        os.makedirs(original_output_dir, exist_ok=True)
+        
+        # Load the stock data
+        ticker_data = self._load_stock_data()
+        if ticker_data is None:
+            print("Failed to load stock data")
             return None
+        
+        # Save original data for reference
+        for ticker, df in ticker_data.items():
+            df.to_csv(os.path.join(original_output_dir, f"original_data_{ticker}.csv"), index=False)
+        
+        # Run the original backtest
+        print("Running original backtest...")
+        original_results = self._run_backtest(
+            ticker_data=ticker_data,
+            output_dir=original_output_dir,
+            label="original"
+        )
+        
+        if original_results is None:
+            print("Original backtest failed")
+            return None
+        
+        # Calculate original metrics
+        original_metrics = self._calculate_metrics(original_results)
+        
+        # Rename original trade log for clarity
+        original_trade_log = os.path.join(original_output_dir, "trade_log.csv")
+        if os.path.exists(original_trade_log):
+            new_name = os.path.join(original_output_dir, "trade_log_original.csv")
+            shutil.copy(original_trade_log, new_name)
+        
+        # Print original metrics
+        print("\nOriginal Backtest Metrics:")
+        for key, value in original_metrics.items():
+            print(f"{key}: {value:.4f}")
+        
+        # Define arguments for each permutation
+        permutation_args = [(i,) for i in range(self.num_permutations)]
         
         # Run permutation tests
-        print(f"\nRunning {self.num_permutations} permutation tests...")
         permutation_results = []
+        permutation_metrics = []
         
-        try:
-            # Use tqdm for progress tracking
-            for i in tqdm(range(self.num_permutations)):
-                permutation_id = i + 1
-                permutation_seed = random.randint(10000, 99999) + permutation_id
+        if n_jobs > 1:
+            # Run in parallel
+            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                futures = [executor.submit(self._run_single_permutation, *args) for args in permutation_args]
                 
-                # Permute the data
-                permuted_data = {}
-                for ticker, df in ticker_data.items():
-                    permuted_df = self._permute_data(df, permutation_type='returns', permutation_seed=permutation_seed)
-                    permuted_data[ticker] = permuted_df
-                
-                # Run backtest on permuted data
-                perm_results = self._run_backtest(permuted_data, is_permutation=True, permutation_id=permutation_id)
-                
-                if perm_results:
-                    permutation_results.append(perm_results)
-                else:
-                    print(f"Warning: Permutation {permutation_id} failed")
-                
-        except Exception as e:
-            print(f"Error during permutation tests: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        # Analyze results
-        if permutation_results:
-            print(f"\nAnalyzing results of {len(permutation_results)} permutation tests...")
-            analysis = self._analyze_results(original_results, permutation_results)
-            
-            # Print p-values
-            print("\nMonte Carlo Test Results:")
-            print("-" * 50)
-            
-            if 'p_values' in analysis:
-                for metric, p_value in analysis['p_values'].items():
-                    if p_value is not None:
-                        significance = "Significant" if p_value < 0.05 else "Not significant"
-                        print(f"{metric.replace('_', ' ').title()}: p-value = {p_value:.4f} ({significance})")
-            
-            print("\nTest completed successfully!")
-            return {
-                'original_results': original_results,
-                'permutation_results': permutation_results,
-                'analysis': analysis,
-                'output_dir': self.output_dir
-            }
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        metrics = self._calculate_metrics(result)
+                        permutation_results.append(result)
+                        permutation_metrics.append(metrics)
         else:
-            print("Error: No valid permutation results")
-            return None
+            # Run sequentially
+            for args in permutation_args:
+                result = self._run_single_permutation(*args)
+                if result is not None:
+                    metrics = self._calculate_metrics(result)
+                    permutation_results.append(result)
+                    permutation_metrics.append(metrics)
+        
+        # Print permutation results
+        print("\nPermutation Test Results:")
+        for i, metrics in enumerate(permutation_metrics):
+            print(f"Permutation {i}:")
+            for key, value in metrics.items():
+                print(f"  {key}: {value:.4f}")
+        
+        # Calculate significance
+        analysis_results = self._analyze_results(original_metrics, permutation_metrics)
+        
+        print("\nMetric Significance:")
+        for key, value in analysis_results.items():
+            print(f"{key}: p-value = {value:.4f}")
+        
+        # Return all results
+        return {
+            "original_metrics": original_metrics,
+            "permutation_metrics": permutation_metrics,
+            "analysis": analysis_results
+        }
 
     def save_result_metrics(self, metrics, prefix=''):
         """Save metrics to a JSON file"""
@@ -1394,6 +1189,472 @@ class DirectMonteCarloTest:
         
         return cerebro
 
+    def _run_backtest(self, ticker_data, output_dir, label="backtest"):
+        """
+        Run a backtest with the given ticker data.
+        
+        Args:
+            ticker_data (dict): Dictionary of ticker DataFrames
+            output_dir (str): Directory to save results
+            label (str): Label for this backtest
+            
+        Returns:
+            dict: Results of the backtest
+        """
+        try:
+            # Create Cerebro instance
+            cerebro = bt.Cerebro()
+            
+            # Set the initial cash
+            initial_cash = 100000.0
+            cerebro.broker.setcash(initial_cash)
+            
+            # Set the commission
+            cerebro.broker.setcommission(commission=0.001)
+            
+            # Store all dates for reference
+            all_dates = []
+            
+            # Add data feeds
+            for ticker, df in ticker_data.items():
+                # Create a copy to avoid modifying the original
+                df_copy = df.copy()
+                
+                # Ensure the Date column is a datetime
+                if 'Date' in df_copy.columns:
+                    df_copy['Date'] = pd.to_datetime(df_copy['Date'])
+                    # Store all unique dates
+                    all_dates.extend(df_copy['Date'].dt.strftime('%Y-%m-%d').tolist())
+                    # Set Date as index for backtrader
+                    df_copy = df_copy.set_index('Date')
+                else:
+                    # If Date is already the index
+                    all_dates.extend(df_copy.index.strftime('%Y-%m-%d').tolist())
+                
+                # Create a data feed
+                data = bt.feeds.PandasData(
+                    dataname=df_copy,
+                    datetime=None,  # Date is in the index
+                    open='Open',
+                    high='High',
+                    low='Low',
+                    close='Close',
+                    volume='Volume',
+                    openinterest=-1  # Not available
+                )
+                
+                # Add the data feed with a name
+                cerebro.adddata(data, name=ticker)
+            
+            # Get all unique dates in chronological order
+            all_dates = sorted(list(set(all_dates)))
+            
+            # Enable broker value tracking at each step
+            cerebro.addobserver(bt.observers.Broker)
+            cerebro.addobserver(bt.observers.Value)
+            
+            # Add observers and analyzers
+            cerebro.addobserver(bt.observers.Trades)
+            cerebro.addobserver(PortfolioValue)
+            
+            # Add standard analyzers for key metrics
+            cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', riskfreerate=0.0)
+            cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+            cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
+            cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade_analyzer')
+            cerebro.addanalyzer(TradeLog, _name='trade_log')
+            
+            # Add cash value recorder to Cerebro
+            cerebro.addwriter(bt.WriterFile, 
+                             out=os.path.join(output_dir, 'cerebro_log.csv'), 
+                             csv=True)
+            
+            # Add the appropriate strategy based on name
+            if self.strategy_name == "SimpleStock":
+                cerebro.addstrategy(
+                    SimpleStock,
+                    **self.parameters
+                )
+            elif self.strategy_name == "MACrossover":
+                cerebro.addstrategy(
+                    MACrossover,
+                    **self.parameters
+                )
+            elif self.strategy_name == "AuctionMarket":
+                cerebro.addstrategy(
+                    AuctionMarket,
+                    **self.parameters
+                )
+            elif self.strategy_name == "MultiPosition":
+                cerebro.addstrategy(
+                    MultiPosition,
+                    **self.parameters
+                )
+            else:
+                print(f"Error: Strategy {self.strategy_name} not supported")
+                return None
+            
+            # Run the backtest
+            print(f"Running backtest for {label}...")
+            results = cerebro.run()
+            
+            if not results:
+                print("Error: No results from backtest")
+                return None
+            
+            strategy = results[0]
+            
+            # Create output directory
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Extract analyzer results
+            trade_analysis = strategy.analyzers.trade_analyzer.get_analysis()
+            trade_log = strategy.analyzers.trade_log.log
+            
+            # Save trade log to CSV
+            trade_log_path = os.path.join(output_dir, 'trade_log.csv')
+            with open(trade_log_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Date', 'Type', 'Price', 'Size', 'Value', 'PnL', 'Commission'])
+                for trade in trade_log:
+                    writer.writerow([
+                        trade.get('date', ''),
+                        trade.get('type', ''),
+                        trade.get('price', 0.0),
+                        trade.get('size', 0),
+                        trade.get('value', 0.0),
+                        trade.get('pnl', 0.0),
+                        trade.get('commission', 0.0)
+                    ])
+            
+            # Extract portfolio values from observer data
+            # Use bt.observers.Value which records portfolio value at each step
+            portfolio_values = []
+            
+            # Method 1: Extract from strategy's daily_values if available (most accurate)
+            if hasattr(strategy, 'daily_values') and strategy.daily_values:
+                # Convert to dictionary first (date -> value)
+                date_to_value = {}
+                for entry in strategy.daily_values:
+                    date_str = entry['date'].strftime('%Y-%m-%d')
+                    date_to_value[date_str] = entry['value']
+                
+                # Create values for all dates
+                for date in all_dates:
+                    if date in date_to_value:
+                        portfolio_values.append(date_to_value[date])
+                    else:
+                        # For dates without values, use the last known value
+                        last_date = max([d for d in date_to_value.keys() if d <= date], default=None)
+                        if last_date:
+                            portfolio_values.append(date_to_value[last_date])
+                        else:
+                            portfolio_values.append(initial_cash)
+            
+            # Method 2: Extract from the observer values
+            elif hasattr(strategy, 'observers') and hasattr(strategy.observers, 'value'):
+                value_line = strategy.observers.value.lines.value
+                actual_values = []
+                actual_dates = []
+                
+                # Extract all values from the observer
+                for i in range(len(value_line)):
+                    value = float(value_line[i])
+                    # Get corresponding date
+                    if i < len(strategy.datas[0].datetime):
+                        dt = bt.num2date(strategy.datas[0].datetime[i])
+                        date_str = dt.strftime('%Y-%m-%d')
+                        actual_dates.append(date_str)
+                        actual_values.append(value)
+                
+                # Create a dictionary for quick lookup
+                date_to_value = dict(zip(actual_dates, actual_values))
+                
+                # Fill in values for all dates
+                for date in all_dates:
+                    if date in date_to_value:
+                        portfolio_values.append(date_to_value[date])
+                    else:
+                        # For dates without values, use the last known value
+                        last_date = max([d for d in date_to_value.keys() if d <= date], default=None)
+                        if last_date:
+                            portfolio_values.append(date_to_value[last_date])
+                        else:
+                            portfolio_values.append(initial_cash)
+            
+            # Method 3: Use the strategy's equity_curve if available
+            elif hasattr(strategy, 'equity_curve') and strategy.equity_curve:
+                # Convert to dictionary first (date -> value)
+                date_to_value = {}
+                for entry in strategy.equity_curve:
+                    date_str = entry.get('Date', '')
+                    value = entry.get('Value', initial_cash)
+                    if date_str and value:
+                        date_to_value[date_str] = value
+                
+                # Create values for all dates
+                for date in all_dates:
+                    if date in date_to_value:
+                        portfolio_values.append(date_to_value[date])
+                    else:
+                        # For dates without values, use the last known value
+                        last_date = max([d for d in date_to_value.keys() if d <= date], default=None)
+                        if last_date:
+                            portfolio_values.append(date_to_value[last_date])
+                        else:
+                            portfolio_values.append(initial_cash)
+            
+            # Method 4: If no other method is available, use fallback method
+            # This recreates the portfolio value using position data and prices
+            else:
+                print("Warning: No portfolio value observer data found. Reconstructing values.")
+                
+                # Create a list of initial cash values
+                portfolio_values = [initial_cash] * len(all_dates)
+                
+                # Update values based on trades
+                date_to_index = {date: i for i, date in enumerate(all_dates)}
+                cash = initial_cash
+                positions = {}  # ticker -> quantity
+                
+                for trade in sorted(trade_log, key=lambda x: x.get('date', '')):
+                    date_str = trade.get('date', '')
+                    if date_str and date_str in date_to_index:
+                        idx = date_to_index[date_str]
+                        
+                        # Update cash based on trade
+                        ticker = trade.get('ticker', 'unknown')
+                        price = trade.get('price', 0.0)
+                        size = trade.get('size', 0)
+                        commission = trade.get('commission', 0.0)
+                        
+                        # Update position for this ticker
+                        if trade.get('type', '') == 'BUY':
+                            positions[ticker] = positions.get(ticker, 0) + size
+                            cash -= price * size + commission
+                        else:  # SELL
+                            positions[ticker] = positions.get(ticker, 0) - size
+                            cash += price * size - commission
+                        
+                        # Update all portfolio values from this point forward
+                        for i in range(idx, len(all_dates)):
+                            # Calculate positions value
+                            positions_value = 0
+                            for pos_ticker, pos_size in positions.items():
+                                # Need to get price for this ticker on this date
+                                pos_date = all_dates[i]
+                                ticker_df = ticker_data.get(pos_ticker)
+                                if ticker_df is not None:
+                                    if 'Date' in ticker_df.columns:
+                                        price_row = ticker_df[ticker_df['Date'].dt.strftime('%Y-%m-%d') == pos_date]
+                                    else:
+                                        price_row = ticker_df[ticker_df.index.strftime('%Y-%m-%d') == pos_date]
+                                    
+                                    if not price_row.empty:
+                                        pos_price = price_row['Close'].iloc[0]
+                                        positions_value += pos_size * pos_price
+                            
+                            # Update portfolio value
+                            portfolio_values[i] = cash + positions_value
+            
+            # Get final portfolio value (cash + positions)
+            final_value = strategy.broker.getvalue()
+            
+            # Print debug info
+            print(f"Portfolio values: {len(portfolio_values)} entries, range: {min(portfolio_values):.2f} to {max(portfolio_values):.2f}")
+            
+            # Create DataFrame with dates and portfolio values
+            portfolio_df = pd.DataFrame({
+                'Date': all_dates,
+                'PortfolioValue': portfolio_values
+            })
+            
+            # Save to CSV
+            portfolio_df.to_csv(os.path.join(output_dir, 'portfolio_values.csv'), index=False)
+            
+            # Calculate metrics
+            total_return = (final_value - initial_cash) / initial_cash
+            
+            # Get metrics from analyzers if available
+            sharpe_ratio = getattr(strategy.analyzers.sharpe, 'get_analysis', lambda: {})().get('sharperatio', 0.0)
+            max_drawdown = getattr(strategy.analyzers.drawdown, 'get_analysis', lambda: {})().get('max', {}).get('drawdown', 0.0)
+            
+            # Create a plot of the portfolio value
+            try:
+                plt.figure(figsize=(12, 6))
+                dates_array = np.array(portfolio_df['Date'])
+                values_array = np.array(portfolio_df['PortfolioValue'])
+                plt.plot(dates_array, values_array)
+                plt.title(f'Portfolio Value - {label}')
+                plt.xlabel('Date')
+                plt.ylabel('Value ($)')
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                plt.savefig(os.path.join(output_dir, 'portfolio_value.png'))
+                plt.close()
+            except Exception as e:
+                print(f"Warning: Failed to create portfolio value plot: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            # Return the results
+            return {
+                'initial_value': initial_cash,
+                'final_value': final_value,
+                'total_return': total_return,
+                'sharpe_ratio': sharpe_ratio,
+                'max_drawdown': max_drawdown,
+                'trade_analysis': trade_analysis,
+                'portfolio_values': portfolio_df
+            }
+        
+        except Exception as e:
+            print(f"Error running backtest: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _calculate_metrics(self, backtest_results):
+        """
+        Calculate performance metrics from backtest results.
+        
+        Args:
+            backtest_results (dict): Results from the backtest
+            
+        Returns:
+            dict: Performance metrics
+        """
+        if backtest_results is None:
+            return {
+                'sharpe_ratio': 0.0,
+                'total_return': 0.0,
+                'max_drawdown': 0.0,
+                'win_rate': 0.0,
+                'profit_factor': 0.0
+            }
+        
+        try:
+            # Extract portfolio values
+            portfolio_values = backtest_results.get('portfolio_values', None)
+            
+            if portfolio_values is None or len(portfolio_values) == 0:
+                return {
+                    'sharpe_ratio': 0.0,
+                    'total_return': 0.0,
+                    'max_drawdown': 0.0,
+                    'win_rate': 0.0,
+                    'profit_factor': 0.0
+                }
+            
+            # Calculate daily returns
+            portfolio_values['Return'] = portfolio_values['PortfolioValue'].pct_change(fill_method=None)
+            
+            # Calculate metrics
+            initial_value = 100000.0  # Initial portfolio value
+            final_value = backtest_results.get('final_value', initial_value)
+            
+            # Total return
+            if pd.isna(final_value) or final_value <= 0:
+                total_return = 0.0
+            else:
+                total_return = (final_value - initial_value) / initial_value
+            
+            # Sharpe ratio (annualized)
+            daily_returns = portfolio_values['Return'].dropna()
+            if len(daily_returns) > 0 and daily_returns.std() > 0:
+                sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+            else:
+                sharpe_ratio = 0.0
+            
+            # Max drawdown
+            portfolio_values['Cummax'] = portfolio_values['PortfolioValue'].cummax()
+            portfolio_values['Drawdown'] = (portfolio_values['PortfolioValue'] - portfolio_values['Cummax']) / portfolio_values['Cummax']
+            max_drawdown = abs(portfolio_values['Drawdown'].min())
+            
+            # Win rate and profit factor
+            trade_analysis = backtest_results.get('trade_analysis', {})
+            
+            # Total trades
+            total_trades = trade_analysis.get('total', {}).get('total', 0)
+            
+            # Winning trades
+            won_trades = trade_analysis.get('won', {}).get('total', 0)
+            
+            # Win rate
+            win_rate = won_trades / total_trades if total_trades > 0 else 0.0
+            
+            # Gross profit and loss
+            gross_won = trade_analysis.get('won', {}).get('pnl', {}).get('total', 0.0)
+            gross_lost = abs(trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0.0))
+            
+            # Profit factor
+            profit_factor = gross_won / gross_lost if gross_lost > 0 else 0.0
+            
+            return {
+                'sharpe_ratio': sharpe_ratio,
+                'total_return': total_return,
+                'max_drawdown': max_drawdown,
+                'win_rate': win_rate,
+                'profit_factor': profit_factor
+            }
+            
+        except Exception as e:
+            print(f"Error calculating metrics: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'sharpe_ratio': 0.0,
+                'total_return': 0.0,
+                'max_drawdown': 0.0,
+                'win_rate': 0.0,
+                'profit_factor': 0.0
+            }
+
+    def _analyze_results(self, original_metrics, permutation_metrics):
+        """
+        Analyze the statistical significance of the original backtest vs permutation tests.
+        
+        Args:
+            original_metrics (dict): Original backtest metrics
+            permutation_metrics (list): List of permutation test metrics
+            
+        Returns:
+            dict: P-values for each metric
+        """
+        if not permutation_metrics:
+            return {metric: 1.0 for metric in original_metrics.keys()}
+        
+        results = {}
+        
+        for metric in original_metrics.keys():
+            original_value = original_metrics[metric]
+            permutation_values = [p[metric] for p in permutation_metrics if metric in p]
+            
+            if not permutation_values:
+                results[metric] = 1.0
+                continue
+            
+            # Calculate p-value (proportion of permutation results >= original)
+            if original_value > 0:
+                # For positive metrics (higher is better), count permutations >= original
+                p_value = sum(1 for p in permutation_values if p >= original_value) / len(permutation_values)
+            else:
+                # For negative metrics (lower is better), count permutations <= original
+                p_value = sum(1 for p in permutation_values if p <= original_value) / len(permutation_values)
+            
+            results[metric] = p_value
+        
+        return results
+
+    def generate_plots(self, original_metrics, permutation_metrics):
+        """Generate plots for the Monte Carlo test results"""
+        # Implementation of generate_plots method
+        pass
+
+    def extract_metrics(self, results):
+        """Extract performance metrics from backtrader results"""
+        # Implementation of extract_metrics method
+        pass
 
 if __name__ == "__main__":
     import argparse
@@ -1406,6 +1667,7 @@ if __name__ == "__main__":
     parser.add_argument("--in_sample_end", type=str, default="2019-12-31", help="In-sample end date")
     parser.add_argument("--out_sample_start", type=str, default="2020-01-01", help="Out-of-sample start date")
     parser.add_argument("--out_sample_end", type=str, default="2021-12-31", help="Out-of-sample end date")
+    parser.add_argument("--num_cores", type=int, default=None, help="Number of CPU cores to use")
     
     args = parser.parse_args()
     
@@ -1423,11 +1685,10 @@ if __name__ == "__main__":
         num_permutations=args.num_permutations
     )
     
-    results = test.run_test()
+    results = test.run_test(n_jobs=args.num_cores)
     
     if results:
-        print(f"\nDirect Monte Carlo Test completed successfully.")
-        print(f"Results and analysis saved to: {results['output_dir']}")
+        print("\nDirect Monte Carlo Test completed successfully.")
     else:
         print("\nDirect Monte Carlo Test failed.")
 

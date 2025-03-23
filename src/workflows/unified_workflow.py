@@ -116,7 +116,7 @@ def run_simple_workflow(strategy_name, tickers=None, start_date=None, end_date=N
 @log_execution_time('workflow')
 def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
                            num_permutations=10, parameters=None, best_params=None, 
-                           output_dir=None, verbose=False):
+                           output_dir=None, num_workers=None, verbose=False):
     """
     Run monte carlo tests safely by handling errors gracefully.
     Uses the DirectMonteCarloTest implementation.
@@ -130,6 +130,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         parameters (dict): Parameter ranges for the strategy optimization
         best_params (dict): Best parameters to use for the strategy
         output_dir (str): Directory to save results
+        num_workers (int): Number of parallel workers to use for Monte Carlo simulations
         verbose (bool): Whether to print verbose output
     
     Returns:
@@ -177,6 +178,13 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
     # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
+    # Determine the number of workers to use
+    if num_workers is None:
+        # Use all cores except one by default
+        num_workers = max(1, multiprocessing.cpu_count() - 1)
+    if verbose:
+        print(f"Using {num_workers} CPU cores for Monte Carlo simulations")
+    
     try:
         if verbose:
             print("Using Direct Monte Carlo implementation")
@@ -195,8 +203,8 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
             num_permutations=num_permutations
         )
         
-        # Run the test
-        results = monte_carlo_test.run_test()
+        # Run the test with specified number of workers
+        results = monte_carlo_test.run_test(n_jobs=num_workers)
         
         if results:
             # Create a summary of trade logs
@@ -399,7 +407,7 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
     monte_carlo_results = None
     monte_carlo_success = False
     if num_permutations > 0:
-        logger.info('workflow', f"Starting Monte Carlo testing with {num_permutations} permutations...")
+        logger.info('workflow', f"Starting Monte Carlo testing with {num_permutations} permutations using {num_workers} workers...")
         
         # Use the safe Monte Carlo wrapper function
         monte_carlo_result = run_monte_carlo_safely(
@@ -411,6 +419,7 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
             parameters=None,
             best_params=best_params,
             output_dir=monte_carlo_dir,
+            num_workers=num_workers,
             verbose=verbose
         )
         
@@ -471,37 +480,35 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
     return overall_results
 
 def main():
-    """Main function to parse command line arguments and run the appropriate workflow."""
-    parser = argparse.ArgumentParser(description='Unified workflow runner for trading strategies')
+    """Main entry point for the unified workflow."""
+    parser = argparse.ArgumentParser(description='Run a backtesting workflow')
     
-    # Common arguments
-    parser.add_argument('--workflow-type', '-w', default='simple', 
-                        choices=['simple', 'complete', 'walk-forward', 'monte-carlo'],
+    # Required arguments
+    parser.add_argument('--workflow-type', type=str, required=True, 
+                        choices=['simple', 'monte-carlo', 'walk-forward', 'complete'],
                         help='Type of workflow to run')
-    parser.add_argument('--strategy', '-s', required=True, 
-                        help='Name of the strategy to test')
-    parser.add_argument('--tickers', '-t', nargs='+', default=['AAPL'], 
-                        help='List of ticker symbols')
-    parser.add_argument('--start-date', default='2015-01-01', 
-                        help='Start date for backtesting (YYYY-MM-DD)')
-    parser.add_argument('--end-date', default='2021-12-31', 
-                        help='End date for backtesting (YYYY-MM-DD)')
-    parser.add_argument('--output-dir', default=None, 
-                        help='Directory to save output files')
-    parser.add_argument('--param-file', default=None, 
-                        help='Path to parameter file for optimization')
-    parser.add_argument('--verbose', action='store_true', 
+    parser.add_argument('--strategy', type=str, required=True,
+                        help='Strategy to use for the backtest')
+    
+    # Optional arguments
+    parser.add_argument('--tickers', type=str, nargs='+', 
+                        help='Tickers to use for the backtest')
+    parser.add_argument('--start-date', type=str, default="2015-01-01",
+                        help='Start date for the backtest')
+    parser.add_argument('--end-date', type=str, default="2021-12-31",
+                        help='End date for the backtest')
+    parser.add_argument('--param-file', type=str,
+                        help='Path to a parameter file to use for the backtest')
+    parser.add_argument('--num-permutations', type=int, default=10,
+                        help='Number of permutations to use for Monte Carlo testing')
+    parser.add_argument('--output-dir', type=str,
+                        help='Directory to save results')
+    parser.add_argument('--in-sample-ratio', type=float, default=0.7,
+                        help='Ratio of data to use for in-sample testing')
+    parser.add_argument('--verbose', action='store_true',
                         help='Print verbose output')
     parser.add_argument('--num-cores', type=int, default=None,
                         help='Number of CPU cores to use for parallel processing')
-    
-    # Workflow-specific arguments
-    parser.add_argument('--in-sample-ratio', type=float, default=0.7, 
-                        help='Ratio of data to use for in-sample period')
-    parser.add_argument('--num-permutations', type=int, default=10, 
-                        help='Number of permutations for Monte Carlo testing')
-    parser.add_argument('--detailed-analysis', action='store_true', 
-                        help='Run detailed performance analysis')
     
     args = parser.parse_args()
     
@@ -522,7 +529,7 @@ def main():
             end_date=args.end_date,
             param_file=args.param_file,
             output_dir=args.output_dir,
-            detailed_analysis=args.detailed_analysis,
+            detailed_analysis=False,
             verbose=args.verbose
         )
     elif args.workflow_type == 'monte-carlo':
@@ -553,6 +560,7 @@ def main():
             num_permutations=num_permutations,
             parameters=parameters,
             output_dir=args.output_dir,
+            num_workers=args.num_cores,
             verbose=args.verbose
         )
         
@@ -605,7 +613,7 @@ def main():
                 start_date=args.start_date,
                 end_date=args.end_date,
                 param_file=args.param_file,
-            num_workers=args.num_cores,
+                num_workers=args.num_cores,
                 output_dir=args.output_dir,
                 in_sample_ratio=args.in_sample_ratio,
                 num_permutations=args.num_permutations,
