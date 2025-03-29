@@ -185,7 +185,7 @@ class SimpleStock(bt.Strategy):
     def next(self):
         # Log portfolio value at each bar
         self.log_values()
-        
+            
         # Trading logic
         position = self.getposition().size
         
@@ -600,7 +600,7 @@ class DirectMonteCarloTest:
     
     def __init__(self, strategy_name, tickers, in_sample_start='2015-01-01', in_sample_end='2019-12-31', 
                  out_sample_start='2020-01-01', out_sample_end='2021-12-31', parameters=None, 
-                 output_dir=None, num_permutations=10):
+                 output_dir=None, num_permutations=10, enable_in_sample_mc=False):
         """
         Initialize the Monte Carlo test.
         
@@ -614,6 +614,7 @@ class DirectMonteCarloTest:
             parameters (dict): Strategy parameters
             output_dir (str): Directory to save test results
             num_permutations (int): Number of permutations to run
+            enable_in_sample_mc (bool): Whether to run Monte Carlo permutations on in-sample data
         """
         self.strategy_name = strategy_name
         self.tickers = tickers if isinstance(tickers, list) else [tickers]
@@ -650,6 +651,7 @@ class DirectMonteCarloTest:
             self.output_dir = os.path.abspath(output_dir)
         
         self.num_permutations = num_permutations
+        self.enable_in_sample_mc = enable_in_sample_mc
         
         # Create data directory for storing processed data
         self.data_dir = os.path.join(self.output_dir, "data")
@@ -661,6 +663,7 @@ class DirectMonteCarloTest:
         print(f"In-sample period: {in_sample_start} to {in_sample_end}")
         print(f"Out-of-sample period: {out_sample_start} to {out_sample_end}")
         print(f"Number of permutations: {num_permutations}")
+        print(f"In-sample Monte Carlo: {'Enabled' if enable_in_sample_mc else 'Disabled'}")
         print(f"Output directory: {self.output_dir}")
         print(f"Using parameters: {self.parameters}")
     
@@ -702,8 +705,8 @@ class DirectMonteCarloTest:
                 print("Error: stock_data.csv file not found in any of the following locations:")
                 for path in potential_paths:
                     print(f" - {path}")
-                return None
-            
+            return None
+        
             # Load the data
             print(f"Loading stock data from {data_path}")
             data = pd.read_csv(data_path)
@@ -774,7 +777,7 @@ class DirectMonteCarloTest:
             traceback.print_exc()
             return None
     
-    def _permute_data(self, original_df, permutation_type='returns', permutation_seed=None):
+    def _permute_data(self, original_df, permutation_type='returns', permutation_seed=None, permute_period='out_sample'):
         """
         Create a permuted version of the price data.
         
@@ -782,6 +785,7 @@ class DirectMonteCarloTest:
             original_df (pd.DataFrame): Original price data with OHLCV columns
             permutation_type (str): Type of permutation - 'returns' or 'blocks'
             permutation_seed (int): Random seed for reproducibility
+            permute_period (str): Period to permute - 'in_sample', 'out_sample', or 'both'
             
         Returns:
             pd.DataFrame: Permuted data
@@ -798,22 +802,30 @@ class DirectMonteCarloTest:
         is_mask = (df['Date'] >= self.in_sample_start) & (df['Date'] <= self.in_sample_end)
         oos_mask = (df['Date'] >= self.out_sample_start) & (df['Date'] <= self.out_sample_end)
         
-        # Get the out-of-sample data to permute
-        oos_data = df[oos_mask].copy()
+        # Determine which period(s) to permute
+        periods_to_permute = []
+        if permute_period == 'in_sample' or permute_period == 'both':
+            periods_to_permute.append(('in_sample', is_mask))
+        if permute_period == 'out_sample' or permute_period == 'both':
+            periods_to_permute.append(('out_sample', oos_mask))
         
-        if len(oos_data) == 0:
-            print("Warning: No out-of-sample data to permute")
-            return df
+        for period_name, period_mask in periods_to_permute:
+            # Get the data for this period to permute
+            period_data = df[period_mask].copy()
+            
+            if len(period_data) == 0:
+                print(f"Warning: No {period_name} data to permute")
+                continue
         
         # Permute returns for price columns
         price_cols = ['Open', 'High', 'Low', 'Close', 'Adj Close']
-        price_cols = [col for col in price_cols if col in oos_data.columns]
+            price_cols = [col for col in price_cols if col in period_data.columns]
         
         if permutation_type == 'returns':
             # Permute by shuffling returns
             for col in price_cols:
                 # Calculate returns
-                prices = oos_data[col].values
+                    prices = period_data[col].values
                 returns = np.diff(prices) / prices[:-1]
                 
                 # Shuffle returns
@@ -827,12 +839,12 @@ class DirectMonteCarloTest:
                     new_prices[i] = new_prices[i-1] * (1 + shuffled_returns[i-1])
                 
                 # Replace prices with permuted version
-                oos_data[col] = new_prices
+                    period_data[col] = new_prices
         
         elif permutation_type == 'blocks':
             # Permute by shuffling blocks of data
             for col in price_cols:
-                prices = oos_data[col].values
+                    prices = period_data[col].values
                 
                 # Create blocks of ~5 days
                 block_size = 5
@@ -852,32 +864,33 @@ class DirectMonteCarloTest:
                 new_prices = new_prices[:len(prices)]
                 
                 # Replace prices
-                oos_data[col] = new_prices
+                    period_data[col] = new_prices
         
         # Also permute volume if available
-        if 'Volume' in oos_data.columns:
-            volumes = oos_data['Volume'].values
+            if 'Volume' in period_data.columns:
+                volumes = period_data['Volume'].values
             permuted_volumes = np.random.permutation(volumes)
-            oos_data['Volume'] = permuted_volumes
+                period_data['Volume'] = permuted_volumes
         
-        # Replace out-of-sample data with permuted data
-        df.loc[oos_mask] = oos_data
+            # Replace period data with permuted data
+            df.loc[period_mask] = period_data
         
         return df
     
-    def _run_single_permutation(self, permutation_index):
+    def _run_single_permutation(self, permutation_index, permute_period='out_sample'):
         """Run a single permutation test.
         
         Args:
             permutation_index (int): The index of this permutation
+            permute_period (str): Period to permute - 'in_sample', 'out_sample', or 'both'
             
         Returns:
             dict: The results of this permutation
         """
-        print(f"Running permutation {permutation_index}...")
+        print(f"Running permutation {permutation_index} on {permute_period} data...")
         
         # Create output directory for this permutation
-        perm_output_dir = os.path.join(self.output_dir, f"permutation_{permutation_index}")
+        perm_output_dir = os.path.join(self.output_dir, f"permutation_{permute_period}_{permutation_index}")
         os.makedirs(perm_output_dir, exist_ok=True)
         
         # Load the stock data
@@ -889,7 +902,7 @@ class DirectMonteCarloTest:
         # Apply permutation to each ticker's data
         permuted_ticker_data = {}
         for ticker, df in ticker_data.items():
-            permuted_df = self._permute_data(df, permutation_seed=permutation_index)
+            permuted_df = self._permute_data(df, permutation_seed=permutation_index, permute_period=permute_period)
             permuted_ticker_data[ticker] = permuted_df
             
             # Save permuted data for reference
@@ -899,13 +912,13 @@ class DirectMonteCarloTest:
         permutation_results = self._run_backtest(
             ticker_data=permuted_ticker_data,
             output_dir=perm_output_dir,
-            label=f"permutation_{permutation_index}"
+            label=f"permutation_{permute_period}_{permutation_index}"
         )
         
         # Rename trade log for clarity
         trade_log = os.path.join(perm_output_dir, "trade_log.csv")
         if os.path.exists(trade_log):
-            new_name = os.path.join(perm_output_dir, f"trade_log_permutation_{permutation_index}.csv")
+            new_name = os.path.join(perm_output_dir, f"trade_log_permutation_{permute_period}_{permutation_index}.csv")
             shutil.copy(trade_log, new_name)
         
         return permutation_results
@@ -926,7 +939,7 @@ class DirectMonteCarloTest:
         if n_jobs is None:
             # Default to using all cores except one
             n_jobs = max(1, available_cores - 1)
-        else:
+                else:
             # Ensure n_jobs is valid
             n_jobs = min(max(1, n_jobs), available_cores)
         
@@ -972,222 +985,217 @@ class DirectMonteCarloTest:
         for key, value in original_metrics.items():
             print(f"{key}: {value:.4f}")
         
-        # Define arguments for each permutation
-        permutation_args = [(i,) for i in range(self.num_permutations)]
+        # Define permutation periods based on configuration
+        permutation_periods = []
         
-        # Run permutation tests
-        permutation_results = []
-        permutation_metrics = []
+        # Always include out-of-sample
+        permutation_periods.append('out_sample')
         
-        if n_jobs > 1:
-            # Run in parallel
-            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-                futures = [executor.submit(self._run_single_permutation, *args) for args in permutation_args]
-                
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    result = future.result()
+        # Conditionally include in-sample
+        if self.enable_in_sample_mc:
+            permutation_periods.append('in_sample')
+        
+        # Results storage
+        all_permutation_results = {period: [] for period in permutation_periods}
+        all_permutation_metrics = {period: [] for period in permutation_periods}
+        
+        # Run permutations for each period in parallel
+        for period in permutation_periods:
+            print(f"\nRunning {period} permutations...")
+            
+            # Define arguments for each permutation
+            permutation_args = [(i, period) for i in range(self.num_permutations)]
+            
+            if n_jobs > 1:
+                # Run in parallel
+                with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                    futures = [executor.submit(self._run_single_permutation, *args) for args in permutation_args]
+                    
+                    # Collect results as they complete
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result is not None:
+                            metrics = self._calculate_metrics(result)
+                            all_permutation_results[period].append(result)
+                            all_permutation_metrics[period].append(metrics)
+        else:
+                # Run sequentially
+                for args in permutation_args:
+                    result = self._run_single_permutation(*args)
                     if result is not None:
                         metrics = self._calculate_metrics(result)
-                        permutation_results.append(result)
-                        permutation_metrics.append(metrics)
-        else:
-            # Run sequentially
-            for args in permutation_args:
-                result = self._run_single_permutation(*args)
-                if result is not None:
-                    metrics = self._calculate_metrics(result)
-                    permutation_results.append(result)
-                    permutation_metrics.append(metrics)
+                        all_permutation_results[period].append(result)
+                        all_permutation_metrics[period].append(metrics)
         
-        # Print permutation results
-        print("\nPermutation Test Results:")
-        for i, metrics in enumerate(permutation_metrics):
-            print(f"Permutation {i}:")
-            for key, value in metrics.items():
-                print(f"  {key}: {value:.4f}")
+        # Print permutation results for each period
+        for period in permutation_periods:
+            print(f"\n{period.replace('_', ' ').title()} Permutation Results:")
+            for i, metrics in enumerate(all_permutation_metrics[period]):
+                print(f"Permutation {i}:")
+                for key, value in metrics.items():
+                    print(f"  {key}: {value:.4f}")
         
-        # Calculate significance
-        analysis_results = self._analyze_results(original_metrics, permutation_metrics)
+        # Calculate significance for each period
+        all_analysis_results = {}
+        for period in permutation_periods:
+            analysis_results = self._analyze_results(original_metrics, all_permutation_metrics[period])
+            all_analysis_results[period] = analysis_results
+            
+            print(f"\n{period.replace('_', ' ').title()} Metric Significance:")
+            for key, value in analysis_results.items():
+                print(f"{key}: p-value = {value:.4f}")
         
-        print("\nMetric Significance:")
-        for key, value in analysis_results.items():
-            print(f"{key}: p-value = {value:.4f}")
+        # If both in-sample and out-of-sample were run, compare them
+        if len(permutation_periods) > 1:
+            self._compare_periods(all_permutation_metrics, all_analysis_results)
         
         # Return all results
         return {
             "original_metrics": original_metrics,
-            "permutation_metrics": permutation_metrics,
-            "analysis": analysis_results
+            "permutation_metrics": all_permutation_metrics,
+            "analysis": all_analysis_results
         }
 
-    def save_result_metrics(self, metrics, prefix=''):
-        """Save metrics to a JSON file"""
-        filename = f"{prefix}metrics.json" if prefix else "metrics.json"
-        filepath = os.path.join(self.output_dir, filename)
-        save_to_json(metrics, filepath)
-        print(f"Metrics saved to {filepath}")
+    def _compare_periods(self, all_permutation_metrics, all_analysis_results):
+        """
+        Compare in-sample and out-of-sample permutation results.
         
-    def save_analysis_results(self, analysis_results):
-        """Save analysis results to a JSON file"""
-        filepath = os.path.join(self.output_dir, "analysis", "monte_carlo_analysis.json")
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        save_to_json(analysis_results, filepath)
-        print(f"Analysis results saved to {filepath}")
+        Args:
+            all_permutation_metrics (dict): Dictionary of permutation metrics for each period
+            all_analysis_results (dict): Dictionary of analysis results for each period
+        """
+        if 'in_sample' not in all_permutation_metrics or 'out_sample' not in all_permutation_metrics:
+            return
         
-    def save_test_parameters(self):
-        """Save test parameters to a JSON file"""
-        parameters = {
-            'strategy_name': self.strategy_name,
-            'tickers': self.tickers,
-            'in_sample_start': self.in_sample_start,
-            'in_sample_end': self.in_sample_end,
-            'out_sample_start': self.out_sample_start,
-            'out_sample_end': self.out_sample_end,
-            'parameters': self.parameters,
-            'num_permutations': self.num_permutations
-        }
-        filepath = os.path.join(self.output_dir, "test_parameters.json")
-        save_to_json(parameters, filepath)
-        print(f"Test parameters saved to {filepath}")
-
-    def run_backtest_with_data(self, data, output_subdir, label="backtest"):
-        """Run a backtest with the given data"""
-        try:
-            # Create output subdirectory
-            output_dir = os.path.join(self.output_dir, output_subdir)
-            os.makedirs(output_dir, exist_ok=True)
+        print("\nComparison of In-Sample vs Out-of-Sample Permutation Results:")
+        print("-------------------------------------------------------------")
+        
+        # Compare metrics distributions
+        for metric in ['sharpe_ratio', 'total_return', 'win_rate', 'profit_factor', 'max_drawdown']:
+            in_sample_values = [p.get(metric, 0) for p in all_permutation_metrics['in_sample'] if p.get(metric) is not None]
+            out_sample_values = [p.get(metric, 0) for p in all_permutation_metrics['out_sample'] if p.get(metric) is not None]
             
-            # Get data for the in-sample period
-            in_sample_data = data[(data.index >= self.in_sample_start) & 
-                                 (data.index <= self.in_sample_end)]
+            if not in_sample_values or not out_sample_values:
+                continue
             
-            if len(in_sample_data) == 0:
-                print(f"Error: No data for in-sample period {self.in_sample_start} to {self.in_sample_end}")
-                return None
+            print(f"\n{metric.replace('_', ' ').title()}:")
+            print(f"  In-Sample Mean: {np.mean(in_sample_values):.4f}, Std: {np.std(in_sample_values):.4f}")
+            print(f"  Out-Sample Mean: {np.mean(out_sample_values):.4f}, Std: {np.std(out_sample_values):.4f}")
             
-            # Create cerebro instance
-            cerebro = self.initialize_cerebro(in_sample_data, output_dir)
-            
-            # Run the backtest
-            print(f"Running {label}...")
-            results = cerebro.run()
-            
-            if not results:
-                print(f"Error: No results from {label}")
-                return None
-            
-            # Extract performance metrics
-            metrics = self.extract_metrics(results[0])
-            
-            # Save metrics
-            self.save_result_metrics(metrics, f"{output_subdir}_")
-            
-            # Print results
-            print(f"Backtest results for {label}:")
-            for metric, value in metrics.items():
-                if metric in ['sharpe_ratio', 'total_return', 'max_drawdown', 'win_rate', 'profit_factor']:
-                    print(f"  {metric.replace('_', ' ').title()}: {value:.4f}")
-            print(f"  Final Value: ${results[0].broker.getvalue():.2f}")
-            
-            return metrics
-        except Exception as e:
-            print(f"Error running {label}: {e}")
-            traceback.print_exc()
-            return None
-
-    def analyze_results(self, original_metrics, permutation_metrics):
-        """Analyze the results of the monte carlo test"""
-        # Calculate mean and standard deviation for each metric
-        analysis = {
-            'metrics': {}
+            # Calculate statistical difference (t-test)
+            if len(in_sample_values) > 1 and len(out_sample_values) > 1:
+                from scipy import stats
+                t_stat, p_value = stats.ttest_ind(in_sample_values, out_sample_values)
+                print(f"  Difference p-value: {p_value:.4f} (significant if < 0.05)")
+        
+        # Compare p-values
+        print("\nP-value Comparison:")
+        for metric in ['sharpe_ratio', 'total_return', 'win_rate', 'profit_factor', 'max_drawdown']:
+            if metric in all_analysis_results['in_sample'] and metric in all_analysis_results['out_sample']:
+                in_sample_p = all_analysis_results['in_sample'][metric]
+                out_sample_p = all_analysis_results['out_sample'][metric]
+                
+                print(f"  {metric.replace('_', ' ').title()}: In-Sample p={in_sample_p:.4f}, Out-Sample p={out_sample_p:.4f}")
+                
+                # Check for overfitting
+                if in_sample_p < 0.05 and out_sample_p > 0.05:
+                    print(f"    WARNING: Potential overfitting - strategy is significant in-sample but not out-of-sample")
+                elif in_sample_p < 0.05 and out_sample_p < 0.05:
+                    print(f"    GOOD: Strategy is significant in both in-sample and out-of-sample periods")
+        
+        # Save comparison results
+        comparison_results = {
+            'metric_comparison': {},
+            'p_value_comparison': {},
+            'overfitting_assessment': {}
         }
         
         for metric in ['sharpe_ratio', 'total_return', 'win_rate', 'profit_factor', 'max_drawdown']:
-            # Extract values from permutation metrics
-            values = [p.get(metric, 0) for p in permutation_metrics if p is not None and p.get(metric) is not None]
+            in_sample_values = [p.get(metric, 0) for p in all_permutation_metrics['in_sample'] if p.get(metric) is not None]
+            out_sample_values = [p.get(metric, 0) for p in all_permutation_metrics['out_sample'] if p.get(metric) is not None]
             
-            if not values:
+            if not in_sample_values or not out_sample_values:
                 continue
-                
-            # Calculate summary statistics
-            analysis['metrics'][metric] = {
-                'mean': np.mean(values),
-                'std': np.std(values),
-                'min': np.min(values),
-                'max': np.max(values),
-                'p_value': None,
-                'original': original_metrics.get(metric, None)
+            
+            comparison_results['metric_comparison'][metric] = {
+                'in_sample_mean': float(np.mean(in_sample_values)),
+                'in_sample_std': float(np.std(in_sample_values)),
+                'out_sample_mean': float(np.mean(out_sample_values)),
+                'out_sample_std': float(np.std(out_sample_values))
             }
             
-            # Calculate p-value
-            original_value = original_metrics.get(metric, None)
-            if original_value is not None:
-                if metric == 'max_drawdown':
-                    # For max_drawdown, lower is better
-                    p_value = np.mean([1 if x <= original_value else 0 for x in values])
+            if metric in all_analysis_results['in_sample'] and metric in all_analysis_results['out_sample']:
+                comparison_results['p_value_comparison'][metric] = {
+                    'in_sample_p': all_analysis_results['in_sample'][metric],
+                    'out_sample_p': all_analysis_results['out_sample'][metric]
+                }
+                
+                # Assess overfitting
+                in_sample_p = all_analysis_results['in_sample'][metric]
+                out_sample_p = all_analysis_results['out_sample'][metric]
+                
+                if in_sample_p < 0.05 and out_sample_p > 0.05:
+                    overfitting_status = "WARNING: Potential overfitting detected"
+                elif in_sample_p < 0.05 and out_sample_p < 0.05:
+                    overfitting_status = "GOOD: Strategy is robust across both periods"
                 else:
-                    # For other metrics, higher is better
-                    p_value = np.mean([1 if x >= original_value else 0 for x in values])
-                analysis['metrics'][metric]['p_value'] = p_value
+                    overfitting_status = "NEUTRAL: No clear pattern"
+                
+                comparison_results['overfitting_assessment'][metric] = overfitting_status
         
-        # Extract p-values for easy reference
-        analysis['p_values'] = {
-            metric: analysis['metrics'][metric]['p_value'] 
-            for metric in analysis['metrics']
-            if 'p_value' in analysis['metrics'][metric]
-        }
+        # Save comparison results
+        comparison_filepath = os.path.join(self.output_dir, "analysis", "period_comparison.json")
+        os.makedirs(os.path.dirname(comparison_filepath), exist_ok=True)
+        save_to_json(comparison_results, comparison_filepath)
+        print(f"\nPeriod comparison results saved to {comparison_filepath}")
         
-        # Print summary of results
-        print("\nMonte Carlo Test Results:")
-        print("--------------------------------------------------")
-        for metric, info in analysis['metrics'].items():
-            if 'p_value' in info and info['p_value'] is not None:
-                significant = "Significant" if info['p_value'] < 0.05 else "Not significant"
-                print(f"{metric.replace('_', ' ').title()}: p-value = {info['p_value']:.4f} ({significant})")
-        
-        # Save analysis results
-        self.save_analysis_results(analysis)
-        
-        # Generate plots if we have enough data
-        if len(permutation_metrics) > 1:
-            self.generate_plots(original_metrics, permutation_metrics)
-        
-        return analysis
+        # Generate comparison plots
+        self._generate_comparison_plots(all_permutation_metrics)
 
-    def initialize_cerebro(self, data, output_dir):
-        """Initialize a backtrader cerebro instance with the strategy"""
-        cerebro = bt.Cerebro()
-        cerebro.broker.setcash(100000.0)
+    def _generate_comparison_plots(self, all_permutation_metrics):
+        """
+        Generate comparison plots between in-sample and out-of-sample results.
         
-        # Add the data
-        data_feed = bt.feeds.PandasData(dataname=data)
-        cerebro.adddata(data_feed)
-        
-        # Add the strategy
-        if self.strategy_name not in STRATEGY_CLASSES:
-            print(f"Error: Unknown strategy {self.strategy_name}")
-            return None
+        Args:
+            all_permutation_metrics (dict): Dictionary of permutation metrics for each period
+        """
+        if 'in_sample' not in all_permutation_metrics or 'out_sample' not in all_permutation_metrics:
+            return
             
-        strategy_class = STRATEGY_CLASSES[self.strategy_name]
-        cerebro.addstrategy(strategy_class, **self.parameters)
-        
-        # Add analyzers
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe_ratio')
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-        cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade_analyzer')
-        
-        # Add observers
-        cerebro.addobserver(bt.observers.Broker)
-        cerebro.addobserver(bt.observers.Trades)
-        cerebro.addobserver(bt.observers.BuySell)
-        
-        # Configure output directory for this run
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        
-        return cerebro
+        try:
+            # Create plots directory
+            plots_dir = os.path.join(self.output_dir, "plots")
+            os.makedirs(plots_dir, exist_ok=True)
+            
+            # For each key metric, create a histogram comparison
+            for metric in ['sharpe_ratio', 'total_return', 'win_rate', 'profit_factor', 'max_drawdown']:
+                in_sample_values = [p.get(metric, 0) for p in all_permutation_metrics['in_sample'] if p.get(metric) is not None]
+                out_sample_values = [p.get(metric, 0) for p in all_permutation_metrics['out_sample'] if p.get(metric) is not None]
+                
+                if not in_sample_values or not out_sample_values:
+                    continue
+                
+                plt.figure(figsize=(10, 6))
+                plt.hist(in_sample_values, alpha=0.5, label='In-Sample', bins=10)
+                plt.hist(out_sample_values, alpha=0.5, label='Out-of-Sample', bins=10)
+                plt.axvline(np.mean(in_sample_values), color='blue', linestyle='dashed', linewidth=1)
+                plt.axvline(np.mean(out_sample_values), color='orange', linestyle='dashed', linewidth=1)
+                plt.title(f'Distribution of {metric.replace("_", " ").title()} Across Permutations')
+                plt.xlabel(metric.replace('_', ' ').title())
+                plt.ylabel('Frequency')
+                plt.legend()
+                plt.tight_layout()
+                
+                # Save the plot
+                plot_path = os.path.join(plots_dir, f'{metric}_comparison.png')
+                plt.savefig(plot_path)
+                plt.close()
+                
+                print(f"Saved comparison plot for {metric} to {plot_path}")
+        except Exception as e:
+            print(f"Error generating comparison plots: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _run_backtest(self, ticker_data, output_dir, label="backtest"):
         """
@@ -1227,7 +1235,7 @@ class DirectMonteCarloTest:
                     all_dates.extend(df_copy['Date'].dt.strftime('%Y-%m-%d').tolist())
                     # Set Date as index for backtrader
                     df_copy = df_copy.set_index('Date')
-                else:
+            else:
                     # If Date is already the index
                     all_dates.extend(df_copy.index.strftime('%Y-%m-%d').tolist())
                 
@@ -1447,7 +1455,7 @@ class DirectMonteCarloTest:
                                 if ticker_df is not None:
                                     if 'Date' in ticker_df.columns:
                                         price_row = ticker_df[ticker_df['Date'].dt.strftime('%Y-%m-%d') == pos_date]
-                                    else:
+                else:
                                         price_row = ticker_df[ticker_df.index.strftime('%Y-%m-%d') == pos_date]
                                     
                                     if not price_row.empty:
@@ -1668,6 +1676,7 @@ if __name__ == "__main__":
     parser.add_argument("--out_sample_start", type=str, default="2020-01-01", help="Out-of-sample start date")
     parser.add_argument("--out_sample_end", type=str, default="2021-12-31", help="Out-of-sample end date")
     parser.add_argument("--num_cores", type=int, default=None, help="Number of CPU cores to use")
+    parser.add_argument("--enable_in_sample_mc", action="store_true", help="Enable in-sample Monte Carlo testing")
     
     args = parser.parse_args()
     
@@ -1682,7 +1691,8 @@ if __name__ == "__main__":
         in_sample_end=args.in_sample_end,
         out_sample_start=args.out_sample_start,
         out_sample_end=args.out_sample_end,
-        num_permutations=args.num_permutations
+        num_permutations=args.num_permutations,
+        enable_in_sample_mc=args.enable_in_sample_mc
     )
     
     results = test.run_test(n_jobs=args.num_cores)

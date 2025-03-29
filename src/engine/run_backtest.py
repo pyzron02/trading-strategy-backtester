@@ -246,19 +246,19 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
 
     # Add strategy based on name
     try:
-        if strategy_name == 'SimpleStock':
-            from strategies.simplestock import SimpleStock
-            if parameters:
-                cerebro.addstrategy(SimpleStock, **parameters)
-            else:
-                cerebro.addstrategy(SimpleStock)
-        elif strategy_name == 'MultiPosition':
+    if strategy_name == 'SimpleStock':
+        from strategies.simplestock import SimpleStock
+        if parameters:
+            cerebro.addstrategy(SimpleStock, **parameters)
+        else:
+            cerebro.addstrategy(SimpleStock)
+    elif strategy_name == 'MultiPosition':
             try:
-                from strategies.multi_position_strategy import MultiPositionStrategy
-                if parameters:
-                    cerebro.addstrategy(MultiPositionStrategy, **parameters)
-                else:
-                    cerebro.addstrategy(MultiPositionStrategy)
+        from strategies.multi_position_strategy import MultiPositionStrategy
+        if parameters:
+            cerebro.addstrategy(MultiPositionStrategy, **parameters)
+        else:
+            cerebro.addstrategy(MultiPositionStrategy)
             except Exception as e:
                 print(f"Error loading MultiPositionStrategy from strategies directory: {e}")
                 print("Using fallback MultiPosition strategy from src.monte_carlo.direct_monte_carlo")
@@ -278,13 +278,13 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                 except Exception as e2:
                     print(f"Error importing from src.monte_carlo: {e2}")
                     raise
-        elif strategy_name == 'AuctionMarket':
+    elif strategy_name == 'AuctionMarket':
             try:
-                from strategies.auction_market_strategy import AuctionMarketStrategy
-                if parameters:
-                    cerebro.addstrategy(AuctionMarketStrategy, **parameters)
-                else:
-                    cerebro.addstrategy(AuctionMarketStrategy)
+        from strategies.auction_market_strategy import AuctionMarketStrategy
+        if parameters:
+            cerebro.addstrategy(AuctionMarketStrategy, **parameters)
+        else:
+            cerebro.addstrategy(AuctionMarketStrategy)
             except Exception as e:
                 print(f"Error loading AuctionMarketStrategy from strategies directory: {e}")
                 print("Using fallback AuctionMarket strategy from src.monte_carlo.direct_monte_carlo")
@@ -304,13 +304,13 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                 except Exception as e2:
                     print(f"Error importing from src.monte_carlo: {e2}")
                     raise
-        elif strategy_name == 'MACrossover':
+    elif strategy_name == 'MACrossover':
             try:
-                from strategies.ma_crossover import MACrossover
-                if parameters:
-                    cerebro.addstrategy(MACrossover, **parameters)
-                else:
-                    cerebro.addstrategy(MACrossover)
+        from strategies.ma_crossover import MACrossover
+        if parameters:
+            cerebro.addstrategy(MACrossover, **parameters)
+        else:
+            cerebro.addstrategy(MACrossover)
             except Exception as e:
                 print(f"Error loading MACrossover from strategies directory: {e}")
                 print("Using fallback MACrossover strategy from src.monte_carlo.direct_monte_carlo")
@@ -330,8 +330,8 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                 except Exception as e2:
                     print(f"Error importing from src.monte_carlo: {e2}")
                     raise
-        else:
-            raise ValueError(f"Unknown strategy: {strategy_name}")
+    else:
+        raise ValueError(f"Unknown strategy: {strategy_name}")
     except Exception as e:
         print(f"Error loading strategy: {e}")
         print("Attempting to load fallback strategy from src.monte_carlo.direct_monte_carlo")
@@ -541,7 +541,7 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
         
         # Save the pickle-safe results
         try:
-            with open(os.path.join(output_dir, 'backtest_results.pkl'), 'wb') as f:
+    with open(os.path.join(output_dir, 'backtest_results.pkl'), 'wb') as f:
                 pickle.dump(pickle_safe_results, f, protocol=pickle.HIGHEST_PROTOCOL)
             print(f"Pickle results also saved to {output_dir}/backtest_results.pkl")
         except Exception as e:

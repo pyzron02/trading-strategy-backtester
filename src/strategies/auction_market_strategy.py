@@ -166,7 +166,7 @@ class AuctionMarketStrategy(bt.Strategy):
         # Variables to track if we have enough data for trading
         self.bars_processed = 0
         self.min_bars_required = min_period  # Ensure sufficient warmup
-
+        
         # Create indicators for each data feed
         for data in self.datas:
             # Volume moving average
@@ -215,9 +215,9 @@ class AuctionMarketStrategy(bt.Strategy):
         
         # Log portfolio value for the equity curve
         try:
-            date = self.data.datetime.date(0).isoformat()
-            value = self.broker.getvalue()
-            self.equity_curve.append({'Date': date, 'Value': value})
+        date = self.data.datetime.date(0).isoformat()
+        value = self.broker.getvalue()
+        self.equity_curve.append({'Date': date, 'Value': value})
         except Exception as e:
             print(f"Error logging portfolio value: {e}")
         
@@ -239,8 +239,8 @@ class AuctionMarketStrategy(bt.Strategy):
                     continue
                     
                 # Store the daily bar for value area calculation
-                self._store_daily_bar(data)
-                
+            self._store_daily_bar(data)
+            
                 # Only proceed if we have enough daily bars
                 if not self.daily_bars.get(data) or len(self.daily_bars[data]) < self.amt_params.volume_profile['lookback_period']:
                     continue
@@ -252,7 +252,7 @@ class AuctionMarketStrategy(bt.Strategy):
                         continue
                     
                     # Apply auction market logic
-                    self._apply_auction_market_logic(data, value_area)
+                self._apply_auction_market_logic(data, value_area)
                 except Exception as e:
                     print(f"Error calculating value area or applying trading logic: {e}")
                     import traceback
@@ -268,25 +268,25 @@ class AuctionMarketStrategy(bt.Strategy):
     def _store_daily_bar(self, data):
         """Store daily bar data for value area calculation"""
         try:
-            current_date = data.datetime.date(0)
-            
-            # Create a new daily bar entry
-            bar = {
-                'date': current_date,
-                'open': data.open[0],
-                'high': data.high[0],
-                'low': data.low[0],
-                'close': data.close[0],
-                'volume': data.volume[0]
-            }
-            
-            # Add to daily bars list
+        current_date = data.datetime.date(0)
+        
+        # Create a new daily bar entry
+        bar = {
+            'date': current_date,
+            'open': data.open[0],
+            'high': data.high[0],
+            'low': data.low[0],
+            'close': data.close[0],
+            'volume': data.volume[0]
+        }
+        
+        # Add to daily bars list
             if data not in self.daily_bars:
                 self.daily_bars[data] = []
             
             self.daily_bars[data].append(bar)
-            
-            # Keep only the lookback period
+        
+        # Keep only the lookback period
             if len(self.daily_bars[data]) > self.amt_params.volume_profile['lookback_period']:
                 self.daily_bars[data].pop(0)
         except Exception as e:
@@ -295,9 +295,9 @@ class AuctionMarketStrategy(bt.Strategy):
     def _calculate_value_area(self, data):
         """Calculate Value Area and Point of Control"""
         try:
-            current_date = data.datetime.date(0)
-            
-            # Get the most recent daily bar
+        current_date = data.datetime.date(0)
+        
+        # Get the most recent daily bar
             if not self.daily_bars.get(data) or len(self.daily_bars[data]) == 0:
                 return None
                 
@@ -307,93 +307,93 @@ class AuctionMarketStrategy(bt.Strategy):
             if daily_bar['high'] <= daily_bar['low'] or daily_bar['high'] - daily_bar['low'] < 0.0001:
                 # Invalid price range, skip
                 return None
-            
-            # Create price buckets
+        
+        # Create price buckets
             try:
-                price_range = np.arange(
-                    daily_bar['low'],
-                    daily_bar['high'] + self.amt_params.price_levels['price_bucket_size'],
-                    self.amt_params.price_levels['price_bucket_size']
-                )
+        price_range = np.arange(
+            daily_bar['low'],
+            daily_bar['high'] + self.amt_params.price_levels['price_bucket_size'],
+            self.amt_params.price_levels['price_bucket_size']
+        )
             except Exception as e:
                 print(f"Error creating price range: {e}")
                 # Fallback to a simple price range
                 price_range = np.linspace(daily_bar['low'], daily_bar['high'], 20)
-            
-            # Calculate volume distribution
-            volume_dist = {}
-            for price in price_range:
-                # Simple approximation: distribute volume across price range
-                if price >= daily_bar['low'] and price <= daily_bar['high']:
-                    # Weight volume more heavily near the close price
-                    weight = 1.0 - abs(price - daily_bar['close']) / (daily_bar['high'] - daily_bar['low'])
-                    volume_dist[price] = daily_bar['volume'] * max(0.1, weight)
-                else:
-                    volume_dist[price] = 0
-            
-            # Find POC (price with highest volume)
+        
+        # Calculate volume distribution
+        volume_dist = {}
+        for price in price_range:
+            # Simple approximation: distribute volume across price range
+            if price >= daily_bar['low'] and price <= daily_bar['high']:
+                # Weight volume more heavily near the close price
+                weight = 1.0 - abs(price - daily_bar['close']) / (daily_bar['high'] - daily_bar['low'])
+                volume_dist[price] = daily_bar['volume'] * max(0.1, weight)
+            else:
+                volume_dist[price] = 0
+        
+        # Find POC (price with highest volume)
             if not volume_dist:
                 return None
                 
-            poc = max(volume_dist.items(), key=lambda x: x[1])[0] if volume_dist else daily_bar['close']
-            
-            # Calculate Value Area
-            total_volume = sum(volume_dist.values())
+        poc = max(volume_dist.items(), key=lambda x: x[1])[0] if volume_dist else daily_bar['close']
+        
+        # Calculate Value Area
+        total_volume = sum(volume_dist.values())
             if total_volume <= 0:
                 return None
                 
-            target_volume = total_volume * self.amt_params.value_area_percent
-            current_volume = volume_dist.get(poc, 0)
-            
-            vah = poc  # Value Area High
-            val = poc  # Value Area Low
-            
-            # Expand value area until it contains target volume
-            price_list = sorted(price_range)
+        target_volume = total_volume * self.amt_params.value_area_percent
+        current_volume = volume_dist.get(poc, 0)
+        
+        vah = poc  # Value Area High
+        val = poc  # Value Area Low
+        
+        # Expand value area until it contains target volume
+        price_list = sorted(price_range)
             if not price_list:
                 return None
                 
-            poc_idx = price_list.index(poc) if poc in price_list else len(price_list) // 2
+        poc_idx = price_list.index(poc) if poc in price_list else len(price_list) // 2
+        
+        above_idx = poc_idx
+        below_idx = poc_idx
+        
+        while current_volume < target_volume and (above_idx < len(price_list) - 1 or below_idx > 0):
+            # Look for next prices above and below
+            above_price = price_list[above_idx + 1] if above_idx < len(price_list) - 1 else None
+            below_price = price_list[below_idx - 1] if below_idx > 0 else None
             
-            above_idx = poc_idx
-            below_idx = poc_idx
+            # Get volumes
+            above_vol = volume_dist.get(above_price, 0) if above_price else 0
+            below_vol = volume_dist.get(below_price, 0) if below_price else 0
             
-            while current_volume < target_volume and (above_idx < len(price_list) - 1 or below_idx > 0):
-                # Look for next prices above and below
-                above_price = price_list[above_idx + 1] if above_idx < len(price_list) - 1 else None
-                below_price = price_list[below_idx - 1] if below_idx > 0 else None
-                
-                # Get volumes
-                above_vol = volume_dist.get(above_price, 0) if above_price else 0
-                below_vol = volume_dist.get(below_price, 0) if below_price else 0
-                
-                # Add the larger volume to the value area
-                if above_vol > below_vol and above_price:
-                    above_idx += 1
-                    vah = above_price
-                    current_volume += above_vol
-                elif below_price:
-                    below_idx -= 1
-                    val = below_price
-                    current_volume += below_vol
-                else:
-                    break
-            
-            # Store value area
+            # Add the larger volume to the value area
+            if above_vol > below_vol and above_price:
+                above_idx += 1
+                vah = above_price
+                current_volume += above_vol
+            elif below_price:
+                below_idx -= 1
+                val = below_price
+                current_volume += below_vol
+            else:
+                break
+        
+        # Store value area
             if current_date not in self.value_areas:
                 self.value_areas[current_date] = {}
                 
-            self.value_areas[current_date] = {
-                'poc': poc,
-                'vah': vah,
-                'val': val,
-                'volume_profile': volume_dist
-            }
-            
-            # Store POC
-            self.poc_levels[current_date] = poc
-            
-            print(f"{current_date} - {data._name}: Value Area: {val:.2f} - {vah:.2f}, POC: {poc:.2f}")
+        self.value_areas[current_date] = {
+            'poc': poc,
+            'vah': vah,
+            'val': val,
+            'volume_profile': volume_dist
+        }
+        
+        # Store POC
+        self.poc_levels[current_date] = poc
+        
+        print(f"{current_date} - {data._name}: Value Area: {val:.2f} - {vah:.2f}, POC: {poc:.2f}")
             
             return self.value_areas[current_date]
         except Exception as e:
@@ -406,10 +406,10 @@ class AuctionMarketStrategy(bt.Strategy):
         """Detect price excesses outside the value area."""
         try:
             # Get current value area
-            current_date = data.datetime.date(0)
-            value_area = self.value_areas.get(current_date, None)
-            
-            if not value_area:
+        current_date = data.datetime.date(0)
+        value_area = self.value_areas.get(current_date, None)
+        
+        if not value_area:
                 return None
             
             # Safety check for required fields
@@ -421,12 +421,12 @@ class AuctionMarketStrategy(bt.Strategy):
                 return None
                 
             price_std = self.atr[data][0]
-            
-            # Check for excess above value area
+        
+        # Check for excess above value area
             if data.high[0] > value_area['vah'] + (price_std * self.amt_params.auction_zones['excess_threshold']):
                 return "up"
-            
-            # Check for excess below value area
+        
+        # Check for excess below value area
             if data.low[0] < value_area['val'] - (price_std * self.amt_params.auction_zones['excess_threshold']):
                 return "down"
             
@@ -434,22 +434,22 @@ class AuctionMarketStrategy(bt.Strategy):
         except Exception as e:
             print(f"Error detecting auction excess: {e}")
             return None
-
+    
     def _identify_balance_area(self, data):
         """Identify balanced vs. imbalanced market conditions."""
         try:
             # Safety check for atr
             if not self.atr.get(data) or not self.atr[data][0]:
                 return "normal"  # Default to normal if ATR not available
-            
-            # Use ATR as a measure of average range
+        
+        # Use ATR as a measure of average range
             avg_range = self.atr[data][0]
             
             # Ensure high and low data is available
             if not data.high or not data.low:
                 return "normal"
-                
-            # Check for balanced conditions
+        
+        # Check for balanced conditions
             range_today = data.high[0] - data.low[0]
             
             if range_today < avg_range * self.amt_params.auction_zones['balance_threshold']:
@@ -529,8 +529,8 @@ class AuctionMarketStrategy(bt.Strategy):
                 return
             
             # Current position
-            position = self.getposition(data).size
-            
+        position = self.getposition(data).size
+        
             # Current price and value area
             close = data.close[0]
             vah = value_area['vah']  # Value area high
@@ -578,7 +578,7 @@ class AuctionMarketStrategy(bt.Strategy):
                         if balance == "tight" and rotation == "up":
                             # Go long when we see excess down, tight balance, and upward rotation
                             self.buy(data=data, size=pos_size)
-                    else:
+            else:
                         # No excess - potential breakdown
                         if rotation == "down" and close < self.sma50[data][0]:
                             # Go short below value area with downward rotation and below MA
@@ -595,7 +595,7 @@ class AuctionMarketStrategy(bt.Strategy):
             elif position > 0:  # Long position
                 if (close < val and balance != "wide") or close < (val - self.atr[data][0]):
                     # Exit long if price drops below value area low or too far below
-                    self.close(data=data)
+            self.close(data=data)
                 elif excess == "up" and balance == "tight":
                     # Take partial profits on excess above value area
                     self.sell(data=data, size=int(position * 0.5))
@@ -603,7 +603,7 @@ class AuctionMarketStrategy(bt.Strategy):
             elif position < 0:  # Short position
                 if (close > vah and balance != "wide") or close > (vah + self.atr[data][0]):
                     # Exit short if price rises above value area high or too far above
-                    self.close(data=data)
+            self.close(data=data)
                 elif excess == "down" and balance == "tight":
                     # Take partial profits on excess below value area
                     self.buy(data=data, size=int(abs(position) * 0.5))

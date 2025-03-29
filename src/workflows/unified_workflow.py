@@ -145,7 +145,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
     
     # Handle strategy parameters
     if best_params is None:
-        if strategy_name == "MACrossover":
+    if strategy_name == "MACrossover":
             best_params = {'fast_period': 5, 'slow_period': 20, 'position_size': 10}
         elif strategy_name == "SimpleStock":
             best_params = {'sma_period': 20, 'position_size': 10}
@@ -182,7 +182,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
     if num_workers is None:
         # Use all cores except one by default
         num_workers = max(1, multiprocessing.cpu_count() - 1)
-    if verbose:
+                if verbose:
         print(f"Using {num_workers} CPU cores for Monte Carlo simulations")
     
     try:
@@ -228,11 +228,11 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
                 print(f"Original strategy trade log: {trade_log_summary['original']}")
                 print(f"Generated {len(trade_log_summary['permutations'])} permutation trade logs")
             
-            return {
-                'success': True,
-                'results': results,
-                'parameters': best_params,
-                'dates': {
+        return {
+            'success': True,
+            'results': results,
+            'parameters': best_params,
+            'dates': {
                     'in_sample_start': start_date,
                     'in_sample_end': in_sample_end,
                     'out_sample_start': out_sample_start,
@@ -503,7 +503,7 @@ def main():
                         help='Number of permutations to use for Monte Carlo testing')
     parser.add_argument('--output-dir', type=str,
                         help='Directory to save results')
-    parser.add_argument('--in-sample-ratio', type=float, default=0.7,
+    parser.add_argument('--in-sample-ratio', type=float, default=0.7, 
                         help='Ratio of data to use for in-sample testing')
     parser.add_argument('--verbose', action='store_true',
                         help='Print verbose output')
