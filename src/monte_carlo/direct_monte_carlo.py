@@ -626,7 +626,7 @@ class DirectMonteCarloTest:
         self.out_sample_end = pd.to_datetime(out_sample_end)
         
         # Set default parameters based on strategy
-        if parameters is None:
+        if parameters is None or not parameters:
             if strategy_name == 'MACrossover':
                 self.parameters = {
                     'fast_period': 5,
@@ -638,15 +638,30 @@ class DirectMonteCarloTest:
                     'sma_period': 20,
                     'position_size': 10
                 }
+            elif strategy_name == 'AuctionMarket':
+                self.parameters = {
+                    'volume_period': 20,
+                    'price_period': 10,
+                    'position_size': 10
+                }
+            elif strategy_name == 'MultiPosition':
+                self.parameters = {
+                    'fast_period': 10,
+                    'slow_period': 30,
+                    'max_positions': 3,
+                    'position_size': 10
+                }
             else:
+                print(f"Warning: No default parameters for strategy {strategy_name}, using empty dict")
                 self.parameters = {}
         else:
             self.parameters = parameters.copy()
+            print(f"Using provided parameters: {self.parameters}")
         
         # Set up output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if output_dir is None:
-            self.output_dir = os.path.join("output", "direct_monte_carlo", f"{strategy_name}_{timestamp}")
+            self.output_dir = os.path.join("output", f"{strategy_name}_monte_carlo_{timestamp}")
         else:
             self.output_dir = os.path.abspath(output_dir)
         
@@ -675,70 +690,79 @@ class DirectMonteCarloTest:
             # Get the absolute path of the project root
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
-            # Define paths to look for stock data
-            potential_paths = [
-                # First check if data is in the data_dir (output directory)
-                os.path.join(self.data_dir, 'stock_data.csv'),
-                
-                # Then check in the standard input location
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'input', 'stock_data.csv'),
-                
-                # Check project root
-                os.path.join(project_root, 'input', 'stock_data.csv'),
-                
-                # Check current directory
-                os.path.join(os.getcwd(), 'input', 'stock_data.csv'),
-                
-                # Check relative to current working directory
-                'input/stock_data.csv',
-                'stock_data.csv'
-            ]
-            
-            # Find the first path that exists
-            data_path = None
-            for path in potential_paths:
-                if os.path.exists(path):
-                    data_path = path
-                    break
-            
-            if data_path is None:
-                print("Error: stock_data.csv file not found in any of the following locations:")
-                for path in potential_paths:
-                    print(f" - {path}")
-            return None
-        
-            # Load the data
-            print(f"Loading stock data from {data_path}")
-            data = pd.read_csv(data_path)
-            
-            # Convert Date column to datetime
-            if 'Date' in data.columns:
-                data['Date'] = pd.to_datetime(data['Date'])
-            
-            print(f"Loaded stock data with {len(data)} rows and {len(data.columns)} columns.")
-            
-            # Process the data for each ticker
             ticker_data = {}
+            
+            # Try to load data for each ticker separately
             for ticker in self.tickers:
-                # Extract columns for this ticker
-                ticker_cols = [col for col in data.columns if col.startswith(f"{ticker}_") or col == 'Date']
+                # Define paths to look for stock data for this ticker
+                potential_paths = [
+                    # First check if data is in the data_dir (output directory)
+                    os.path.join(self.data_dir, f'{ticker}_data.csv'),
+                    
+                    # Then check in standard input locations
+                    os.path.join(project_root, 'input', f'{ticker}_data.csv'),
+                    os.path.join(os.getcwd(), 'input', f'{ticker}_data.csv'),
+                    os.path.join('input', f'{ticker}_data.csv'),
+                    
+                    # Finally check for a combined stock data file
+                    os.path.join(self.data_dir, 'stock_data.csv'),
+                    os.path.join(project_root, 'input', 'stock_data.csv'),
+                    os.path.join(os.getcwd(), 'input', 'stock_data.csv'),
+                    os.path.join('input', 'stock_data.csv'),
+                    'stock_data.csv'
+                ]
                 
-                if len(ticker_cols) <= 1:  # Just Date column or empty
-                    print(f"Warning: No data found for ticker {ticker}")
-                    continue
+                # Find the first path that exists
+                data_path = None
+                for path in potential_paths:
+                    if os.path.exists(path):
+                        data_path = path
+                        break
                 
-                # Create a DataFrame for this ticker
-                df = data[ticker_cols].copy()
+                if data_path is None:
+                    print(f"Error: No data file found for ticker {ticker}")
+                    print(f"Checked locations:")
+                    for path in potential_paths[:5]:  # Just show the ticker-specific paths
+                        print(f" - {path}")
+                    continue  # Skip this ticker but continue with others
                 
-                # Rename columns to standard OHLCV format
-                rename_map = {}
-                for col in ticker_cols:
-                    if col == 'Date':
+                # Load the data
+                print(f"Loading data for {ticker} from {data_path}")
+                
+                if data_path.endswith('stock_data.csv'):
+                    # Handle combined data file
+                    data = pd.read_csv(data_path)
+                    
+                    # Convert Date column to datetime
+                    if 'Date' in data.columns:
+                        data['Date'] = pd.to_datetime(data['Date'])
+                    
+                    # Extract columns for this ticker
+                    ticker_cols = [col for col in data.columns if col.startswith(f"{ticker}_") or col == 'Date']
+                    
+                    if len(ticker_cols) <= 1:  # Just Date column or empty
+                        print(f"Warning: No data found for ticker {ticker} in combined file")
                         continue
-                    field = col.split('_')[1]  # e.g., AAPL_Close -> Close
-                    rename_map[col] = field
-                
-                df = df.rename(columns=rename_map)
+                    
+                    # Create a DataFrame for this ticker
+                    df = data[ticker_cols].copy()
+                    
+                    # Rename columns to standard OHLCV format
+                    rename_map = {}
+                    for col in ticker_cols:
+                        if col == 'Date':
+                            continue
+                        field = col.split('_')[1]  # e.g., AAPL_Close -> Close
+                        rename_map[col] = field
+                    
+                    df = df.rename(columns=rename_map)
+                else:
+                    # Direct ticker data file
+                    df = pd.read_csv(data_path)
+                    
+                    # Convert Date column to datetime if present
+                    if 'Date' in df.columns:
+                        df['Date'] = pd.to_datetime(df['Date'])
                 
                 # Ensure OHLCV columns exist
                 required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -769,6 +793,10 @@ class DirectMonteCarloTest:
                 df.to_csv(csv_path, index=False)
                 print(f"Saved processed data for {ticker} to {csv_path}")
             
+            if not ticker_data:
+                print("Error: Could not load data for any of the specified tickers")
+                return None
+                
             return ticker_data
             
         except Exception as e:
@@ -817,61 +845,99 @@ class DirectMonteCarloTest:
                 print(f"Warning: No {period_name} data to permute")
                 continue
         
-        # Permute returns for price columns
-        price_cols = ['Open', 'High', 'Low', 'Close', 'Adj Close']
+            # Identify price columns present in the data
+            price_cols = ['Open', 'High', 'Low', 'Close', 'Adj Close']
             price_cols = [col for col in price_cols if col in period_data.columns]
         
-        if permutation_type == 'returns':
-            # Permute by shuffling returns
-            for col in price_cols:
-                # Calculate returns
+            if permutation_type == 'returns':
+                # Permute by shuffling returns
+                for col in price_cols:
+                    # Calculate returns
                     prices = period_data[col].values
-                returns = np.diff(prices) / prices[:-1]
-                
-                # Shuffle returns
-                shuffled_returns = np.random.permutation(returns)
-                
-                # Reconstruct prices
-                new_prices = np.zeros_like(prices)
-                new_prices[0] = prices[0]  # Keep first price
-                
-                for i in range(1, len(new_prices)):
-                    new_prices[i] = new_prices[i-1] * (1 + shuffled_returns[i-1])
-                
-                # Replace prices with permuted version
+                    returns = np.diff(prices) / prices[:-1]
+                    
+                    # Shuffle returns
+                    shuffled_returns = np.random.permutation(returns)
+                    
+                    # Reconstruct prices
+                    new_prices = np.zeros_like(prices)
+                    new_prices[0] = prices[0]  # Keep first price
+                    
+                    for i in range(1, len(new_prices)):
+                        new_prices[i] = new_prices[i-1] * (1 + shuffled_returns[i-1])
+                    
+                    # Replace prices with permuted version
                     period_data[col] = new_prices
         
-        elif permutation_type == 'blocks':
-            # Permute by shuffling blocks of data
-            for col in price_cols:
+            elif permutation_type == 'blocks':
+                # Permute by shuffling blocks of data (better preserves temporal structure)
+                # Use shorter blocks to create more variation while preserving some structure
+                block_size = 3  # Shorter blocks (was 5)
+                
+                for col in price_cols:
                     prices = period_data[col].values
                 
-                # Create blocks of ~5 days
-                block_size = 5
-                blocks = []
-                
-                for i in range(0, len(prices), block_size):
-                    end = min(i + block_size, len(prices))
-                    blocks.append(prices[i:end])
-                
-                # Shuffle blocks
-                random.shuffle(blocks)
-                
-                # Reconstruct series
-                new_prices = np.concatenate(blocks)
-                
-                # Ensure same length
-                new_prices = new_prices[:len(prices)]
-                
-                # Replace prices
+                    # Create blocks of data
+                    blocks = []
+                    
+                    for i in range(0, len(prices), block_size):
+                        end = min(i + block_size, len(prices))
+                        blocks.append(prices[i:end])
+                    
+                    # Shuffle blocks
+                    random.shuffle(blocks)
+                    
+                    # Reconstruct series
+                    new_prices = np.concatenate(blocks)
+                    
+                    # Ensure same length
+                    new_prices = new_prices[:len(prices)]
+                    
+                    # Replace prices
                     period_data[col] = new_prices
         
-        # Also permute volume if available
+            elif permutation_type == 'stationary_bootstrap':
+                # Implement stationary bootstrap which uses random block lengths
+                # This better preserves temporal structure while introducing randomness
+                
+                # Average block length (can be adjusted)
+                avg_block_length = 5
+                
+                for col in price_cols:
+                    prices = period_data[col].values
+                    n = len(prices)
+                    
+                    # Generate bootstrap series
+                    bootstrapped_prices = np.zeros_like(prices)
+                    bootstrapped_prices[0] = prices[0]  # Start with the first price
+                    
+                    # Fill the bootstrap series
+                    idx = 0
+                    while idx < n - 1:
+                        # Generate random block length from geometric distribution
+                        block_length = np.random.geometric(1/avg_block_length)
+                        block_length = min(block_length, n - idx - 1)
+                        
+                        # Choose a random starting point
+                        start_point = np.random.randint(0, n - block_length)
+                        
+                        # Copy the block
+                        for j in range(block_length):
+                            if idx + j + 1 < n:
+                                bootstrapped_prices[idx + j + 1] = prices[start_point + j]
+                        
+                        # Move index forward
+                        idx += block_length
+                    
+                    # Replace prices
+                    period_data[col] = bootstrapped_prices
+        
+            # Also permute volume if available
             if 'Volume' in period_data.columns:
                 volumes = period_data['Volume'].values
-            permuted_volumes = np.random.permutation(volumes)
+                permuted_volumes = np.random.permutation(volumes)
                 period_data['Volume'] = permuted_volumes
-        
+            
             # Replace period data with permuted data
             df.loc[period_mask] = period_data
         
@@ -893,35 +959,231 @@ class DirectMonteCarloTest:
         perm_output_dir = os.path.join(self.output_dir, f"permutation_{permute_period}_{permutation_index}")
         os.makedirs(perm_output_dir, exist_ok=True)
         
+        # Create a data directory for this permutation
+        perm_data_dir = os.path.join(perm_output_dir, "data")
+        os.makedirs(perm_data_dir, exist_ok=True)
+        
         # Load the stock data
         ticker_data = self._load_stock_data()
         if ticker_data is None:
             print(f"Failed to load stock data for permutation {permutation_index}")
             return None
         
+        print(f"Permutation {permutation_index}: Loaded data for {len(ticker_data)} tickers: {list(ticker_data.keys())}")
+        
         # Apply permutation to each ticker's data
         permuted_ticker_data = {}
         for ticker, df in ticker_data.items():
-            permuted_df = self._permute_data(df, permutation_seed=permutation_index, permute_period=permute_period)
+            # Default to blocks permutation (better for generating trades)
+            permutation_type = 'blocks'
+            
+            # Every third permutation, use stationary bootstrap for more variety
+            if permutation_index % 3 == 0:
+                permutation_type = 'stationary_bootstrap'
+            
+            print(f"Permutation {permutation_index}: Using {permutation_type} permutation for {ticker}")
+            permuted_df = self._permute_data(df, permutation_type=permutation_type, 
+                                           permutation_seed=permutation_index, 
+                                           permute_period=permute_period)
+            
             permuted_ticker_data[ticker] = permuted_df
             
-            # Save permuted data for reference
-            permuted_df.to_csv(os.path.join(perm_output_dir, f"permuted_data_{ticker}.csv"), index=False)
+            # Save permuted data for reference and visualization
+            perm_data_file = os.path.join(perm_data_dir, f"{ticker}_data.csv")
+            permuted_df.to_csv(perm_data_file, index=False)
+            print(f"Permutation {permutation_index}: Saved permuted data for {ticker} to {perm_data_file}")
         
-        # Run backtest on permuted data
+        # Create a modified set of parameters for this permutation
+        # This helps ensure trades are generated by slightly varying parameters for each permutation
+        permutation_parameters = self._create_permutation_parameters(
+            base_params=self.parameters.copy(),
+            permutation_index=permutation_index
+        )
+        
+        print(f"Permutation {permutation_index}: Using parameters: {permutation_parameters}")
+        
+        # Run backtest with parameters
         permutation_results = self._run_backtest(
             ticker_data=permuted_ticker_data,
             output_dir=perm_output_dir,
-            label=f"permutation_{permute_period}_{permutation_index}"
+            label=f"permutation_{permute_period}_{permutation_index}",
+            parameters=permutation_parameters
         )
         
-        # Rename trade log for clarity
+        # Check for trade log and rename for clarity
         trade_log = os.path.join(perm_output_dir, "trade_log.csv")
         if os.path.exists(trade_log):
             new_name = os.path.join(perm_output_dir, f"trade_log_permutation_{permute_period}_{permutation_index}.csv")
             shutil.copy(trade_log, new_name)
-        
+            
+            # Count trades in the log
+            try:
+                with open(trade_log, 'r') as f:
+                    reader = csv.reader(f)
+                    # Skip header
+                    next(reader, None)
+                    trade_count = sum(1 for _ in reader)
+                print(f"Permutation {permutation_index}: Generated {trade_count} trades")
+                
+                # If no trades were generated with current parameters, try again with more aggressive ones
+                if trade_count == 0:
+                    print(f"Warning: No trades generated for permutation {permutation_index}. Retrying with more aggressive parameters.")
+                    # Create more aggressive parameters
+                    aggressive_params = self._create_aggressive_parameters(permutation_parameters)
+                    print(f"Permutation {permutation_index}: Retry with aggressive parameters: {aggressive_params}")
+                    
+                    # Run backtest again with more aggressive parameters
+                    retry_output_dir = os.path.join(perm_output_dir, "retry")
+                    os.makedirs(retry_output_dir, exist_ok=True)
+                    
+                    permutation_results = self._run_backtest(
+                        ticker_data=permuted_ticker_data,
+                        output_dir=retry_output_dir,
+                        label=f"permutation_{permute_period}_{permutation_index}_retry",
+                        parameters=aggressive_params
+                    )
+                    
+                    # Check if trades were generated this time
+                    retry_trade_log = os.path.join(retry_output_dir, "trade_log.csv")
+                    if os.path.exists(retry_trade_log):
+                        # Copy files back to the main output directory
+                        for filename in os.listdir(retry_output_dir):
+                            src_path = os.path.join(retry_output_dir, filename)
+                            dst_path = os.path.join(perm_output_dir, filename)
+                            if os.path.isfile(src_path):
+                                shutil.copy2(src_path, dst_path)
+                        
+                        # Update the trade log count
+                        with open(retry_trade_log, 'r') as f:
+                            reader = csv.reader(f)
+                            next(reader, None)  # Skip header
+                            trade_count = sum(1 for _ in reader)
+                        print(f"Permutation {permutation_index}: Retry generated {trade_count} trades")
+                        
+                        # Update the new name for successful retry
+                        new_name = os.path.join(perm_output_dir, f"trade_log_permutation_{permute_period}_{permutation_index}.csv")
+                        shutil.copy(retry_trade_log, new_name)
+            except Exception as e:
+                print(f"Permutation {permutation_index}: Error counting trades: {e}")
+                
+        else:
+            print(f"Permutation {permutation_index}: WARNING - No trade log generated!")
+            
         return permutation_results
+    
+    def _create_permutation_parameters(self, base_params, permutation_index):
+        """
+        Create a modified set of parameters for a permutation.
+        This helps ensure trades are generated by slightly varying parameters for each permutation.
+        
+        Args:
+            base_params (dict): Base parameters
+            permutation_index (int): Permutation index
+            
+        Returns:
+            dict: Modified parameters
+        """
+        # Make a copy to avoid modifying the original
+        params = base_params.copy()
+        
+        # If parameters are empty, create default ones based on strategy
+        if not params:
+            if self.strategy_name == 'SimpleStock':
+                params = {
+                    'sma_period': 20,
+                    'position_size': 10
+                }
+            elif self.strategy_name == 'MACrossover':
+                params = {
+                    'fast_period': 5,
+                    'slow_period': 20,
+                    'position_size': 10
+                }
+            elif self.strategy_name == 'AuctionMarket':
+                params = {
+                    'volume_period': 20,
+                    'price_period': 10,
+                    'position_size': 10
+                }
+            elif self.strategy_name == 'MultiPosition':
+                params = {
+                    'fast_period': 10,
+                    'slow_period': 30,
+                    'max_positions': 3,
+                    'position_size': 10
+                }
+        
+        # Modify parameters slightly based on permutation index
+        # This creates variety while keeping parameters reasonable
+        for key in params:
+            if key.endswith('period'):
+                # Adjust period parameters by ±20%
+                base_value = params[key]
+                # Use permutation index to create deterministic but varied values
+                modifier = 0.8 + (((permutation_index * 13) % 10) / 25)  # Range from 0.8 to 1.2
+                params[key] = max(3, int(base_value * modifier))
+            elif key.endswith('size'):
+                # Adjust size parameters by ±10%
+                base_value = params[key]
+                modifier = 0.9 + (((permutation_index * 7) % 10) / 50)  # Range from 0.9 to 1.1
+                params[key] = max(1, int(base_value * modifier))
+        
+        return params
+    
+    def _create_aggressive_parameters(self, base_params):
+        """
+        Create more aggressive parameters to ensure trades are generated.
+        
+        Args:
+            base_params (dict): Base parameters
+            
+        Returns:
+            dict: Aggressive parameters
+        """
+        # Make a copy to avoid modifying the original
+        params = base_params.copy()
+        
+        # Make more aggressive based on strategy type
+        if self.strategy_name == 'SimpleStock':
+            # Shorter SMA period to generate more signals
+            if 'sma_period' in params:
+                params['sma_period'] = max(5, params['sma_period'] // 2)
+            # Larger position size
+            if 'position_size' in params:
+                params['position_size'] = params['position_size'] * 2
+        
+        elif self.strategy_name == 'MACrossover':
+            # Shorter periods to generate more crossovers
+            if 'fast_period' in params:
+                params['fast_period'] = max(3, params['fast_period'] // 2)
+            if 'slow_period' in params:
+                params['slow_period'] = max(7, params['slow_period'] // 2)
+            # Larger position size
+            if 'position_size' in params:
+                params['position_size'] = params['position_size'] * 2
+        
+        elif self.strategy_name == 'AuctionMarket':
+            # Shorter periods
+            if 'volume_period' in params:
+                params['volume_period'] = max(5, params['volume_period'] // 2)
+            if 'price_period' in params:
+                params['price_period'] = max(3, params['price_period'] // 2)
+            # Larger position size
+            if 'position_size' in params:
+                params['position_size'] = params['position_size'] * 2
+        
+        elif self.strategy_name == 'MultiPosition':
+            # Shorter periods and more positions
+            if 'fast_period' in params:
+                params['fast_period'] = max(3, params['fast_period'] // 2)
+            if 'slow_period' in params:
+                params['slow_period'] = max(7, params['slow_period'] // 2)
+            if 'max_positions' in params:
+                params['max_positions'] = min(10, params['max_positions'] * 2)
+            if 'position_size' in params:
+                params['position_size'] = params['position_size'] * 2
+        
+        return params
 
     def run_test(self, n_jobs=None):
         """
@@ -939,7 +1201,7 @@ class DirectMonteCarloTest:
         if n_jobs is None:
             # Default to using all cores except one
             n_jobs = max(1, available_cores - 1)
-                else:
+        else:
             # Ensure n_jobs is valid
             n_jobs = min(max(1, n_jobs), available_cores)
         
@@ -961,10 +1223,12 @@ class DirectMonteCarloTest:
         
         # Run the original backtest
         print("Running original backtest...")
+        print(f"Using parameters: {self.parameters}")
         original_results = self._run_backtest(
             ticker_data=ticker_data,
             output_dir=original_output_dir,
-            label="original"
+            label="original",
+            parameters=self.parameters
         )
         
         if original_results is None:
@@ -998,6 +1262,7 @@ class DirectMonteCarloTest:
         # Results storage
         all_permutation_results = {period: [] for period in permutation_periods}
         all_permutation_metrics = {period: [] for period in permutation_periods}
+        all_permutation_parameters = {period: [] for period in permutation_periods}
         
         # Run permutations for each period in parallel
         for period in permutation_periods:
@@ -1012,18 +1277,42 @@ class DirectMonteCarloTest:
                     futures = [executor.submit(self._run_single_permutation, *args) for args in permutation_args]
                     
                     # Collect results as they complete
-                    for future in as_completed(futures):
+                    for i, future in enumerate(as_completed(futures)):
                         result = future.result()
                         if result is not None:
                             metrics = self._calculate_metrics(result)
+                            # Store the parameters used for this permutation
+                            permutation_params = result.get('parameters', None)
+                            if permutation_params:
+                                all_permutation_parameters[period].append(permutation_params)
+                            else:
+                                # If parameters weren't stored in results, recreate them
+                                permutation_params = self._create_permutation_parameters(
+                                    base_params=self.parameters.copy(),
+                                    permutation_index=i
+                                )
+                                all_permutation_parameters[period].append(permutation_params)
+                            
                             all_permutation_results[period].append(result)
                             all_permutation_metrics[period].append(metrics)
-        else:
+            else:
                 # Run sequentially
-                for args in permutation_args:
+                for i, args in enumerate(permutation_args):
                     result = self._run_single_permutation(*args)
                     if result is not None:
                         metrics = self._calculate_metrics(result)
+                        # Store the parameters used for this permutation
+                        permutation_params = result.get('parameters', None)
+                        if permutation_params:
+                            all_permutation_parameters[period].append(permutation_params)
+                        else:
+                            # If parameters weren't stored in results, recreate them
+                            permutation_params = self._create_permutation_parameters(
+                                base_params=self.parameters.copy(),
+                                permutation_index=i
+                            )
+                            all_permutation_parameters[period].append(permutation_params)
+                        
                         all_permutation_results[period].append(result)
                         all_permutation_metrics[period].append(metrics)
         
@@ -1034,6 +1323,9 @@ class DirectMonteCarloTest:
                 print(f"Permutation {i}:")
                 for key, value in metrics.items():
                     print(f"  {key}: {value:.4f}")
+        
+        # Find best parameters across all permutations based on performance
+        best_params = self._find_best_parameters(all_permutation_metrics, all_permutation_parameters)
         
         # Calculate significance for each period
         all_analysis_results = {}
@@ -1048,13 +1340,99 @@ class DirectMonteCarloTest:
         # If both in-sample and out-of-sample were run, compare them
         if len(permutation_periods) > 1:
             self._compare_periods(all_permutation_metrics, all_analysis_results)
+            
+        # Create visualizations for the results
+        self._create_visualizations(original_metrics, all_permutation_metrics)
         
-        # Return all results
-        return {
+        # Save final results
+        final_results = {
+            "strategy_name": self.strategy_name,
+            "original_parameters": self.parameters,
+            "best_parameters": best_params,
             "original_metrics": original_metrics,
             "permutation_metrics": all_permutation_metrics,
             "analysis": all_analysis_results
         }
+        
+        # Create analysis directory
+        analysis_dir = os.path.join(self.output_dir, "analysis")
+        os.makedirs(analysis_dir, exist_ok=True)
+        
+        # Save results to JSON
+        results_file = os.path.join(analysis_dir, "monte_carlo_results.json")
+        save_to_json(final_results, results_file)
+        print(f"\nFinal results saved to {results_file}")
+        
+        # Print best parameters
+        print(f"\nBest parameters: {best_params}")
+        
+        return final_results
+        
+    def _find_best_parameters(self, all_permutation_metrics, all_permutation_parameters):
+        """
+        Find the best parameters from all permutations based on performance metrics.
+        
+        Args:
+            all_permutation_metrics (dict): Dictionary of permutation metrics for each period
+            all_permutation_parameters (dict): Dictionary of parameters used for each permutation
+            
+        Returns:
+            dict: Best parameters found
+        """
+        # Strategy for finding best parameters:
+        # 1. First, prioritize out-of-sample performance if available
+        # 2. If not, use in-sample performance
+        # 3. Choose parameters that maximize a combination of metrics
+        
+        best_params = {}
+        best_score = -float('inf')
+        
+        # Prioritize out-of-sample performance
+        priority_periods = ['out_sample', 'in_sample']
+        
+        for period in priority_periods:
+            if period in all_permutation_metrics and all_permutation_metrics[period]:
+                # Get metrics and parameters for this period
+                metrics_list = all_permutation_metrics[period]
+                params_list = all_permutation_parameters[period]
+                
+                if not metrics_list or not params_list or len(metrics_list) != len(params_list):
+                    continue
+                
+                print(f"\nEvaluating {len(metrics_list)} parameter sets for {period}...")
+                
+                # Evaluate each parameter set
+                for i, (metrics, params) in enumerate(zip(metrics_list, params_list)):
+                    # Calculate a composite score based on multiple metrics
+                    # Higher is better for all except max_drawdown
+                    score = (
+                        metrics.get('sharpe_ratio', 0) * 1.0 +   # Prioritize Sharpe ratio
+                        metrics.get('total_return', 0) * 0.8 +   # Then total return
+                        metrics.get('win_rate', 0) * 0.5 +       # Then win rate
+                        metrics.get('profit_factor', 0) * 0.5 -  # Then profit factor
+                        metrics.get('max_drawdown', 0) * 1.0     # Penalize drawdown
+                    )
+                    
+                    # Require minimum number of trades
+                    trade_count = metrics.get('trade_count', 0)
+                    if trade_count < 5:
+                        score -= 5.0  # Heavily penalize too few trades
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_params = params.copy()
+                        print(f"  New best parameters found (score: {score:.4f}): {best_params}")
+                
+                # If we found parameters in the priority period, use them
+                if best_params:
+                    break
+        
+        # If no good parameters found, return original parameters
+        if not best_params:
+            print("No superior parameters found in permutations. Using original parameters.")
+            return self.parameters.copy()
+        
+        return best_params
 
     def _compare_periods(self, all_permutation_metrics, all_analysis_results):
         """
@@ -1197,7 +1575,7 @@ class DirectMonteCarloTest:
             import traceback
             traceback.print_exc()
 
-    def _run_backtest(self, ticker_data, output_dir, label="backtest"):
+    def _run_backtest(self, ticker_data, output_dir, label="backtest", parameters=None):
         """
         Run a backtest with the given ticker data.
         
@@ -1205,11 +1583,18 @@ class DirectMonteCarloTest:
             ticker_data (dict): Dictionary of ticker DataFrames
             output_dir (str): Directory to save results
             label (str): Label for this backtest
+            parameters (dict): Strategy parameters
             
         Returns:
             dict: Results of the backtest
         """
         try:
+            # Use the provided parameters or fall back to self.parameters
+            strategy_params = parameters if parameters is not None else self.parameters.copy()
+            
+            # Print parameters being used for this backtest
+            print(f"Running backtest for {label} with parameters: {strategy_params}")
+            
             # Create Cerebro instance
             cerebro = bt.Cerebro()
             
@@ -1235,7 +1620,7 @@ class DirectMonteCarloTest:
                     all_dates.extend(df_copy['Date'].dt.strftime('%Y-%m-%d').tolist())
                     # Set Date as index for backtrader
                     df_copy = df_copy.set_index('Date')
-            else:
+                else:
                     # If Date is already the index
                     all_dates.extend(df_copy.index.strftime('%Y-%m-%d').tolist())
                 
@@ -1281,26 +1666,34 @@ class DirectMonteCarloTest:
             if self.strategy_name == "SimpleStock":
                 cerebro.addstrategy(
                     SimpleStock,
-                    **self.parameters
+                    **strategy_params
                 )
             elif self.strategy_name == "MACrossover":
                 cerebro.addstrategy(
                     MACrossover,
-                    **self.parameters
+                    **strategy_params
                 )
             elif self.strategy_name == "AuctionMarket":
                 cerebro.addstrategy(
                     AuctionMarket,
-                    **self.parameters
+                    **strategy_params
                 )
             elif self.strategy_name == "MultiPosition":
                 cerebro.addstrategy(
                     MultiPosition,
-                    **self.parameters
+                    **strategy_params
                 )
             else:
-                print(f"Error: Strategy {self.strategy_name} not supported")
-                return None
+                # Try to get the strategy class from the registry
+                strategy_class = registry.get_strategy_class(self.strategy_name)
+                if strategy_class:
+                    cerebro.addstrategy(
+                        strategy_class,
+                        **strategy_params
+                    )
+                else:
+                    print(f"Error: Strategy {self.strategy_name} not found in registry or built-in strategies")
+                    return None
             
             # Run the backtest
             print(f"Running backtest for {label}...")
@@ -1334,6 +1727,10 @@ class DirectMonteCarloTest:
                         trade.get('pnl', 0.0),
                         trade.get('commission', 0.0)
                     ])
+            
+            # Count number of trades
+            trade_count = len(trade_log)
+            print(f"Generated {trade_count} trades in backtest")
             
             # Extract portfolio values from observer data
             # Use bt.observers.Value which records portfolio value at each step
@@ -1455,7 +1852,7 @@ class DirectMonteCarloTest:
                                 if ticker_df is not None:
                                     if 'Date' in ticker_df.columns:
                                         price_row = ticker_df[ticker_df['Date'].dt.strftime('%Y-%m-%d') == pos_date]
-                else:
+                                    else:
                                         price_row = ticker_df[ticker_df.index.strftime('%Y-%m-%d') == pos_date]
                                     
                                     if not price_row.empty:
@@ -1478,7 +1875,9 @@ class DirectMonteCarloTest:
             })
             
             # Save to CSV
-            portfolio_df.to_csv(os.path.join(output_dir, 'portfolio_values.csv'), index=False)
+            equity_curve_path = os.path.join(output_dir, 'equity_curve.csv')
+            portfolio_df.to_csv(equity_curve_path, index=False)
+            print(f"Saved equity curve to {equity_curve_path}")
             
             # Calculate metrics
             total_return = (final_value - initial_cash) / initial_cash
@@ -1490,20 +1889,32 @@ class DirectMonteCarloTest:
             # Create a plot of the portfolio value
             try:
                 plt.figure(figsize=(12, 6))
-                dates_array = np.array(portfolio_df['Date'])
-                values_array = np.array(portfolio_df['PortfolioValue'])
-                plt.plot(dates_array, values_array)
+                plt.plot(all_dates, portfolio_values)
                 plt.title(f'Portfolio Value - {label}')
                 plt.xlabel('Date')
                 plt.ylabel('Value ($)')
                 plt.xticks(rotation=45)
                 plt.tight_layout()
-                plt.savefig(os.path.join(output_dir, 'portfolio_value.png'))
+                plt.savefig(os.path.join(output_dir, 'equity_curve.png'))
                 plt.close()
             except Exception as e:
                 print(f"Warning: Failed to create portfolio value plot: {e}")
                 import traceback
                 traceback.print_exc()
+            
+            # Save results to JSON
+            results_json = {
+                'initial_value': initial_cash,
+                'final_value': final_value,
+                'total_return': total_return,
+                'sharpe_ratio': sharpe_ratio,
+                'max_drawdown': max_drawdown,
+                'trade_count': trade_count
+            }
+            
+            results_json_path = os.path.join(output_dir, f"{label}_results.json")
+            save_to_json(results_json, results_json_path)
+            print(f"Saved results to {results_json_path}")
             
             # Return the results
             return {
@@ -1512,8 +1923,10 @@ class DirectMonteCarloTest:
                 'total_return': total_return,
                 'sharpe_ratio': sharpe_ratio,
                 'max_drawdown': max_drawdown,
+                'trade_count': trade_count,
                 'trade_analysis': trade_analysis,
-                'portfolio_values': portfolio_df
+                'portfolio_values': portfolio_df,
+                'parameters': strategy_params  # Include the parameters used in the results
             }
         
         except Exception as e:
@@ -1538,7 +1951,8 @@ class DirectMonteCarloTest:
                 'total_return': 0.0,
                 'max_drawdown': 0.0,
                 'win_rate': 0.0,
-                'profit_factor': 0.0
+                'profit_factor': 0.0,
+                'trade_count': 0
             }
         
         try:
@@ -1551,7 +1965,8 @@ class DirectMonteCarloTest:
                     'total_return': 0.0,
                     'max_drawdown': 0.0,
                     'win_rate': 0.0,
-                    'profit_factor': 0.0
+                    'profit_factor': 0.0,
+                    'trade_count': 0
                 }
             
             # Calculate daily returns
@@ -1585,6 +2000,10 @@ class DirectMonteCarloTest:
             # Total trades
             total_trades = trade_analysis.get('total', {}).get('total', 0)
             
+            # If trade count isn't available from trade_analysis, use the one in results
+            if total_trades == 0:
+                total_trades = backtest_results.get('trade_count', 0)
+            
             # Winning trades
             won_trades = trade_analysis.get('won', {}).get('total', 0)
             
@@ -1603,7 +2022,8 @@ class DirectMonteCarloTest:
                 'total_return': total_return,
                 'max_drawdown': max_drawdown,
                 'win_rate': win_rate,
-                'profit_factor': profit_factor
+                'profit_factor': profit_factor,
+                'trade_count': total_trades
             }
             
         except Exception as e:
@@ -1615,7 +2035,8 @@ class DirectMonteCarloTest:
                 'total_return': 0.0,
                 'max_drawdown': 0.0,
                 'win_rate': 0.0,
-                'profit_factor': 0.0
+                'profit_factor': 0.0,
+                'trade_count': 0
             }
 
     def _analyze_results(self, original_metrics, permutation_metrics):
@@ -1654,10 +2075,91 @@ class DirectMonteCarloTest:
         
         return results
 
-    def generate_plots(self, original_metrics, permutation_metrics):
-        """Generate plots for the Monte Carlo test results"""
-        # Implementation of generate_plots method
-        pass
+    def _create_visualizations(self, original_metrics, all_permutation_metrics):
+        """
+        Create visualizations for the Monte Carlo test results.
+        
+        Args:
+            original_metrics (dict): Original backtest metrics
+            all_permutation_metrics (dict): Dictionary of permutation metrics for each period
+        """
+        try:
+            # Create visualizations directory
+            visualizations_dir = os.path.join(self.output_dir, "visualizations")
+            os.makedirs(visualizations_dir, exist_ok=True)
+            
+            print(f"Creating Monte Carlo test visualizations in {visualizations_dir}...")
+            
+            # Get metrics to visualize
+            metrics_to_plot = ['sharpe_ratio', 'total_return', 'win_rate', 'profit_factor', 'max_drawdown']
+            
+            # Process each period
+            for period, permutation_metrics in all_permutation_metrics.items():
+                if not permutation_metrics:
+                    continue
+                
+                for metric in metrics_to_plot:
+                    # Get values for this metric
+                    metric_values = [p.get(metric, 0) for p in permutation_metrics if metric in p]
+                    
+                    if not metric_values:
+                        continue
+                    
+                    # Create histogram
+                    plt.figure(figsize=(10, 6))
+                    
+                    # Plot histogram with KDE
+                    plt.hist(metric_values, bins=min(10, len(metric_values)), alpha=0.7, 
+                             label=f'Permutation {metric}')
+                    
+                    # Add vertical line for original value
+                    if metric in original_metrics:
+                        original_value = original_metrics[metric]
+                        plt.axvline(original_value, color='red', linestyle='dashed', linewidth=2,
+                                   label=f'Original: {original_value:.4f}')
+                    
+                    # Add mean and std deviation lines
+                    mean_val = np.mean(metric_values)
+                    std_val = np.std(metric_values)
+                    plt.axvline(mean_val, color='green', linestyle='dashed', linewidth=1,
+                               label=f'Mean: {mean_val:.4f}')
+                    plt.axvline(mean_val + std_val, color='green', linestyle='dotted', linewidth=1,
+                               label=f'Mean + Std: {(mean_val + std_val):.4f}')
+                    plt.axvline(mean_val - std_val, color='green', linestyle='dotted', linewidth=1,
+                               label=f'Mean - Std: {(mean_val - std_val):.4f}')
+                    
+                    # Calculate p-value
+                    if metric in original_metrics:
+                        original_value = original_metrics[metric]
+                        if original_value > 0:  # Higher is better
+                            p_value = sum(1 for v in metric_values if v >= original_value) / len(metric_values)
+                        else:  # Lower is better (e.g., max_drawdown)
+                            p_value = sum(1 for v in metric_values if v <= original_value) / len(metric_values)
+                        
+                        # Add p-value to title
+                        plt.title(f'Distribution of {metric.replace("_", " ").title()} (p-value: {p_value:.4f})')
+                    else:
+                        plt.title(f'Distribution of {metric.replace("_", " ").title()}')
+                    
+                    plt.xlabel(metric.replace('_', ' ').title())
+                    plt.ylabel('Frequency')
+                    plt.legend()
+                    plt.grid(True, alpha=0.3)
+                    plt.tight_layout()
+                    
+                    # Save plot
+                    plot_path = os.path.join(visualizations_dir, f"{metric}_distribution.png")
+                    plt.savefig(plot_path)
+                    plt.close()
+                    
+                    print(f"Created visualization for {metric}")
+            
+            print(f"Visualizations created in {visualizations_dir}")
+            
+        except Exception as e:
+            print(f"Error creating visualizations: {e}")
+            import traceback
+            traceback.print_exc()
 
     def extract_metrics(self, results):
         """Extract performance metrics from backtrader results"""

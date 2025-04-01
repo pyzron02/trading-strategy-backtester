@@ -1,0 +1,6 @@
+{
+    "SimpleStock": {
+        "sma_period": [5, 10, 15, 20, 25, 30, 40, 50],
+        "position_size": [5, 10, 20, 30, 50]
+    }
+} 
