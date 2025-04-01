@@ -14,6 +14,104 @@ This project provides a Python-based framework for backtesting, optimizing, and 
 -   **Detailed Logging:** Generates comprehensive logs, including trade logs and portfolio value tracking.
 -   **Parallel Processing:** Leverages multiple CPU cores for optimization and Monte Carlo simulations.
 
+## Monte Carlo Simulation
+
+The Monte Carlo simulation framework creates synthetic but statistically similar market conditions to test how a trading strategy performs under different scenarios. This helps determine if a strategy's performance is due to actual edge or random chance.
+
+### Overall Process Flow
+
+```
+┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌─────────────┐     ┌──────────────┐
+│ Load Stock  │────▶│ Run Original │────▶│ Generate Data │────▶│ Run Monte   │────▶│ Analyze      │
+│ Data        │     │ Backtest     │     │ Permutations  │     │ Carlo Tests │     │ Results      │
+└─────────────┘     └──────────────┘     └───────────────┘     └─────────────┘     └──────────────┘
+```
+
+### Data Loading & Preparation
+
+```
+┌─────────────┐     ┌───────────────┐     ┌───────────────┐
+│ Stock Data  │────▶│ Data Cleaning │────▶│ Format        │
+│ CSV Files   │     │ & Validation  │     │ for Backtrader│
+└─────────────┘     └───────────────┘     └───────────────┘
+```
+
+### Monte Carlo Simulation Process
+
+```
+┌────────────┐                                     ┌─────────────┐
+│ Original   │                                     │ Statistical │
+│ Backtest   │──┐                                  │ Analysis    │
+└────────────┘  │                                  └─────────────┘
+                │                                         ▲
+                ▼                                         │
+┌─────────────────────────────────────────────────────────────────────┐
+│                   Monte Carlo Permutations                           │
+│                                                                      │
+│  ┌────────────┐    ┌────────────┐    ┌────────────┐    ┌──────────┐ │
+│  │Permutation │    │Permutation │    │Permutation │    │   ...    │ │
+│  │    #1      │    │    #2      │    │    #3      │    │          │ │
+│  └────────────┘    └────────────┘    └────────────┘    └──────────┘ │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Permutation Methods
+
+The code implements three different permutation methods to create synthetic market data:
+
+```
+1. Returns Permutation
+   ┌───────────┐     ┌────────────┐     ┌───────────────┐
+   │ Calculate │────▶│ Shuffle    │────▶│ Reconstruct   │
+   │ Returns   │     │ Returns    │     │ Price Series  │
+   └───────────┘     └────────────┘     └───────────────┘
+
+2. Block Permutation
+   ┌───────────┐     ┌────────────┐     ┌───────────────┐
+   │ Create    │────▶│ Shuffle    │────▶│ Reconstruct   │
+   │ Blocks    │     │ Blocks     │     │ Price Series  │
+   └───────────┘     └────────────┘     └───────────────┘
+
+3. Stationary Bootstrap
+   ┌────────────┐     ┌────────────────────┐     ┌───────────────┐
+   │ Generate   │────▶│ Sample Blocks with │────▶│ Reconstruct   │
+   │ Block Size │     │ Random Lengths     │     │ Price Series  │
+   └────────────┘     └────────────────────┘     └───────────────┘
+```
+
+### Statistical Analysis
+
+```
+┌────────────────┐     ┌─────────────────┐     ┌───────────────┐     ┌─────────────────┐
+│ Original       │     │ Calculate       │     │ Compare with  │     │ Generate        │
+│ Performance    │────▶│ Performance     │────▶│ Permutation   │────▶│ Visualizations  │
+│ Metrics        │     │ Distribution    │     │ Distribution  │     │ & P-values      │
+└────────────────┘     └─────────────────┘     └───────────────┘     └─────────────────┘
+```
+
+### Parameter Optimization
+
+```
+┌────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌───────────────┐
+│ Vary Strategy  │────▶│ Evaluate        │────▶│ Calculate       │────▶│ Identify Best │
+│ Parameters     │     │ Performance     │     │ Composite       │     │ Parameter Set │
+│ Per Permutation│     │ Per Parameter   │     │ Score           │     │               │
+└────────────────┘     └─────────────────┘     └─────────────────┘     └───────────────┘
+```
+
+### Key Concepts
+
+1. **Permutation Testing**: By randomly shuffling historical data while preserving its statistical properties, the system tests if strategy performance is due to actual edge or random chance.
+
+2. **Multiple Permutation Methods**: Different shuffling approaches (returns, blocks, stationary bootstrap) preserve different market characteristics.
+
+3. **Parameter Robustness**: Testing parameters across many market conditions helps find settings that work in various environments.
+
+4. **P-value Calculation**: The proportion of permutations that outperform the original strategy indicates statistical significance.
+
+5. **In-Sample vs Out-of-Sample**: The framework can test on different time periods to assess strategy robustness.
+
 ## Directory Structure (Simplified)
 
 ```
