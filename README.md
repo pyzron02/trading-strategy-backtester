@@ -139,10 +139,10 @@ The code implements three different permutation methods to create synthetic mark
 
 2.  **Install dependencies:**
     It is recommended to use a virtual environment.
-    ```bash
+```bash
     python -m venv venv
     source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-    pip install -r requirements.txt
+pip install -r requirements.txt
     pip install backtrader # Add backtrader explicitly
     ```
     *Note: The `requirements.txt` might be incomplete. Ensure `backtrader`, `pandas`, `numpy`, and `matplotlib` are installed.*
@@ -211,5 +211,4 @@ Results, logs, and plots are saved in timestamped subdirectories within the `out
 
 ## License
 
-[Specify your license - e.g., MIT, GPL-3.0]
-*(The previous README mentioned GPL-3.0)* 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
