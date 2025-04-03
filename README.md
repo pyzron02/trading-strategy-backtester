@@ -1,18 +1,35 @@
 # Trading Strategy Backtester Framework
 
-This project provides a Python-based framework for backtesting, optimizing, and evaluating trading strategies using historical market data. It integrates several key testing methodologies, including simple backtesting, parameter optimization, walk-forward analysis, and Monte Carlo simulations.
+This project provides a Python-based framework for backtesting, optimizing, and evaluating trading strategies using historical market data. It specializes in Monte Carlo simulations for robust strategy validation.
 
 ## Features
 
--   **Unified Workflow:** Provides a single command-line interface (`unified_workflow.py`) to run different testing scenarios.
--   **Backtesting Engine:** Utilizes the `backtrader` library for robust event-driven backtesting.
--   **Strategy Support:** Includes several example strategies (e.g., `SimpleStock`, `MACrossover`, `AuctionMarket`, `MultiPosition`) and a registry for adding custom strategies.
--   **Parameter Optimization:** Finds optimal strategy parameters using in-sample data.
--   **Walk-Forward Testing:** Evaluates strategy robustness by testing optimized parameters on subsequent out-of-sample periods.
--   **Monte Carlo Simulation:** Assesses strategy robustness against variations in market data using data permutation techniques (via `DirectMonteCarloTest`). Calculates p-values for key metrics.
--   **Performance Metrics:** Calculates standard performance metrics (Total Return, Sharpe Ratio, Max Drawdown, Win Rate, Profit Factor).
--   **Detailed Logging:** Generates comprehensive logs, including trade logs and portfolio value tracking.
--   **Parallel Processing:** Leverages multiple CPU cores for optimization and Monte Carlo simulations.
+- **Monte Carlo Testing:** Core feature for robust strategy validation using the `DirectMonteCarloTest` class
+  - Data permutation techniques for statistical validation
+  - P-value calculations for key performance metrics
+  - Parameter optimization and trade generation enhancement
+  
+- **Backtesting Engine:** Utilizes the `backtrader` library for event-driven backtesting
+  - Customizable strategy implementation
+  - Detailed performance metrics and trade logging
+  - Portfolio value tracking and equity curve generation
+
+- **Strategy Support:** 
+  - Built-in strategies (`SimpleStock`, `MACrossover`, `AuctionMarket`, `MultiPosition`)
+  - Strategy registry for custom implementations
+  - Parameter variation during testing
+
+- **Performance Metrics:** 
+  - Total Return
+  - Sharpe Ratio
+  - Max Drawdown
+  - Win Rate
+  - Profit Factor
+  - Trade Count validation
+
+- **Parallel Processing:** 
+  - Multi-core support for faster Monte Carlo simulations
+  - Configurable worker count
 
 ## Monte Carlo Simulation
 
@@ -80,6 +97,18 @@ The code implements three different permutation methods to create synthetic mark
    └────────────┘     └────────────────────┘     └───────────────┘
 ```
 
+### Parameter Optimization & Trade Generation
+
+The framework ensures that every Monte Carlo permutation generates meaningful trades through:
+
+```
+┌────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ Initial        │────▶│ Adaptive        │────▶│ Aggressive      │
+│ Parameters     │     │ Parameters Per  │     │ Parameters      │
+│                │     │ Permutation     │     │ (If No Trades)  │
+└────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
 ### Statistical Analysis
 
 ```
@@ -90,120 +119,119 @@ The code implements three different permutation methods to create synthetic mark
 └────────────────┘     └─────────────────┘     └───────────────┘     └─────────────────┘
 ```
 
-### Parameter Optimization
+### Visualization Suite
+
+The framework generates comprehensive visualizations:
 
 ```
-┌────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌───────────────┐
-│ Vary Strategy  │────▶│ Evaluate        │────▶│ Calculate       │────▶│ Identify Best │
-│ Parameters     │     │ Performance     │     │ Composite       │     │ Parameter Set │
-│ Per Permutation│     │ Per Parameter   │     │ Score           │     │               │
-└────────────────┘     └─────────────────┘     └─────────────────┘     └───────────────┘
+┌─────────────────┐     ┌────────────────┐     ┌────────────────┐
+│ Distribution    │     │ Equity Curve   │     │ Price Path     │
+│ Plots Per Metric│─────│ Visualizations │─────│ Comparisons    │
+│                 │     │                │     │                │
+└─────────────────┘     └────────────────┘     └────────────────┘
 ```
 
 ### Key Concepts
 
 1. **Permutation Testing**: By randomly shuffling historical data while preserving its statistical properties, the system tests if strategy performance is due to actual edge or random chance.
 
-2. **Multiple Permutation Methods**: Different shuffling approaches (returns, blocks, stationary bootstrap) preserve different market characteristics.
+2. **Multiple Permutation Methods**: Different shuffling approaches preserve different market characteristics.
 
-3. **Parameter Robustness**: Testing parameters across many market conditions helps find settings that work in various environments.
+3. **Parameter Optimization**: Automatically finds and reports the best parameters across permutations based on composite performance scores.
 
-4. **P-value Calculation**: The proportion of permutations that outperform the original strategy indicates statistical significance.
+4. **Adaptive Parameters**: Ensures trades are generated for every permutation by adjusting parameters and implementing fallback mechanisms.
 
-5. **In-Sample vs Out-of-Sample**: The framework can test on different time periods to assess strategy robustness.
+5. **P-value Calculation**: The proportion of permutations that outperform the original strategy indicates statistical significance.
 
-## Directory Structure (Simplified)
+6. **Trade Validation**: Ensures that strategies actually generate trades and tracks trade counts as a key metric.
+
+## Directory Structure
 
 ```
 .
 ├── src/
-│   ├── engine/          # Core backtesting, optimization, and testing logic
-│   ├── strategies/      # Trading strategy implementations
-│   ├── workflows/       # High-level workflow scripts (e.g., unified_workflow.py)
-│   ├── monte_carlo/     # Direct Monte Carlo simulation implementation
-│   └── runners/         # Helper scripts for specific runs
-├── input/               # Input data (e.g., stock_data.csv - requires user setup)
-├── output/              # Directory for backtest results, logs, and plots
-├── docs/                # (Potentially outdated) Detailed documentation
-├── requirements.txt     # Python package dependencies
-└── README.md            # This file
+│   ├── monte_carlo/       # Direct Monte Carlo implementation
+│   │   └── direct_monte_carlo.py  # Core Monte Carlo testing logic
+│   ├── strategies/        # Trading strategy implementations
+│   │   ├── simple_stock.py
+│   │   └── ma_crossover.py
+│   └── utils/             # Utility functions
+├── input/                 # Stock data input files
+├── output/                # Test results and visualizations
+│   └── monte_carlo_test_*/  # Timestamped Monte Carlo test results
+├── run_complete_monte_carlo.py  # Main entry point script
+├── requirements.txt       # Python dependencies
+├── LICENSE                # MIT license
+└── README.md              # This documentation
 ```
 
 ## Installation
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd trading-strategy-backtester
-    ```
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd trading-strategy-backtester
+   ```
 
-2.  **Install dependencies:**
-    It is recommended to use a virtual environment.
-```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-pip install -r requirements.txt
-    pip install backtrader # Add backtrader explicitly
-    ```
-    *Note: The `requirements.txt` might be incomplete. Ensure `backtrader`, `pandas`, `numpy`, and `matplotlib` are installed.*
+2. **Install dependencies:**
+   It is recommended to use a virtual environment.
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   pip install -r requirements.txt
+   pip install backtrader # Add backtrader explicitly
+   ```
+   *Note: Ensure `backtrader`, `pandas`, `numpy`, and `matplotlib` are installed.*
 
 ## Usage
 
-The primary entry point is `src/workflows/unified_workflow.py`. You can run different workflows using the `--workflow-type` argument.
+The primary entry point is `run_complete_monte_carlo.py` for running Monte Carlo tests:
+
+```bash
+python run_complete_monte_carlo.py \
+    --strategy SimpleStock \
+    --tickers AAPL \
+    --num-permutations 100 \
+    --num-cores 4 \
+    --verbose
+```
 
 **Common Arguments:**
 
-*   `--strategy`: Name of the strategy (e.g., `SimpleStock`, `MACrossover`).
-*   `--tickers`: Comma-separated list of stock tickers (e.g., `AAPL,MSFT`).
-*   `--start-date`: Start date (YYYY-MM-DD).
-*   `--end-date`: End date (YYYY-MM-DD).
-*   `--num-cores`: Number of CPU cores for parallel tasks (optional).
-*   `--output-dir`: Specify a custom output directory (optional).
-*   `--verbose`: Enable detailed logging (optional).
+* `--strategy`: Name of the strategy (e.g., `SimpleStock`, `MACrossover`).
+* `--tickers`: Comma-separated list of stock tickers (e.g., `AAPL,MSFT`).
+* `--start-date`: Start date for data (YYYY-MM-DD). Default uses all available data.
+* `--end-date`: End date for data (YYYY-MM-DD). Default uses all available data.
+* `--in-sample-ratio`: Ratio of data to use for in-sample period (0.0 to 1.0). Default is 0.7.
+* `--num-permutations`: Number of Monte Carlo permutations to run. Default is 100.
+* `--num-cores`: Number of CPU cores for parallel processing. Default is 1.
+* `--output-dir`: Specify a custom output directory. Default is timestamped directory.
+* `--verbose`: Enable detailed logging.
 
-**Example Workflows:**
+## Output Structure
 
-1.  **Run a Simple Backtest:**
-    Uses default parameters for the specified strategy over the entire date range.
-    ```bash
-    python -m src.workflows.unified_workflow --workflow-type simple --strategy SimpleStock --tickers AAPL --start-date 2020-01-01 --end-date 2022-12-31
-    ```
+Results are saved in timestamped directories like `output/monte_carlo_test_YYYYMMDD_HHMMSS/`. Common outputs include:
 
-2.  **Run Parameter Optimization:**
-    Optimizes strategy parameters on an in-sample period (first 70% of data by default).
-    ```bash
-    python -m src.workflows.unified_workflow --workflow-type optimize --strategy MACrossover --tickers MSFT --start-date 2019-01-01 --end-date 2022-12-31 --num-cores 4
-    ```
-    *(Requires a parameter file, e.g., `src/strategies/params/MACrossover_params.json`, to define parameter ranges. See code/docs for details).*
+* **Original Backtest Results:**
+  * `original_results.json`: Performance metrics for original backtest
+  * `trade_log_original.csv`: Log of all trades from original backtest
+  * `equity_curve.csv`: Portfolio value over time for original backtest
 
-3.  **Run Walk-Forward Analysis:**
-    Performs optimization on rolling in-sample windows and tests on subsequent out-of-sample windows.
-    ```bash
-    python -m src.workflows.unified_workflow --workflow-type walkforward --strategy SimpleStock --tickers AAPL,GOOG --start-date 2018-01-01 --end-date 2022-12-31 --num-cores 4
-    ```
-    *(Requires parameter file. Configure walk-forward parameters like window sizes within the script or via args if implemented).*
+* **Permutation Results:**
+  * Individual permutation results in separate directories
+  * Parameter variations used for each permutation
+  * Best parameters found across all permutations
 
-4.  **Run Monte Carlo Simulation:**
-    Uses the best parameters (can be found via optimization or defaults) and runs Monte Carlo permutations on out-of-sample data.
-    ```bash
-    # Assumes best parameters are found or defaults are used
-    python -m src.workflows.unified_workflow --workflow-type montecarlo --strategy MACrossover --tickers AAPL --start-date 2019-01-01 --end-date 2022-12-31 --num-permutations 100 --num-cores 4
-    ```
+* **Visualizations:**
+  * Distribution plots for key metrics (PNG files)
+  * Equity curves comparing original vs. permutations
+  * Price path visualizations
+  * Statistical significance indicators
 
-5.  **Run a Complete Workflow (Optimization + Walk-Forward + Monte Carlo):**
-    Executes optimization, then walk-forward, and finally Monte Carlo using the best parameters found.
-    ```bash
-    python -m src.workflows.unified_workflow --workflow-type complete --strategy SimpleStock --tickers AAPL --start-date 2019-01-01 --end-date 2022-12-31 --num-permutations 100 --num-cores 4
-    ```
-    *(Requires parameter file).*
-
-## Output
-
-Results, logs, and plots are saved in timestamped subdirectories within the `output/` folder by default, or in the specified `--output-dir`. Common outputs include:
--   Performance metrics (JSON or text files)
--   Portfolio value charts (PNG)
--   Trade logs (CSV)
--   Monte Carlo result distributions (plots and data)
+* **Summary Reports:**
+  * P-values for performance metrics
+  * Best parameters recommendation
+  * Overall strategy robustness assessment
 
 ## Contributing
 
