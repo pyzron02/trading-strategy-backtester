@@ -32,9 +32,10 @@ from engine.testing.in_sample_excellence import InSampleExcellence
 from strategies import registry
 from engine.run_backtest import run_backtest
 
-# Import the direct Monte Carlo implementation
+# Import the Monte Carlo implementations
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from src.monte_carlo.direct_monte_carlo import DirectMonteCarloTest
+from src.monte_carlo.trade_based_monte_carlo import TradeBasedMonteCarloTest
 
 # Add imports from runners
 sys.path.append(os.path.join(src_dir, 'runners'))
@@ -285,6 +286,163 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         }
 
 @log_execution_time('workflow')
+def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
+                            out_of_sample_start=None, num_simulations=1000, parameters=None, 
+                            best_params=None, output_dir=None, verbose=False, seed=None):
+    """
+    Run trade-based Monte Carlo tests safely by handling errors gracefully.
+    Uses the TradeBasedMonteCarloTest implementation which resamples trade returns.
+    
+    Args:
+        strategy_name (str): Name of the strategy to test
+        tickers (list): List of ticker symbols to include
+        start_date (str): Start date for historical data
+        end_date (str): End date for historical data
+        out_of_sample_start (str): Start date for out-of-sample period
+        num_simulations (int): Number of Monte Carlo simulations to run
+        parameters (dict): Parameter ranges for the strategy optimization
+        best_params (dict): Best parameters to use for the strategy
+        output_dir (str): Directory to save results
+        verbose (bool): Whether to print verbose output
+        seed (int): Random seed for reproducibility
+    
+    Returns:
+        dict: Results of the trade-based Monte Carlo testing
+    """
+    # Convert any date parameters to strings if they are pandas Timestamps
+    if start_date is not None and isinstance(start_date, pd.Timestamp):
+        start_date = start_date.strftime('%Y-%m-%d')
+    
+    if end_date is not None and isinstance(end_date, pd.Timestamp):
+        end_date = end_date.strftime('%Y-%m-%d')
+        
+    if out_of_sample_start is not None and isinstance(out_of_sample_start, pd.Timestamp):
+        out_of_sample_start = out_of_sample_start.strftime('%Y-%m-%d')
+    
+    # Handle strategy parameters
+    if best_params is None:
+        if strategy_name == "MACrossover":
+            best_params = {'fast_period': 5, 'slow_period': 20, 'position_size': 10}
+        elif strategy_name == "SimpleStock":
+            best_params = {'sma_period': 20, 'position_size': 10}
+        else:
+            best_params = {}
+    
+    # Set default dates if not provided
+    if start_date is None:
+        start_date = "2015-01-01"
+    
+    if end_date is None:
+        end_date = "2021-12-31"
+    
+    # Calculate out-of-sample start date if not provided
+    if out_of_sample_start is None:
+        full_range = pd.to_datetime(end_date) - pd.to_datetime(start_date)
+        in_sample_days = int(full_range.days * 0.7)  # 70% for in-sample by default
+        out_of_sample_start = (pd.to_datetime(start_date) + timedelta(days=in_sample_days)).strftime('%Y-%m-%d')
+    
+    if verbose:
+        print(f"Using out-of-sample start date: {out_of_sample_start}")
+        print(f"Full date range: {start_date} to {end_date}")
+    
+    # Set a default output directory if None
+    if output_dir is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = os.path.join(os.path.dirname(src_dir), 'output', f"{strategy_name}_trade_monte_carlo_{timestamp}")
+        if verbose:
+            print(f"Using default output directory: {output_dir}")
+    
+    # Ensure the output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    try:
+        if verbose:
+            print("Using Trade-Based Monte Carlo implementation")
+            print(f"Running {num_simulations} simulations with resampled trade returns")
+        
+        # Initialize the Trade-Based Monte Carlo test
+        monte_carlo_test = TradeBasedMonteCarloTest(
+            strategy_name=strategy_name,
+            parameters=best_params,
+            tickers=tickers,
+            input_dir=os.path.join(project_root, 'input'),
+            output_dir=output_dir,
+            num_simulations=num_simulations,
+            seed=seed,
+            verbose=verbose
+        )
+        
+        # Run the test with out-of-sample start date
+        results = monte_carlo_test.run_test(out_of_sample_start)
+        
+        if results:
+            # Trade log information
+            trade_log_path = os.path.join(output_dir, 'original_trade_log.csv')
+            trade_log_exists = os.path.exists(trade_log_path)
+            
+            if verbose:
+                print(f"Analysis results summary:")
+                for metric, stats in results.items():
+                    print(f"  {metric}: Original={stats.get('original', 'N/A'):.4f}, "
+                          f"Mean={stats.get('mean', 'N/A'):.4f}, "
+                          f"p-value={stats.get('p_value', 'N/A'):.4f}")
+            
+            return {
+                'success': True,
+                'results': results,
+                'parameters': best_params,
+                'dates': {
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'out_of_sample_start': out_of_sample_start
+                },
+                'trade_log': {
+                    'original': trade_log_path if trade_log_exists else None
+                }
+            }
+        else:
+            return {
+                'success': False,
+                'error': 'Trade-Based Monte Carlo test failed to produce results',
+                'parameters': best_params,
+                'dates': {
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'out_of_sample_start': out_of_sample_start
+                }
+            }
+        
+    except Exception as e:
+        error_msg = f"Error during Trade-Based Monte Carlo testing: {e}"
+        print(error_msg)
+        traceback_str = ""
+        try:
+            traceback_str = traceback.format_exc()
+            print(traceback_str)
+        except:
+            pass
+        
+        # Create an error log file in the output directory
+        try:
+            with open(os.path.join(output_dir, "trade_monte_carlo_error.log"), "w") as f:
+                f.write(f"Error: {error_msg}\n\n")
+                f.write(f"Traceback:\n{traceback_str}")
+        except:
+            pass
+            
+        return {
+            'success': False,
+            'error': str(e),
+            'traceback': traceback_str,
+            'parameters': best_params,
+            'dates': {
+                'start_date': start_date,
+                'end_date': end_date,
+                'out_of_sample_start': out_of_sample_start
+            }
+        }
+
+@log_execution_time('workflow')
 def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date=None, 
                          param_file=None, num_workers=None, output_dir=None, 
                          in_sample_ratio=0.7, num_permutations=0, verbose=False):
@@ -485,7 +643,7 @@ def main():
     
     # Required arguments
     parser.add_argument('--workflow-type', type=str, required=True, 
-                        choices=['simple', 'monte-carlo', 'walk-forward', 'complete'],
+                        choices=['simple', 'monte-carlo', 'trade-monte-carlo', 'walk-forward', 'complete'],
                         help='Type of workflow to run')
     parser.add_argument('--strategy', type=str, required=True,
                         help='Strategy to use for the backtest')
@@ -497,10 +655,14 @@ def main():
                         help='Start date for the backtest')
     parser.add_argument('--end-date', type=str, default="2021-12-31",
                         help='End date for the backtest')
+    parser.add_argument('--out-of-sample-start', type=str, default=None,
+                        help='Start date for out-of-sample period (for trade-monte-carlo)')
     parser.add_argument('--param-file', type=str,
                         help='Path to a parameter file to use for the backtest')
     parser.add_argument('--num-permutations', type=int, default=10,
-                        help='Number of permutations to use for Monte Carlo testing')
+                        help='Number of permutations to use for market data Monte Carlo testing')
+    parser.add_argument('--num-simulations', type=int, default=1000,
+                        help='Number of simulations to use for trade-based Monte Carlo testing')
     parser.add_argument('--output-dir', type=str,
                         help='Directory to save results')
     parser.add_argument('--in-sample-ratio', type=float, default=0.7, 
@@ -509,6 +671,8 @@ def main():
                         help='Print verbose output')
     parser.add_argument('--num-cores', type=int, default=None,
                         help='Number of CPU cores to use for parallel processing')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Random seed for reproducibility')
     
     args = parser.parse_args()
     
@@ -605,20 +769,78 @@ def main():
                     print(f"\nTrade logs summary saved to: {os.path.join(args.output_dir, 'trade_log_summary.json')}")
                 else:
                     print("\nTrade logs summary saved to the output directory")
+    elif args.workflow_type == 'trade-monte-carlo':
+        # Run the Trade-Based Monte Carlo test
+        print(f"Running Trade-Based Monte Carlo test for {args.strategy}...")
+        
+        # Convert simulations to integer
+        num_simulations = int(args.num_simulations) if args.num_simulations else 1000
+        
+        # Use params from file if provided
+        parameters = None
+        best_params = None
+        if args.param_file:
+            try:
+                param_manager = ParameterManager()
+                best_params = param_manager.load_parameter_file(args.param_file)
+                if args.verbose:
+                    print(f"Loaded parameters from {args.param_file}: {best_params}")
+            except Exception as e:
+                print(f"Error loading parameters from {args.param_file}: {e}")
+                print("Using default parameters instead.")
+        
+        # Run the Trade-Based Monte Carlo test safely
+        results = run_trade_monte_carlo_safely(
+            strategy_name=args.strategy,
+            tickers=args.tickers if isinstance(args.tickers, list) else (args.tickers.split(',') if args.tickers else ['AAPL']),
+            start_date=args.start_date,
+            end_date=args.end_date,
+            out_of_sample_start=args.out_of_sample_start,
+            num_simulations=num_simulations,
+            parameters=parameters,
+            best_params=best_params,
+            output_dir=args.output_dir,
+            verbose=args.verbose,
+            seed=args.seed
+        )
+        
+        if not results or not results.get('success', False):
+            error_msg = results.get('error', 'Unknown error') if results else 'No results returned'
+            print(f"Trade-Based Monte Carlo testing failed: {error_msg}")
+        else:
+            print("Trade-Based Monte Carlo testing completed successfully.")
+            
+            # Save detailed results
+            if args.output_dir:
+                results_file = os.path.join(args.output_dir, "trade_monte_carlo_results.json")
+                with open(results_file, 'w') as f:
+                    json.dump(results, f, indent=4, cls=CustomJSONEncoder)
+                print(f"Results saved to {results_file}")
+            
+            # Summary of p-values
+            if (results and 'results' in results):
+                print("\nP-values for performance metrics:")
+                for metric, stats in results['results'].items():
+                    if 'p_value' in stats:
+                        p_value = stats['p_value']
+                        significance = "Significant" if p_value < 0.05 else "Not significant"
+                        print(f"  {metric.replace('_', ' ').title()}: {p_value:.4f} ({significance})")
+            else:
+                print("No analysis results available.")
     elif args.workflow_type == 'complete':
-            # Run the complete workflow with optimization and Monte Carlo
-            run_complete_workflow(
-                strategy_name=args.strategy,
-                tickers=args.tickers,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                param_file=args.param_file,
-                num_workers=args.num_cores,
-                output_dir=args.output_dir,
-                in_sample_ratio=args.in_sample_ratio,
-                num_permutations=args.num_permutations,
-                verbose=args.verbose
-            )
+        # Run the complete workflow with optimization and Monte Carlo
+        run_complete_workflow(
+            strategy_name=args.strategy,
+            tickers=args.tickers,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            param_file=args.param_file,
+            num_workers=args.num_cores,
+            output_dir=args.output_dir,
+            in_sample_ratio=args.in_sample_ratio,
+            num_permutations=args.num_permutations,
+            verbose=args.verbose
+        )
     elif args.workflow_type == 'walk-forward':
         # Calculate dates based on in-sample ratio
         date_range = (datetime.strptime(args.end_date, '%Y-%m-%d') - datetime.strptime(args.start_date, '%Y-%m-%d')).days
