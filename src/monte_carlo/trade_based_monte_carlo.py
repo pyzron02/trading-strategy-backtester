@@ -158,10 +158,13 @@ class TradeBasedMonteCarloTest:
                 print(f"Using {num_workers} CPU cores for parallel processing")
             else:
                 print(f"Using automatic parallel processing settings")
-            if keep_permuted_data:
-                print(f"Permuted stock data will be saved in {self.permuted_data_dir}")
-            else:
-                print("Permuted stock data will be deleted after simulation")
+        
+        # Always print the keep_permuted_data setting to help debug
+        print(f"Keep permuted data: {self.keep_permuted_data} (This will {'save' if self.keep_permuted_data else 'delete'} permuted data files)")
+        if self.keep_permuted_data:
+            print(f"Permuted data will be saved in: {self.permuted_data_dir}")
+        else:
+            print("Permuted data files will be deleted after simulation")
     
     def _find_stock_data_csv(self):
         """
@@ -378,6 +381,10 @@ class TradeBasedMonteCarloTest:
         if not self.original_stock_csv:
             raise ValueError("Original stock data CSV not found. Run original backtest first.")
         
+        # Always print the keep_permuted_data value at the start of this method
+        print(f"DEBUG: run_monte_carlo_simulations called with keep_permuted_data={self.keep_permuted_data}")
+        print(f"DEBUG: permuted_data_dir path: {self.permuted_data_dir}")
+        
         # Load the original stock data
         original_data = pd.read_csv(self.original_stock_csv)
         
@@ -390,6 +397,14 @@ class TradeBasedMonteCarloTest:
             original_data.to_csv(original_copy_path, index=False)
             if self.verbose:
                 print(f"Saved copy of original stock data to {original_copy_path}")
+            
+            # Verify the directory exists and the file was created
+            if os.path.exists(original_copy_path):
+                print(f"DEBUG: Successfully created original stock data copy at {original_copy_path}")
+            else:
+                print(f"ERROR: Failed to create original stock data copy at {original_copy_path}")
+                print(f"DEBUG: Directory exists: {os.path.exists(self.permuted_data_dir)}")
+                print(f"DEBUG: Directory contents: {os.listdir(self.permuted_data_dir) if os.path.exists(self.permuted_data_dir) else 'N/A'}")
         
         # Create permuted datasets
         permuted_csvs = []
@@ -546,8 +561,50 @@ class TradeBasedMonteCarloTest:
             else:
                 print(f"Warning: Simulation {i} failed to produce results")
         
-        # Clean up permuted CSV files if not keeping them
-        if not self.keep_permuted_data:
+        # If we're keeping permuted data, make sure to preserve it by copying files if needed
+        if self.keep_permuted_data:
+            # Check if any permuted data files exist in the permuted_data directory
+            files_in_dir = os.listdir(self.permuted_data_dir)
+            csv_files = [f for f in files_in_dir if f.endswith('.csv') and f.startswith('permuted_data_')]
+            
+            print(f"DEBUG: After simulations, found {len(csv_files)} permuted CSV files in {self.permuted_data_dir}")
+            
+            if len(csv_files) < self.num_simulations:
+                # Some files are missing, which could happen if run_backtest is using the files directly
+                # and not making copies. In this case, make copies of permuted data files.
+                print(f"DEBUG: Expected {self.num_simulations} files but found {len(csv_files)}. Attempting to copy missing files...")
+                
+                for i in range(self.num_simulations):
+                    src_file = permuted_csvs[i]
+                    dst_file = os.path.join(self.permuted_data_dir, f"permuted_data_{i}.csv")
+                    
+                    # Only copy if the destination doesn't exist
+                    if not os.path.exists(dst_file) and os.path.exists(src_file):
+                        try:
+                            shutil.copy2(src_file, dst_file)
+                            print(f"DEBUG: Copied file from {src_file} to {dst_file}")
+                        except Exception as e:
+                            print(f"ERROR copying permuted data file: {e}")
+                    elif not os.path.exists(src_file):
+                        print(f"ERROR: Source file {src_file} does not exist for copying")
+                    elif os.path.exists(dst_file):
+                        print(f"DEBUG: Destination file {dst_file} already exists, no need to copy")
+            
+            # Verify final state of permuted_data directory
+            files_after = os.listdir(self.permuted_data_dir)
+            csv_files_after = [f for f in files_after if f.endswith('.csv') and f.startswith('permuted_data_')]
+            print(f"DEBUG: Final count of permuted CSV files in directory: {len(csv_files_after)} out of {self.num_simulations} expected")
+            if len(csv_files_after) < self.num_simulations:
+                print(f"WARNING: Some permuted data files could not be preserved ({len(csv_files_after)} out of {self.num_simulations})")
+                # List the first few missing indices for debugging
+                existing_indices = set([int(f.split('_')[2].split('.')[0]) for f in csv_files_after])
+                missing_indices = [i for i in range(self.num_simulations) if i not in existing_indices]
+                print(f"DEBUG: Sample of missing indices: {missing_indices[:5] if missing_indices else 'None'}")
+            
+            if self.verbose:
+                print(f"Final number of files in permuted data directory: {len(files_after)}")
+        else:
+            # Clean up permuted CSV files if not keeping them
             for csv_file in permuted_csvs:
                 if os.path.exists(csv_file):
                     try:
@@ -561,35 +618,10 @@ class TradeBasedMonteCarloTest:
             try:
                 if os.path.exists(self.permuted_data_dir) and not os.listdir(self.permuted_data_dir):
                     os.rmdir(self.permuted_data_dir)
+                    if self.verbose:
+                        print(f"Removed empty permuted_data directory")
             except Exception as e:
                 print(f"Warning: Could not remove permuted_data directory: {e}")
-        else:
-            # Ensure the permuted data files are correctly saved
-            if self.verbose:
-                print(f"Keeping permuted stock data files in {self.permuted_data_dir}")
-            
-            # Check if files were created directly in the permuted_data directory
-            files_in_dir = os.listdir(self.permuted_data_dir)
-            csv_files = [f for f in files_in_dir if f.endswith('.csv') and f != "original_stock_data.csv"]
-            
-            if len(csv_files) < len(permuted_csvs):
-                print(f"Warning: Expected {len(permuted_csvs)} permuted files but found {len(csv_files)}. Copying missing files...")
-                # Copy any missing files
-                for i, src_path in enumerate(permuted_csvs):
-                    target_file = f"permuted_data_{i}.csv"
-                    if target_file not in files_in_dir:
-                        try:
-                            target_path = os.path.join(self.permuted_data_dir, target_file)
-                            shutil.copy2(src_path, target_path)
-                            if self.verbose:
-                                print(f"Copied {src_path} to {target_path}")
-                        except Exception as e:
-                            print(f"Error copying permuted file {target_file}: {e}")
-            
-            # Confirm the final count of files in the directory
-            files_after = os.listdir(self.permuted_data_dir)
-            if self.verbose:
-                print(f"Final number of files in permuted data directory: {len(files_after)}")
         
         # Save all simulation metrics to CSV
         if simulated_metrics:
