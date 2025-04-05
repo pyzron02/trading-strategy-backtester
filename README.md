@@ -206,7 +206,7 @@ python run_complete_monte_carlo.py \
 * `--end-date`: End date for data (YYYY-MM-DD). Default uses all available data.
 * `--in-sample-ratio`: Ratio of data to use for in-sample period (0.0 to 1.0). Default is 0.7.
 * `--num-permutations`: Number of Monte Carlo permutations to run. Default is 100.
-* `--num-cores`: Number of CPU cores for parallel processing. Default uses all available cores except one.
+* `--num-cores`, `--num-workers`: Number of CPU cores for parallel processing. Default uses all available cores except one.
 * `--output-dir`: Specify a custom output directory. Default is timestamped directory.
 * `--verbose`: Enable detailed logging.
 
@@ -218,6 +218,10 @@ The framework supports parallel processing for improved performance:
    ```bash
    python run_complete_monte_carlo.py --strategy SimpleStock --num-simulations 1000 --num-cores 8
    ```
+   You can also use `--num-workers` as an alternative:
+   ```bash
+   python run_complete_monte_carlo.py --strategy SimpleStock --num-simulations 1000 --num-workers 8
+   ```
 
 2. **Batch Parameter Testing**: Test multiple parameter combinations in parallel:
    ```bash
@@ -227,7 +231,7 @@ The framework supports parallel processing for improved performance:
 3. **Automatic Core Detection**: If `--num-cores` is not specified, the system automatically uses all available cores except one to prevent system slowdown.
 
 4. **Core Management**: CPU core allocation can be controlled via:
-   * `--num-cores` command-line argument
+   * `--num-cores` or `--num-workers` command-line argument (both work the same way)
    * `num_workers` parameter in direct API usage
    * Environment variable `TRADING_BACKTEST_CORES`
 

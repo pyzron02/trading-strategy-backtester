@@ -674,7 +674,7 @@ def main():
                         help='Ratio of data to use for in-sample period')
     parser.add_argument('--verbose', action='store_true',
                         help='Print additional output')
-    parser.add_argument('--num-cores', type=int,
+    parser.add_argument('--num-cores', '--num-workers', type=int, dest='num_cores',
                         help='Number of cores to use for parallel processing')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
