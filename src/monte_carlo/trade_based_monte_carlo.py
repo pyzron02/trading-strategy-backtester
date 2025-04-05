@@ -394,7 +394,6 @@ class TradeBasedMonteCarloTest:
                     simulated_metrics.append(metrics)
                 else:
                     print(f"Warning: Simulation {i} failed to produce results")
-            
             except Exception as e:
                 print(f"Error in simulation {i}: {e}")
             
@@ -589,6 +588,217 @@ class TradeBasedMonteCarloTest:
         if self.verbose:
             print(f"Saved distribution plots to {viz_dir}")
     
+    def create_equity_curve_comparison(self) -> None:
+        """
+        Create a comparison plot of equity curves from all permutations alongside the original.
+        
+        This method loads the equity curve data from the original backtest and all permutations,
+        then plots them together. The original equity curve is highlighted in red.
+        
+        Features:
+        - Original equity curve in bold red
+        - Permutation equity curves in light blue
+        - Shaded confidence interval (5th to 95th percentile)
+        - Mean performance line
+        - Profit/loss zones highlighted
+        - Statistical summary in the plot
+        """
+        if self.verbose:
+            print("Creating equity curve comparison plot")
+        
+        # Create visualizations directory if it doesn't exist
+        viz_dir = os.path.join(self.output_dir, 'visualizations')
+        os.makedirs(viz_dir, exist_ok=True)
+        
+        # Load original equity curve
+        original_equity_path = os.path.join(self.output_dir, 'original', 'equity_curve.csv')
+        if not os.path.exists(original_equity_path):
+            print(f"Warning: Original equity curve file not found at {original_equity_path}")
+            return
+        
+        try:
+            original_equity = pd.read_csv(original_equity_path)
+            original_equity['Date'] = pd.to_datetime(original_equity['Date'])
+            original_equity.set_index('Date', inplace=True)
+            
+            # Create figure
+            plt.figure(figsize=(14, 10))
+            
+            # Collect all equity curves for percentile calculations
+            all_equity_curves = []
+            common_dates = None
+            
+            # First pass: collect all equity curves with valid data
+            for i in range(self.num_simulations):
+                sim_equity_path = os.path.join(self.output_dir, f'simulation_{i}', 'equity_curve.csv')
+                if os.path.exists(sim_equity_path):
+                    try:
+                        sim_equity = pd.read_csv(sim_equity_path)
+                        sim_equity['Date'] = pd.to_datetime(sim_equity['Date'])
+                        sim_equity.set_index('Date', inplace=True)
+                        
+                        # Only use equity curves that have the same date range
+                        if common_dates is None:
+                            common_dates = set(sim_equity.index)
+                        else:
+                            common_dates = common_dates.intersection(set(sim_equity.index))
+                            
+                        all_equity_curves.append(sim_equity)
+                    except Exception as e:
+                        if self.verbose:
+                            print(f"Error loading simulation {i} equity curve: {e}")
+            
+            # If we have common dates and curves, create the percentile envelope
+            if common_dates and all_equity_curves:
+                common_dates = sorted(list(common_dates))
+                
+                # Ensure the original equity curve has these dates too
+                common_dates = [date for date in common_dates if date in original_equity.index]
+                
+                # Create a DataFrame to hold all values for each date
+                values_by_date = {date: [] for date in common_dates}
+                
+                # Collect values for each date across all simulations
+                for curve in all_equity_curves:
+                    for date in common_dates:
+                        if date in curve.index:
+                            values_by_date[date].append(curve.loc[date, 'Value'])
+                
+                # Calculate percentiles for each date
+                percentiles = {}
+                for date in common_dates:
+                    if values_by_date[date]:  # Ensure we have values
+                        values = np.array(values_by_date[date])
+                        percentiles[date] = {
+                            'p5': np.percentile(values, 5),
+                            'p25': np.percentile(values, 25),
+                            'p50': np.percentile(values, 50),
+                            'p75': np.percentile(values, 75),
+                            'p95': np.percentile(values, 95),
+                            'mean': np.mean(values)
+                        }
+                
+                # Create DataFrames for percentile lines
+                p5_line = pd.Series({date: percentiles[date]['p5'] for date in common_dates}, name='p5')
+                p25_line = pd.Series({date: percentiles[date]['p25'] for date in common_dates}, name='p25')
+                p50_line = pd.Series({date: percentiles[date]['p50'] for date in common_dates}, name='p50')
+                p75_line = pd.Series({date: percentiles[date]['p75'] for date in common_dates}, name='p75')
+                p95_line = pd.Series({date: percentiles[date]['p95'] for date in common_dates}, name='p95')
+                mean_line = pd.Series({date: percentiles[date]['mean'] for date in common_dates}, name='mean')
+                
+                # Plot confidence interval as shaded region
+                plt.fill_between(common_dates, p5_line, p95_line, color='lightblue', alpha=0.3, 
+                                label='90% Confidence Interval')
+                plt.fill_between(common_dates, p25_line, p75_line, color='skyblue', alpha=0.3, 
+                                label='50% Confidence Interval')
+                
+                # Plot median and mean lines
+                plt.plot(common_dates, p50_line, color='blue', linestyle='-', linewidth=1.0, 
+                        label='Median Performance')
+                plt.plot(common_dates, mean_line, color='green', linestyle='-', linewidth=1.5, 
+                        label='Mean Performance')
+                
+                # Highlight profit/loss zones
+                initial_value = self.initial_capital
+                plt.axhline(y=initial_value, color='darkgray', linestyle='-', linewidth=1.0, 
+                           label='Initial Capital')
+                
+                # Add a light red zone for values below initial capital
+                plt.axhspan(0, initial_value, color='red', alpha=0.05)
+                # Add a light green zone for values above initial capital
+                plt.axhspan(initial_value, max(p95_line) * 1.1, color='green', alpha=0.05)
+            
+            # Now plot individual permutation equity curves with lower alpha
+            for i in range(min(50, self.num_simulations)):  # Limit to 50 to avoid overcrowding
+                sim_equity_path = os.path.join(self.output_dir, f'simulation_{i}', 'equity_curve.csv')
+                if os.path.exists(sim_equity_path):
+                    try:
+                        sim_equity = pd.read_csv(sim_equity_path)
+                        sim_equity['Date'] = pd.to_datetime(sim_equity['Date'])
+                        sim_equity.set_index('Date', inplace=True)
+                        
+                        # Plot permutation in light blue with low alpha
+                        plt.plot(sim_equity.index, sim_equity['Value'], color='lightblue', alpha=0.1, linewidth=0.5)
+                    except Exception as e:
+                        pass
+            
+            # Plot original equity curve in red with thicker line
+            plt.plot(original_equity.index, original_equity['Value'], color='red', linewidth=2.5, 
+                     label='Original Backtest')
+            
+            # Collect final statistics
+            all_final_values = []
+            for curve in all_equity_curves:
+                if not curve.empty:
+                    all_final_values.append(curve['Value'].iloc[-1])
+            
+            # Calculate statistics for display
+            if all_final_values:
+                final_values_array = np.array(all_final_values)
+                mean_final = np.mean(final_values_array)
+                std_final = np.std(final_values_array)
+                p5_final = np.percentile(final_values_array, 5)
+                p95_final = np.percentile(final_values_array, 95)
+                
+                # Get original final value
+                original_final = original_equity['Value'].iloc[-1] if not original_equity.empty else 0
+                
+                # Calculate p-value (what percentage of simulations performed better than original)
+                p_value = np.mean(final_values_array >= original_final)
+                
+                # Add stats box with key metrics
+                stats_text = (
+                    f"Final Value Statistics:\n"
+                    f"Original: ${original_final:,.2f}\n"
+                    f"Mean: ${mean_final:,.2f}\n"
+                    f"Std Dev: ${std_final:,.2f}\n"
+                    f"90% Range: [${p5_final:,.2f}, ${p95_final:,.2f}]\n"
+                    f"P-value: {p_value:.4f} ({'Significant' if p_value < 0.1 else 'Not Significant'})"
+                )
+                
+                # Position the text box in the upper left corner
+                plt.annotate(stats_text, xy=(0.02, 0.95), xycoords='axes fraction',
+                            bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.8),
+                            verticalalignment='top', fontsize=11)
+            
+            # Add labels and title with more details
+            plt.title(f'Equity Curve Comparison - {self.strategy_name}\n'
+                     f'Original vs {len(all_equity_curves)} Monte Carlo Permutations', fontsize=16)
+            plt.xlabel('Date', fontsize=14)
+            plt.ylabel('Portfolio Value ($)', fontsize=14)
+            plt.grid(True, alpha=0.3)
+            
+            # Improve legend
+            plt.legend(loc='lower right', fontsize=11, framealpha=0.8)
+            
+            # Format y-axis as currency
+            from matplotlib.ticker import FuncFormatter
+            def currency_formatter(x, pos):
+                return f'${x:,.0f}'
+            plt.gca().yaxis.set_major_formatter(FuncFormatter(currency_formatter))
+            
+            # Make background white
+            plt.gca().set_facecolor('white')
+            
+            # Adjust margins to fit everything
+            plt.tight_layout()
+            plt.subplots_adjust(right=0.95, left=0.1)
+            
+            # Save plot as both PNG and PDF for high-quality prints
+            equity_plot_path_png = os.path.join(viz_dir, 'equity_curve_comparison.png')
+            equity_plot_path_pdf = os.path.join(viz_dir, 'equity_curve_comparison.pdf')
+            plt.savefig(equity_plot_path_png, dpi=150)
+            plt.savefig(equity_plot_path_pdf)
+            plt.close()
+            
+            if self.verbose:
+                print(f"Equity curve comparison saved to {equity_plot_path_png} and {equity_plot_path_pdf}")
+                
+        except Exception as e:
+            print(f"Error creating equity curve comparison: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def run_test(self, out_of_sample_start: str) -> Dict:
         """
         Run the complete out-of-sample Monte Carlo test.
@@ -632,6 +842,7 @@ class TradeBasedMonteCarloTest:
                 if self.verbose:
                     print("Creating visualizations")
                 self.create_visualizations(original_metrics, simulated_metrics)
+                self.create_equity_curve_comparison()
                 if self.verbose:
                     print(f"Visualizations saved to {os.path.join(self.output_dir, 'visualizations')}")
             except Exception as viz_err:
