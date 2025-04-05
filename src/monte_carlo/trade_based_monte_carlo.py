@@ -686,16 +686,25 @@ class TradeBasedMonteCarloTest:
                 p95_line = pd.Series({date: percentiles[date]['p95'] for date in common_dates}, name='p95')
                 mean_line = pd.Series({date: percentiles[date]['mean'] for date in common_dates}, name='mean')
                 
+                # Convert common_dates and Series to numpy arrays for plotting
+                dates_array = np.array(common_dates)
+                p5_array = p5_line.values
+                p25_array = p25_line.values
+                p50_array = p50_line.values
+                p75_array = p75_line.values
+                p95_array = p95_line.values
+                mean_array = mean_line.values
+                
                 # Plot confidence interval as shaded region
-                plt.fill_between(common_dates, p5_line, p95_line, color='lightblue', alpha=0.3, 
+                plt.fill_between(dates_array, p5_array, p95_array, color='lightblue', alpha=0.3, 
                                 label='90% Confidence Interval')
-                plt.fill_between(common_dates, p25_line, p75_line, color='skyblue', alpha=0.3, 
+                plt.fill_between(dates_array, p25_array, p75_array, color='skyblue', alpha=0.3, 
                                 label='50% Confidence Interval')
                 
                 # Plot median and mean lines
-                plt.plot(common_dates, p50_line, color='blue', linestyle='-', linewidth=1.0, 
+                plt.plot(dates_array, p50_array, color='blue', linestyle='-', linewidth=1.0, 
                         label='Median Performance')
-                plt.plot(common_dates, mean_line, color='green', linestyle='-', linewidth=1.5, 
+                plt.plot(dates_array, mean_array, color='green', linestyle='-', linewidth=1.5, 
                         label='Mean Performance')
                 
                 # Highlight profit/loss zones
@@ -706,7 +715,11 @@ class TradeBasedMonteCarloTest:
                 # Add a light red zone for values below initial capital
                 plt.axhspan(0, initial_value, color='red', alpha=0.05)
                 # Add a light green zone for values above initial capital
-                plt.axhspan(initial_value, max(p95_line) * 1.1, color='green', alpha=0.05)
+                plt.axhspan(initial_value, max(p95_array) * 1.1, color='green', alpha=0.05)
+            
+            # Convert original equity curve to numpy arrays
+            original_dates = original_equity.index.to_numpy()
+            original_values = original_equity['Value'].to_numpy()
             
             # Now plot individual permutation equity curves with lower alpha
             for i in range(min(50, self.num_simulations)):  # Limit to 50 to avoid overcrowding
@@ -717,13 +730,17 @@ class TradeBasedMonteCarloTest:
                         sim_equity['Date'] = pd.to_datetime(sim_equity['Date'])
                         sim_equity.set_index('Date', inplace=True)
                         
+                        # Convert to numpy arrays for plotting
+                        sim_dates = sim_equity.index.to_numpy()
+                        sim_values = sim_equity['Value'].to_numpy()
+                        
                         # Plot permutation in light blue with low alpha
-                        plt.plot(sim_equity.index, sim_equity['Value'], color='lightblue', alpha=0.1, linewidth=0.5)
+                        plt.plot(sim_dates, sim_values, color='lightblue', alpha=0.1, linewidth=0.5)
                     except Exception as e:
                         pass
             
             # Plot original equity curve in red with thicker line
-            plt.plot(original_equity.index, original_equity['Value'], color='red', linewidth=2.5, 
+            plt.plot(original_dates, original_values, color='red', linewidth=2.5, 
                      label='Original Backtest')
             
             # Collect final statistics
