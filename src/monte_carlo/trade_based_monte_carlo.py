@@ -78,7 +78,8 @@ class TradeBasedMonteCarloTest:
         data_format: str = "standard",
         seed: int = None,
         verbose: bool = False,
-        num_workers: int = None
+        num_workers: int = None,
+        keep_permuted_data: bool = False
     ):
         """
         Initialize the Trade-Based Monte Carlo Test.
@@ -97,6 +98,7 @@ class TradeBasedMonteCarloTest:
             verbose (bool): Whether to print verbose output
             num_workers (int): Number of CPU cores to use for parallel processing.
                               If None, uses all cores except one.
+            keep_permuted_data (bool): Whether to save the permuted stock data files after simulation.
         """
         self.strategy_name = strategy_name
         self.parameters = parameters
@@ -106,6 +108,7 @@ class TradeBasedMonteCarloTest:
         self.data_format = data_format
         self.original_stock_csv = None
         self.num_workers = num_workers
+        self.keep_permuted_data = keep_permuted_data
         
         # Create output directory if not provided
         if output_dir is None:
@@ -155,6 +158,10 @@ class TradeBasedMonteCarloTest:
                 print(f"Using {num_workers} CPU cores for parallel processing")
             else:
                 print(f"Using automatic parallel processing settings")
+            if keep_permuted_data:
+                print(f"Permuted stock data will be saved in {self.permuted_data_dir}")
+            else:
+                print("Permuted stock data will be deleted after simulation")
     
     def _find_stock_data_csv(self):
         """
@@ -377,16 +384,65 @@ class TradeBasedMonteCarloTest:
         if self.verbose:
             print(f"Running {self.num_simulations} Monte Carlo simulations")
         
+        # Save original data for reference if keeping permuted data
+        if self.keep_permuted_data:
+            original_copy_path = os.path.join(self.permuted_data_dir, "original_stock_data.csv")
+            original_data.to_csv(original_copy_path, index=False)
+            if self.verbose:
+                print(f"Saved copy of original stock data to {original_copy_path}")
+        
         # Create permuted datasets
         permuted_csvs = []
+        permutation_info = []
+        
         for i in range(self.num_simulations):
             # Create a permuted version of the stock data
             permuted_data = self._permute_stock_data(original_data, i)
             
-            # Save the permuted data to a temporary CSV file
+            # Record information about this permutation
+            info = {
+                "permutation_id": i,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "tickers": self.tickers,
+                "file_path": f"permuted_data_{i}.csv",
+                "num_rows": len(permuted_data),
+                "permutation_type": "block_permutation",
+                "description": "Block permutation with random block sizes (5-20 days)"
+            }
+            permutation_info.append(info)
+            
+            # Save the permuted data to a CSV file
             permuted_csv = os.path.join(self.permuted_data_dir, f"permuted_data_{i}.csv")
             permuted_data.to_csv(permuted_csv, index=False)
             permuted_csvs.append(permuted_csv)
+        
+        # Save metadata about permutations
+        if self.keep_permuted_data:
+            permutation_info_path = os.path.join(self.permuted_data_dir, "permutation_metadata.json")
+            with open(permutation_info_path, 'w') as f:
+                json.dump(permutation_info, f, indent=4, cls=CustomJSONEncoder)
+            
+            # Create a README file explaining the permutation process
+            readme_path = os.path.join(self.permuted_data_dir, "README.md")
+            with open(readme_path, 'w') as f:
+                f.write(f"# Monte Carlo Permuted Stock Data\n\n")
+                f.write(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Strategy: {self.strategy_name}\n")
+                f.write(f"Tickers: {', '.join(self.tickers)}\n")
+                f.write(f"Number of permutations: {self.num_simulations}\n\n")
+                f.write("## Permutation Method\n\n")
+                f.write("Each permutation uses a block permutation approach where:\n")
+                f.write("1. The original stock data is divided into random-sized blocks (5-20 days)\n")
+                f.write("2. These blocks are shuffled randomly\n")
+                f.write("3. The blocks are reassembled to create a permuted version of the data\n")
+                f.write("4. The Date column is preserved to maintain the time series structure\n\n")
+                f.write("## File Structure\n\n")
+                f.write("- `original_stock_data.csv`: The original unmodified stock data\n")
+                f.write("- `permuted_data_X.csv`: Permuted stock data for permutation X\n")
+                f.write("- `permutation_metadata.json`: Metadata about each permutation\n")
+            
+            if self.verbose:
+                print(f"Created permutation documentation in {self.permuted_data_dir}")
         
         # Prepare backtest configurations for parallel execution
         backtest_configs = []
@@ -435,6 +491,10 @@ class TradeBasedMonteCarloTest:
                     'profit_factor': 0,
                     'total_trades': 0
                 }
+                
+                # Add reference to permuted data file if keeping them
+                if self.keep_permuted_data:
+                    metrics['permuted_data_file'] = f"permuted_data_{i}.csv"
                 
                 # Extract Sharpe ratio and max drawdown from metrics if available
                 if 'metrics' in sim_results:
@@ -486,10 +546,50 @@ class TradeBasedMonteCarloTest:
             else:
                 print(f"Warning: Simulation {i} failed to produce results")
         
-        # Clean up permuted CSV files to save disk space
-        for csv_file in permuted_csvs:
-            if os.path.exists(csv_file):
-                os.remove(csv_file)
+        # Clean up permuted CSV files if not keeping them
+        if not self.keep_permuted_data:
+            for csv_file in permuted_csvs:
+                if os.path.exists(csv_file):
+                    try:
+                        os.remove(csv_file)
+                    except Exception as e:
+                        print(f"Warning: Could not delete permuted file {csv_file}: {e}")
+            if self.verbose:
+                print(f"Deleted {len(permuted_csvs)} permuted stock data files to save disk space")
+            
+            # Also remove the permuted_data directory if it's empty
+            try:
+                if os.path.exists(self.permuted_data_dir) and not os.listdir(self.permuted_data_dir):
+                    os.rmdir(self.permuted_data_dir)
+            except Exception as e:
+                print(f"Warning: Could not remove permuted_data directory: {e}")
+        else:
+            # Ensure the permuted data files are correctly saved
+            if self.verbose:
+                print(f"Keeping permuted stock data files in {self.permuted_data_dir}")
+            
+            # Check if files were created directly in the permuted_data directory
+            files_in_dir = os.listdir(self.permuted_data_dir)
+            csv_files = [f for f in files_in_dir if f.endswith('.csv') and f != "original_stock_data.csv"]
+            
+            if len(csv_files) < len(permuted_csvs):
+                print(f"Warning: Expected {len(permuted_csvs)} permuted files but found {len(csv_files)}. Copying missing files...")
+                # Copy any missing files
+                for i, src_path in enumerate(permuted_csvs):
+                    target_file = f"permuted_data_{i}.csv"
+                    if target_file not in files_in_dir:
+                        try:
+                            target_path = os.path.join(self.permuted_data_dir, target_file)
+                            shutil.copy2(src_path, target_path)
+                            if self.verbose:
+                                print(f"Copied {src_path} to {target_path}")
+                        except Exception as e:
+                            print(f"Error copying permuted file {target_file}: {e}")
+            
+            # Confirm the final count of files in the directory
+            files_after = os.listdir(self.permuted_data_dir)
+            if self.verbose:
+                print(f"Final number of files in permuted data directory: {len(files_after)}")
         
         # Save all simulation metrics to CSV
         if simulated_metrics:
