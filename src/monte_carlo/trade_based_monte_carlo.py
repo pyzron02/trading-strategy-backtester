@@ -194,68 +194,142 @@ class TradeBasedMonteCarloTest:
     
     def _permute_stock_data(self, stock_data_df, permutation_id):
         """
-        Create a permuted version of the stock data for Monte Carlo simulation.
+        Create a permuted version of the stock data using returns-based bootstrap approach.
+        
+        This method implements a returns-based bootstrap Monte Carlo simulation:
+        1. Sorts data by date to ensure chronological order
+        2. Extracts closing prices for each ticker
+        3. Calculates daily returns for each ticker
+        4. Bootstraps (randomly samples with replacement) from historical returns
+        5. Reconstructs price series from bootstrapped returns
         
         Args:
             stock_data_df (DataFrame): Original stock data
             permutation_id (int): ID of the permutation
             
         Returns:
-            DataFrame: Permuted stock data
+            DataFrame: Permuted stock data with new price series
         """
         # Make a copy of the original data
         permuted_df = stock_data_df.copy()
         
-        # Keep the Date column as is
+        # Sort by date to ensure chronological order
+        if 'Date' in permuted_df.columns:
+            permuted_df['Date'] = pd.to_datetime(permuted_df['Date'])
+            permuted_df = permuted_df.sort_values('Date').reset_index(drop=True)
+        
+        # Keep the Date column intact
         dates = permuted_df['Date'].copy()
         
-        # For each ticker, permute the data
+        # Process each ticker separately
         for ticker in self.tickers:
-            # Get columns for this ticker
+            # Find all columns for this ticker
             ticker_columns = [col for col in permuted_df.columns if col.startswith(f"{ticker}_")]
             
-            if ticker_columns:
-                # Extract the data for this ticker
-                ticker_data = permuted_df[ticker_columns].copy()
-                
-                # Create random blocks of 5-20 days (to maintain some serial correlation)
-                block_size = random.randint(5, 20)
-                
-                # Calculate number of blocks
-                num_rows = len(ticker_data)
-                num_blocks = num_rows // block_size
-                if num_blocks < 2:
-                    # If not enough data for blocks, skip permutation for this ticker
-                    warnings.warn(f"Not enough data for ticker {ticker} to perform block permutation")
+            # Skip if no columns found for this ticker
+            if not ticker_columns:
+                if self.verbose:
+                    print(f"No data columns found for ticker {ticker}")
+                continue
+            
+            # Find the closing price column
+            close_col = f"{ticker}_Close"
+            if close_col not in ticker_columns:
+                # Try to find any price column if Close isn't available
+                price_cols = [col for col in ticker_columns if any(x in col.lower() for x in ['close', 'price', 'adj'])]
+                if price_cols:
+                    close_col = price_cols[0]
+                else:
+                    if self.verbose:
+                        print(f"No closing price column found for ticker {ticker}, skipping")
                     continue
+            
+            # Extract closing prices
+            prices = permuted_df[close_col].values
+            
+            # Calculate daily returns (skip first day which will be NaN)
+            returns = np.zeros(len(prices))
+            returns[1:] = (prices[1:] - prices[:-1]) / prices[:-1]
+            
+            # Filter out any invalid returns (NaN, inf)
+            valid_returns = returns[~np.isnan(returns) & ~np.isinf(returns) & (returns != 0)]
+            
+            # Skip if not enough valid returns
+            if len(valid_returns) < 10:  # Require at least 10 valid returns
+                if self.verbose:
+                    print(f"Not enough valid returns for ticker {ticker}")
+                continue
+            
+            # Bootstrap returns - randomly sample with replacement
+            np.random.seed(permutation_id + hash(ticker) % 10000)  # Ensure reproducibility but different for each ticker
+            sampled_returns = np.random.choice(valid_returns, size=len(prices)-1, replace=True)
+            
+            # Reconstruct a new price series from bootstrapped returns
+            new_prices = np.zeros(len(prices))
+            new_prices[0] = prices[0]  # Start with the original first price
+            
+            # Generate the rest of the series using the bootstrapped returns
+            for i in range(1, len(prices)):
+                new_prices[i] = new_prices[i-1] * (1 + sampled_returns[i-1])
+            
+            # Update the closing price column with the new prices
+            permuted_df[close_col] = new_prices
+            
+            # Update other price columns (High, Low, Open) to maintain consistency
+            # This ensures the OHLC relationships are preserved
+            other_price_cols = [col for col in ticker_columns if col != close_col and any(
+                x in col.lower() for x in ['open', 'high', 'low', 'price', 'adj'])]
+            
+            for col in other_price_cols:
+                # Get the original relationship with close price
+                orig_ratio = permuted_df[col] / permuted_df[close_col].replace(0, np.nan)
+                # Apply the same ratio to new close prices to get new column values
+                permuted_df[col] = new_prices * orig_ratio
+            
+            # Handle volume columns separately if they exist
+            volume_cols = [col for col in ticker_columns if 'volume' in col.lower()]
+            for vol_col in volume_cols:
+                # Keep the original volume data but shuffle it in blocks
+                # to maintain some autocorrelation in volume
+                vol_data = permuted_df[vol_col].values
+                block_size = min(5, len(vol_data) // 10)  # Small blocks to preserve some volume patterns
                 
-                # Reshape data into blocks
-                blocks = []
-                for i in range(num_blocks):
-                    start_idx = i * block_size
-                    end_idx = min((i + 1) * block_size, num_rows)
-                    blocks.append(ticker_data.iloc[start_idx:end_idx])
-                
-                # Shuffle the blocks
-                random.shuffle(blocks)
-                
-                # Reassemble the permuted data
-                permuted_ticker_data = pd.concat(blocks)
-                
-                # If there's a remainder, add it at the end
-                if num_blocks * block_size < num_rows:
-                    remainder = ticker_data.iloc[num_blocks * block_size:]
-                    permuted_ticker_data = pd.concat([permuted_ticker_data, remainder])
-                
-                # Ensure the permuted data has the same length as the original
-                permuted_ticker_data = permuted_ticker_data.iloc[:num_rows]
-                
-                # Replace the ticker columns in the permuted dataframe
-                for col in ticker_columns:
-                    permuted_df[col] = permuted_ticker_data[col].values
+                if block_size > 1:
+                    blocks = []
+                    for i in range(0, len(vol_data), block_size):
+                        end_idx = min(i + block_size, len(vol_data))
+                        blocks.append(vol_data[i:end_idx])
+                    
+                    np.random.shuffle(blocks)
+                    new_vol_data = np.concatenate(blocks)
+                    
+                    # Ensure the length matches
+                    if len(new_vol_data) > len(vol_data):
+                        new_vol_data = new_vol_data[:len(vol_data)]
+                    elif len(new_vol_data) < len(vol_data):
+                        # Repeat last block if needed
+                        padding = np.tile(new_vol_data[-block_size:], 
+                                         (len(vol_data) - len(new_vol_data) + block_size - 1) // block_size)
+                        new_vol_data = np.concatenate([new_vol_data, padding[:len(vol_data) - len(new_vol_data)]])
+                    
+                    permuted_df[vol_col] = new_vol_data
+            
+            if self.verbose and permutation_id == 0:
+                print(f"Created bootstrap simulation for {ticker} with {len(valid_returns)} unique returns")
         
-        # Restore the original Date column
+        # Ensure the Date column is preserved
         permuted_df['Date'] = dates
+        
+        # Print some summary statistics for the first permutation
+        if self.verbose and permutation_id == 0:
+            for ticker in self.tickers:
+                close_col = f"{ticker}_Close"
+                if close_col in permuted_df.columns:
+                    orig_prices = stock_data_df[close_col]
+                    new_prices = permuted_df[close_col]
+                    print(f"Ticker {ticker} original vs permuted price statistics:")
+                    print(f"  Original: mean={orig_prices.mean():.2f}, std={orig_prices.std():.2f}, min={orig_prices.min():.2f}, max={orig_prices.max():.2f}")
+                    print(f"  Permuted: mean={new_prices.mean():.2f}, std={new_prices.std():.2f}, min={new_prices.min():.2f}, max={new_prices.max():.2f}")
         
         return permuted_df
     
