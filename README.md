@@ -30,6 +30,8 @@ This project provides a Python-based framework for backtesting, optimizing, and 
 - **Parallel Processing:** 
   - Multi-core support for faster Monte Carlo simulations
   - Configurable worker count
+  - Parallel execution of backtests with multiple parameter combinations
+  - Automatic CPU core detection and allocation
 
 ## Monte Carlo Simulation
 
@@ -204,9 +206,30 @@ python run_complete_monte_carlo.py \
 * `--end-date`: End date for data (YYYY-MM-DD). Default uses all available data.
 * `--in-sample-ratio`: Ratio of data to use for in-sample period (0.0 to 1.0). Default is 0.7.
 * `--num-permutations`: Number of Monte Carlo permutations to run. Default is 100.
-* `--num-cores`: Number of CPU cores for parallel processing. Default is 1.
+* `--num-cores`: Number of CPU cores for parallel processing. Default uses all available cores except one.
 * `--output-dir`: Specify a custom output directory. Default is timestamped directory.
 * `--verbose`: Enable detailed logging.
+
+## Parallel Processing
+
+The framework supports parallel processing for improved performance:
+
+1. **Monte Carlo Simulations**: By default, Monte Carlo simulations run on multiple CPU cores:
+   ```bash
+   python run_complete_monte_carlo.py --strategy SimpleStock --num-simulations 1000 --num-cores 8
+   ```
+
+2. **Batch Parameter Testing**: Test multiple parameter combinations in parallel:
+   ```bash
+   python run_parameter_optimization.py --strategy MACrossover --num-cores 8
+   ```
+
+3. **Automatic Core Detection**: If `--num-cores` is not specified, the system automatically uses all available cores except one to prevent system slowdown.
+
+4. **Core Management**: CPU core allocation can be controlled via:
+   * `--num-cores` command-line argument
+   * `num_workers` parameter in direct API usage
+   * Environment variable `TRADING_BACKTEST_CORES`
 
 ## Output Structure
 

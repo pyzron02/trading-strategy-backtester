@@ -116,7 +116,7 @@ def run_simple_workflow(strategy_name, tickers=None, start_date=None, end_date=N
 @log_execution_time('workflow')
 def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
                            num_simulations=10, parameters=None, best_params=None, 
-                           output_dir=None, num_workers=None, verbose=False):
+                           output_dir=None, num_workers=None, verbose=False, seed=42):
     """
     Run monte carlo tests safely by handling errors gracefully.
     Uses the TradeBasedMonteCarloTest implementation.
@@ -132,6 +132,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         output_dir (str): Directory to save results
         num_workers (int): Number of parallel workers to use for Monte Carlo simulations
         verbose (bool): Whether to print verbose output
+        seed (int): Random seed for reproducibility
     
     Returns:
         dict: Results of the Monte Carlo testing
@@ -189,6 +190,8 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         if verbose:
             print("Using Trade-Based Monte Carlo implementation")
             print(f"Running {num_simulations} simulations with resampled trade returns")
+            if num_workers is not None:
+                print(f"Using {num_workers} CPU cores for parallel processing")
         
         # Initialize the Trade-Based Monte Carlo test
         monte_carlo_test = TradeBasedMonteCarloTest(
@@ -198,8 +201,9 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
             input_dir=os.path.join(project_root, 'input'),
             output_dir=output_dir,
             num_simulations=num_simulations,
-            seed=42,  # Use a fixed seed for reproducibility
-            verbose=verbose
+            seed=seed,  # Use provided seed for reproducibility
+            verbose=verbose,
+            num_workers=num_workers
         )
         
         # Run the test with out-of-sample start date
@@ -289,7 +293,8 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
 @log_execution_time('workflow')
 def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
                             out_of_sample_start=None, num_simulations=1000, parameters=None, 
-                            best_params=None, output_dir=None, verbose=False, seed=None):
+                            best_params=None, output_dir=None, verbose=False, seed=None,
+                            num_workers=None):
     """
     Run trade-based Monte Carlo tests safely by handling errors gracefully.
     Uses the TradeBasedMonteCarloTest implementation which resamples trade returns.
@@ -306,6 +311,7 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
         output_dir (str): Directory to save results
         verbose (bool): Whether to print verbose output
         seed (int): Random seed for reproducibility
+        num_workers (int): Number of parallel workers to use for Monte Carlo simulations
     
     Returns:
         dict: Results of the trade-based Monte Carlo testing
@@ -360,6 +366,8 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
         if verbose:
             print("Using Trade-Based Monte Carlo implementation")
             print(f"Running {num_simulations} simulations with resampled trade returns")
+            if num_workers is not None:
+                print(f"Using {num_workers} CPU cores for parallel processing")
         
         # Initialize the Trade-Based Monte Carlo test
         monte_carlo_test = TradeBasedMonteCarloTest(
@@ -370,7 +378,8 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
             output_dir=output_dir,
             num_simulations=num_simulations,
             seed=seed,
-            verbose=verbose
+            verbose=verbose,
+            num_workers=num_workers
         )
         
         # Run the test with out-of-sample start date
@@ -446,7 +455,7 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
 @log_execution_time('workflow')
 def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date=None, 
                          param_file=None, num_workers=None, output_dir=None, 
-                         in_sample_ratio=0.7, num_simulations=0, verbose=False):
+                         in_sample_ratio=0.7, num_simulations=0, verbose=False, seed=42):
     """
     Run a complete workflow with in-sample optimization and walk-forward testing.
     
@@ -461,6 +470,7 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
         in_sample_ratio (float): Ratio of data to use for in-sample period
         num_simulations (int): Number of simulations for Monte Carlo testing
         verbose (bool): Whether to print detailed information
+        seed (int): Random seed for reproducibility
     
     Returns:
         dict: Workflow results
@@ -579,7 +589,8 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
             best_params=best_params,
             output_dir=monte_carlo_dir,
             num_workers=num_workers,
-            verbose=verbose
+            verbose=verbose,
+            seed=seed
         )
         
         monte_carlo_success = monte_carlo_result.get("success", False)
@@ -723,7 +734,8 @@ def main():
             parameters=parameters,
             output_dir=args.output_dir,
             num_workers=num_workers,
-            verbose=args.verbose
+            verbose=args.verbose,
+            seed=args.seed
         )
         
         if results.get("success", False):
@@ -774,7 +786,8 @@ def main():
             best_params=best_params,
             output_dir=args.output_dir,
             num_workers=num_workers,
-            verbose=args.verbose
+            verbose=args.verbose,
+            seed=args.seed
         )
         
         if results.get("success", False):
@@ -810,7 +823,8 @@ def main():
             output_dir=args.output_dir,
             in_sample_ratio=args.in_sample_ratio,
             num_simulations=args.num_simulations,
-            verbose=args.verbose
+            verbose=args.verbose,
+            seed=args.seed
         )
     
     return 0

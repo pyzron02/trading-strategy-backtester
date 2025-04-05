@@ -13,6 +13,8 @@ import re
 import numpy as np
 import json
 import matplotlib.pyplot as plt
+import importlib
+from multiprocessing import Pool, cpu_count
 # Importing necessary libraries:
 # - os/sys: For file and path operations
 # - argparse: For parsing command-line arguments
@@ -24,6 +26,7 @@ import matplotlib.pyplot as plt
 # - numpy (np): For numerical operations
 # - json: For JSON serialization
 # - matplotlib.pyplot (plt): For plotting
+# - multiprocessing: For parallel processing
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -261,22 +264,17 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                     cerebro.addstrategy(MultiPositionStrategy)
             except Exception as e:
                 print(f"Error loading MultiPositionStrategy from strategies directory: {e}")
-                print("Using fallback MultiPosition strategy from src.monte_carlo.direct_monte_carlo")
-                # Get path to monte_carlo directory
-                monte_carlo_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'monte_carlo')
-                # Add the directory to sys.path if needed
-                if monte_carlo_dir not in sys.path:
-                    sys.path.append(monte_carlo_dir)
+                print("Using fallback MultiPosition strategy from strategies module")
                 
-                # Import the strategy
+                # Import the strategy from strategies module
                 try:
-                    from src.monte_carlo.direct_monte_carlo import MultiPosition
+                    from strategies import MultiPosition
                     if parameters:
                         cerebro.addstrategy(MultiPosition, **parameters)
                     else:
                         cerebro.addstrategy(MultiPosition)
                 except Exception as e2:
-                    print(f"Error importing from src.monte_carlo: {e2}")
+                    print(f"Error importing from strategies module: {e2}")
                     raise
         elif strategy_name == 'AuctionMarket':
             try:
@@ -287,22 +285,17 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                     cerebro.addstrategy(AuctionMarketStrategy)
             except Exception as e:
                 print(f"Error loading AuctionMarketStrategy from strategies directory: {e}")
-                print("Using fallback AuctionMarket strategy from src.monte_carlo.direct_monte_carlo")
-                # Get path to monte_carlo directory
-                monte_carlo_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'monte_carlo')
-                # Add the directory to sys.path if needed
-                if monte_carlo_dir not in sys.path:
-                    sys.path.append(monte_carlo_dir)
+                print("Using fallback AuctionMarket strategy from strategies module")
                 
-                # Import the strategy
+                # Import the strategy from strategies module
                 try:
-                    from src.monte_carlo.direct_monte_carlo import AuctionMarket
+                    from strategies import AuctionMarket
                     if parameters:
                         cerebro.addstrategy(AuctionMarket, **parameters)
                     else:
                         cerebro.addstrategy(AuctionMarket)
                 except Exception as e2:
-                    print(f"Error importing from src.monte_carlo: {e2}")
+                    print(f"Error importing from strategies module: {e2}")
                     raise
         elif strategy_name == 'MACrossover':
             try:
@@ -313,46 +306,41 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
                     cerebro.addstrategy(MACrossover)
             except Exception as e:
                 print(f"Error loading MACrossover from strategies directory: {e}")
-                print("Using fallback MACrossover strategy from src.monte_carlo.direct_monte_carlo")
-                # Get path to monte_carlo directory
-                monte_carlo_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'monte_carlo')
-                # Add the directory to sys.path if needed
-                if monte_carlo_dir not in sys.path:
-                    sys.path.append(monte_carlo_dir)
+                print("Using fallback MACrossover strategy from strategies module")
                 
-                # Import the strategy
+                # Import the strategy from strategies module
                 try:
-                    from src.monte_carlo.direct_monte_carlo import MACrossover
+                    from strategies import MACrossover
                     if parameters:
                         cerebro.addstrategy(MACrossover, **parameters)
                     else:
                         cerebro.addstrategy(MACrossover)
                 except Exception as e2:
-                    print(f"Error importing from src.monte_carlo: {e2}")
+                    print(f"Error importing from strategies module: {e2}")
                     raise
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}")
     except Exception as e:
         print(f"Error loading strategy: {e}")
-        print("Attempting to load fallback strategy from src.monte_carlo.direct_monte_carlo")
+        print("Attempting to load fallback strategy from strategies module")
         
         try:
-            # Import dynamically from the src.monte_carlo package
-            module_name = f"src.monte_carlo.direct_monte_carlo"
+            # Import dynamically from the strategies module
+            module_name = f"strategies.{strategy_name}"
             imported_module = importlib.import_module(module_name)
             
             # Check if the strategy exists in the module
             if hasattr(imported_module, strategy_name):
                 strategy_class = getattr(imported_module, strategy_name)
-                print(f"Using {strategy_name} strategy from src.monte_carlo.direct_monte_carlo")
+                print(f"Using {strategy_name} strategy from strategies module")
                 if parameters:
                     cerebro.addstrategy(strategy_class, **parameters)
                 else:
                     cerebro.addstrategy(strategy_class)
             else:
-                raise ValueError(f"Strategy {strategy_name} not found in src.monte_carlo.direct_monte_carlo")
+                raise ValueError(f"Strategy {strategy_name} not found in strategies module")
         except Exception as e2:
-            raise ValueError(f"Failed to load strategy from src.monte_carlo.direct_monte_carlo: {e2}. Original error: {e}")
+            raise ValueError(f"Failed to load strategy from strategies module: {e2}. Original error: {e}")
 
     # Add TradeLogger analyzer
     cerebro.addanalyzer(TradeLogger, _name='tradelogger')
@@ -643,6 +631,52 @@ def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, par
     }
     # Returns a dictionary with all backtest results and metrics
     # Includes strategy info, performance metrics, equity curve, trades, drawdowns, and monthly returns
+
+def run_parallel_backtests(backtest_configs, num_workers=None):
+    """
+    Run multiple backtest configurations in parallel using multiprocessing.
+    
+    Args:
+        backtest_configs (list): List of dictionaries, each containing parameters for run_backtest
+        num_workers (int): Number of parallel workers (CPU cores) to use. 
+                          If None, uses all available cores minus one.
+    
+    Returns:
+        list: List of backtest results in the same order as the input configurations
+    """
+    if num_workers is None:
+        num_workers = max(1, cpu_count() - 1)  # Use all cores except one by default
+    
+    print(f"Running {len(backtest_configs)} backtests in parallel using {num_workers} CPU cores")
+    
+    # Create a pool of workers
+    with Pool(processes=num_workers) as pool:
+        # Map each backtest configuration to the run_backtest function
+        results = pool.map(_run_backtest_wrapper, backtest_configs)
+    
+    return results
+
+def _run_backtest_wrapper(config):
+    """
+    Wrapper function for run_backtest to be used with multiprocessing.
+    
+    Args:
+        config (dict): Dictionary containing parameters for run_backtest
+    
+    Returns:
+        dict: Results from the backtest
+    """
+    try:
+        # Extract parameters from config dictionary
+        return run_backtest(**config)
+    except Exception as e:
+        print(f"Error in backtest: {str(e)}")
+        # Return error information instead of raising exception to avoid crashing the pool
+        return {
+            'error': str(e),
+            'config': config,
+            'success': False
+        }
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run a backtest with a specified strategy on multiple tickers.")

@@ -36,7 +36,7 @@ from strategies import registry
 from scipy import stats
 
 # Import run_backtest engine
-from engine.run_backtest import run_backtest
+from engine.run_backtest import run_backtest, run_parallel_backtests
 
 
 # Custom JSON encoder to handle NumPy types and other non-serializable objects
@@ -77,7 +77,8 @@ class TradeBasedMonteCarloTest:
         commission: float = 0.001,
         data_format: str = "standard",
         seed: int = None,
-        verbose: bool = False
+        verbose: bool = False,
+        num_workers: int = None
     ):
         """
         Initialize the Trade-Based Monte Carlo Test.
@@ -94,6 +95,8 @@ class TradeBasedMonteCarloTest:
             data_format (str): Format of input data ('standard', 'custom', etc.)
             seed (int): Random seed for reproducibility
             verbose (bool): Whether to print verbose output
+            num_workers (int): Number of CPU cores to use for parallel processing.
+                              If None, uses all cores except one.
         """
         self.strategy_name = strategy_name
         self.parameters = parameters
@@ -102,6 +105,7 @@ class TradeBasedMonteCarloTest:
         self.commission = commission
         self.data_format = data_format
         self.original_stock_csv = None
+        self.num_workers = num_workers
         
         # Create output directory if not provided
         if output_dir is None:
@@ -147,6 +151,10 @@ class TradeBasedMonteCarloTest:
             print(f"Parameters: {parameters}")
             print(f"Tickers: {tickers}")
             print(f"Number of simulations: {num_simulations}")
+            if num_workers is not None:
+                print(f"Using {num_workers} CPU cores for parallel processing")
+            else:
+                print(f"Using automatic parallel processing settings")
     
     def _find_stock_data_csv(self):
         """
@@ -335,71 +343,87 @@ class TradeBasedMonteCarloTest:
         if self.verbose:
             print(f"Running {self.num_simulations} Monte Carlo simulations")
         
-        # Run simulations with progress bar
-        simulated_metrics = []
-        for i in tqdm(range(self.num_simulations), desc="Monte Carlo Sims", disable=not self.verbose):
+        # Create permuted datasets
+        permuted_csvs = []
+        for i in range(self.num_simulations):
             # Create a permuted version of the stock data
             permuted_data = self._permute_stock_data(original_data, i)
             
             # Save the permuted data to a temporary CSV file
             permuted_csv = os.path.join(self.permuted_data_dir, f"permuted_data_{i}.csv")
             permuted_data.to_csv(permuted_csv, index=False)
-            
+            permuted_csvs.append(permuted_csv)
+        
+        # Prepare backtest configurations for parallel execution
+        backtest_configs = []
+        for i, permuted_csv in enumerate(permuted_csvs):
             # Create output directory for this simulation
             sim_output_dir = os.path.join(self.output_dir, f"simulation_{i}")
             os.makedirs(sim_output_dir, exist_ok=True)
             
-            try:
-                # Run backtest with the permuted data
-                sim_results = run_backtest(
-                    output_dir=sim_output_dir,
-                    strategy_name=self.strategy_name,
-                    tickers=self.tickers,
-                    parameters=self.parameters,
-                    start_date=out_of_sample_start,
-                    end_date=None,  # Use all available data after start_date
-                    stock_csv=permuted_csv,
-                    plot=False,
-                    warmup_period=50  # Use a standard warmup period
-                )
+            # Create configuration for this backtest
+            config = {
+                'output_dir': sim_output_dir,
+                'strategy_name': self.strategy_name,
+                'tickers': self.tickers,
+                'parameters': self.parameters,
+                'start_date': out_of_sample_start,
+                'end_date': None,  # Use all available data after start_date
+                'stock_csv': permuted_csv,
+                'plot': False,
+                'warmup_period': 50  # Use a standard warmup period
+            }
+            backtest_configs.append(config)
+        
+        # Determine the number of workers - use class variable num_workers if defined, otherwise use default
+        num_workers = getattr(self, 'num_workers', None)
+        
+        # Run backtests in parallel
+        if self.verbose:
+            print(f"Running Monte Carlo simulations using parallel processing")
+        
+        # Run backtests in parallel
+        sim_results_list = run_parallel_backtests(backtest_configs, num_workers)
+        
+        # Process results
+        simulated_metrics = []
+        for i, sim_results in enumerate(sim_results_list):
+            if sim_results and not isinstance(sim_results, dict) or sim_results.get('error', None) is None:
+                # Extract key metrics into a standardized format
+                metrics = {
+                    'simulation_id': i,
+                    'initial_value': sim_results.get('initial_value', self.initial_capital),
+                    'final_value': sim_results.get('final_value', 0),
+                    'total_return': sim_results.get('total_return', 0),
+                    'sharpe_ratio': sim_results.get('sharpe_ratio', 0),
+                    'max_drawdown': sim_results.get('max_drawdown', 0),
+                    'win_rate': 0,
+                    'profit_factor': 0,
+                    'total_trades': 0
+                }
                 
-                if sim_results:
-                    # Extract key metrics into a standardized format
-                    metrics = {
-                        'simulation_id': i,
-                        'initial_value': sim_results.get('initial_value', self.initial_capital),
-                        'final_value': sim_results.get('final_value', 0),
-                        'total_return': sim_results.get('total_return', 0),
-                        'sharpe_ratio': sim_results.get('sharpe_ratio', 0),
-                        'max_drawdown': sim_results.get('max_drawdown', 0),
-                        'win_rate': 0,
-                        'profit_factor': 0,
-                        'total_trades': 0
-                    }
+                # Extract win rate and profit factor from trades if available
+                trades = sim_results.get('trades', [])
+                if trades:
+                    won_trades = sum(1 for trade in trades if trade.get('pnl', 0) > 0)
+                    lost_trades = sum(1 for trade in trades if trade.get('pnl', 0) < 0)
+                    total_trades = len(trades)
                     
-                    # Extract win rate and profit factor from trades if available
-                    trades = sim_results.get('trades', [])
-                    if trades:
-                        won_trades = sum(1 for trade in trades if trade.get('pnl', 0) > 0)
-                        lost_trades = sum(1 for trade in trades if trade.get('pnl', 0) < 0)
-                        total_trades = len(trades)
-                        
-                        metrics['total_trades'] = total_trades
-                        metrics['win_rate'] = won_trades / total_trades if total_trades > 0 else 0
-                        
-                        gross_won = sum(trade.get('pnl', 0) for trade in trades if trade.get('pnl', 0) > 0)
-                        gross_lost = abs(sum(trade.get('pnl', 0) for trade in trades if trade.get('pnl', 0) < 0))
-                        metrics['profit_factor'] = gross_won / gross_lost if gross_lost > 0 else 0
+                    metrics['total_trades'] = total_trades
+                    metrics['win_rate'] = won_trades / total_trades if total_trades > 0 else 0
                     
-                    simulated_metrics.append(metrics)
-                else:
-                    print(f"Warning: Simulation {i} failed to produce results")
-            except Exception as e:
-                print(f"Error in simulation {i}: {e}")
-            
-            # Optional: Remove the permuted CSV to save disk space
-            if os.path.exists(permuted_csv):
-                os.remove(permuted_csv)
+                    gross_won = sum(trade.get('pnl', 0) for trade in trades if trade.get('pnl', 0) > 0)
+                    gross_lost = abs(sum(trade.get('pnl', 0) for trade in trades if trade.get('pnl', 0) < 0))
+                    metrics['profit_factor'] = gross_won / gross_lost if gross_lost > 0 else 0
+                
+                simulated_metrics.append(metrics)
+            else:
+                print(f"Warning: Simulation {i} failed to produce results")
+        
+        # Clean up permuted CSV files to save disk space
+        for csv_file in permuted_csvs:
+            if os.path.exists(csv_file):
+                os.remove(csv_file)
         
         # Save all simulation metrics to CSV
         if simulated_metrics:

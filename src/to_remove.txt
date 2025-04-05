@@ -1,5 +1,0 @@
-Files that can be removed after streamlining:
-/home/pyzron02/trading-strategy-backtester/src/runners/run_ma_crossover.py
-/home/pyzron02/trading-strategy-backtester/src/workflows/run_complete_workflow.py
-/home/pyzron02/trading-strategy-backtester/src/workflows/run_strategy_workflow.py
-/home/pyzron02/trading-strategy-backtester/src/workflows/run_master.py
