@@ -460,7 +460,8 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
 @log_execution_time('workflow')
 def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date=None, 
                          param_file=None, num_workers=None, output_dir=None, 
-                         in_sample_ratio=0.7, num_simulations=0, verbose=False, seed=42):
+                         in_sample_ratio=0.7, num_simulations=0, verbose=False, seed=42,
+                         keep_permuted_data=False):
     """
     Run a complete workflow with in-sample optimization and walk-forward testing.
     
@@ -476,6 +477,7 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
         num_simulations (int): Number of simulations for Monte Carlo testing
         verbose (bool): Whether to print detailed information
         seed (int): Random seed for reproducibility
+        keep_permuted_data (bool): Whether to save permuted stock data files
     
     Returns:
         dict: Workflow results
@@ -595,7 +597,8 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
             output_dir=monte_carlo_dir,
             num_workers=num_workers,
             verbose=verbose,
-            seed=seed
+            seed=seed,
+            keep_permuted_data=keep_permuted_data
         )
         
         monte_carlo_success = monte_carlo_result.get("success", False)
@@ -833,7 +836,8 @@ def main():
             in_sample_ratio=args.in_sample_ratio,
             num_simulations=args.num_simulations,
             verbose=args.verbose,
-            seed=args.seed
+            seed=args.seed,
+            keep_permuted_data=args.keep_permuted_data
         )
     
     return 0
