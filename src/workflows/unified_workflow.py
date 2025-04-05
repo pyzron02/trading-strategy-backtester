@@ -34,7 +34,6 @@ from engine.run_backtest import run_backtest
 
 # Import the Monte Carlo implementations
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from src.monte_carlo.direct_monte_carlo import DirectMonteCarloTest
 from src.monte_carlo.trade_based_monte_carlo import TradeBasedMonteCarloTest
 
 # Add imports from runners
@@ -116,18 +115,18 @@ def run_simple_workflow(strategy_name, tickers=None, start_date=None, end_date=N
 
 @log_execution_time('workflow')
 def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
-                           num_permutations=10, parameters=None, best_params=None, 
+                           num_simulations=10, parameters=None, best_params=None, 
                            output_dir=None, num_workers=None, verbose=False):
     """
     Run monte carlo tests safely by handling errors gracefully.
-    Uses the DirectMonteCarloTest implementation.
+    Uses the TradeBasedMonteCarloTest implementation.
     
     Args:
         strategy_name (str): Name of the strategy to test
         tickers (list): List of ticker symbols to include
         start_date (str): Start date for historical data
         end_date (str): End date for historical data
-        num_permutations (int): Number of permutations to run
+        num_simulations (int): Number of Monte Carlo simulations to run
         parameters (dict): Parameter ranges for the strategy optimization
         best_params (dict): Best parameters to use for the strategy
         output_dir (str): Directory to save results
@@ -135,7 +134,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         verbose (bool): Whether to print verbose output
     
     Returns:
-        dict: Results of the permutation testing
+        dict: Results of the Monte Carlo testing
     """
     # Convert any date parameters to strings if they are pandas Timestamps
     if start_date is not None and isinstance(start_date, pd.Timestamp):
@@ -188,37 +187,34 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
     
     try:
         if verbose:
-            print("Using Direct Monte Carlo implementation")
-            print(f"Trade logs will be generated for each permutation in subdirectories of {output_dir}")
+            print("Using Trade-Based Monte Carlo implementation")
+            print(f"Running {num_simulations} simulations with resampled trade returns")
         
-        # Initialize the Direct Monte Carlo test
-        monte_carlo_test = DirectMonteCarloTest(
+        # Initialize the Trade-Based Monte Carlo test
+        monte_carlo_test = TradeBasedMonteCarloTest(
             strategy_name=strategy_name,
-            tickers=tickers,
-            in_sample_start=start_date,
-            in_sample_end=in_sample_end,
-            out_sample_start=out_sample_start,
-            out_sample_end=end_date,
             parameters=best_params,
+            tickers=tickers,
+            input_dir=os.path.join(project_root, 'input'),
             output_dir=output_dir,
-            num_permutations=num_permutations
+            num_simulations=num_simulations,
+            seed=42,  # Use a fixed seed for reproducibility
+            verbose=verbose
         )
         
-        # Run the test with specified number of workers
-        results = monte_carlo_test.run_test(n_jobs=num_workers)
+        # Run the test with out-of-sample start date
+        results = monte_carlo_test.run_test(out_sample_start)
         
         if results:
-            # Create a summary of trade logs
+            # Trade log information
+            trade_log_path = os.path.join(output_dir, 'original_trade_log.csv')
+            trade_log_exists = os.path.exists(trade_log_path)
+            
+            # Create a trade log summary structure for compatibility
             trade_log_summary = {
-                'original': os.path.join(output_dir, 'original', 'trade_log_original.csv'),
+                'original': trade_log_path if trade_log_exists else None,
                 'permutations': []
             }
-            
-            # Add permutation trade logs
-            for i in range(num_permutations):
-                perm_log_path = os.path.join(output_dir, f'permutation_{i}', f'trade_log_permutation_{i}.csv')
-                if os.path.exists(perm_log_path):
-                    trade_log_summary['permutations'].append(perm_log_path)
             
             # Save the trade log summary
             with open(os.path.join(output_dir, 'trade_log_summary.json'), 'w') as f:
@@ -226,12 +222,17 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
             
             if verbose:
                 print(f"Trade logs summary saved to: {os.path.join(output_dir, 'trade_log_summary.json')}")
-                print(f"Original strategy trade log: {trade_log_summary['original']}")
-                print(f"Generated {len(trade_log_summary['permutations'])} permutation trade logs")
+                if trade_log_exists:
+                    print(f"Original strategy trade log: {trade_log_path}")
             
             return {
                 'success': True,
-                'results': results,
+                'results': {
+                    'analysis': {
+                        'p_values': {k: v.get('p_value', None) for k, v in results.items()}
+                    },
+                    'metrics': results
+                },
                 'parameters': best_params,
                 'dates': {
                     'in_sample_start': start_date,
@@ -244,7 +245,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         else:
             return {
                 'success': False,
-                'error': 'Direct Monte Carlo test failed to produce results',
+                'error': 'Trade-Based Monte Carlo test failed to produce results',
                 'parameters': best_params,
                 'dates': {
                     'in_sample_start': start_date,
@@ -445,7 +446,7 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
 @log_execution_time('workflow')
 def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date=None, 
                          param_file=None, num_workers=None, output_dir=None, 
-                         in_sample_ratio=0.7, num_permutations=0, verbose=False):
+                         in_sample_ratio=0.7, num_simulations=0, verbose=False):
     """
     Run a complete workflow with in-sample optimization and walk-forward testing.
     
@@ -458,7 +459,7 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
         num_workers (int): Number of parallel workers for optimization (CPU cores to use)
         output_dir (str): Directory to save output files
         in_sample_ratio (float): Ratio of data to use for in-sample period
-        num_permutations (int): Number of permutations for Monte Carlo testing
+        num_simulations (int): Number of simulations for Monte Carlo testing
         verbose (bool): Whether to print detailed information
     
     Returns:
@@ -564,16 +565,16 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
     # Step 3: Monte Carlo Testing (if requested)
     monte_carlo_results = None
     monte_carlo_success = False
-    if num_permutations > 0:
-        logger.info('workflow', f"Starting Monte Carlo testing with {num_permutations} permutations using {num_workers} workers...")
+    if num_simulations > 0:
+        logger.info('workflow', f"Starting Trade-Based Monte Carlo testing with {num_simulations} simulations using {num_workers} workers...")
         
-        # Use the safe Monte Carlo wrapper function
+        # Use the Trade-Based Monte Carlo wrapper function
         monte_carlo_result = run_monte_carlo_safely(
             strategy_name=strategy_name,
             tickers=tickers,
             start_date=start_date,
             end_date=end_date,
-            num_permutations=num_permutations,
+            num_simulations=num_simulations,
             parameters=None,
             best_params=best_params,
             output_dir=monte_carlo_dir,
@@ -585,7 +586,7 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
         monte_carlo_results = monte_carlo_result.get("results", None)
         
         if not monte_carlo_success:
-            logger.error('workflow', f"Error during Monte Carlo testing: {monte_carlo_result.get('error', 'Unknown error')}")
+            logger.error('workflow', f"Error during Trade-Based Monte Carlo testing: {monte_carlo_result.get('error', 'Unknown error')}")
             logger.warning('workflow', f"Monte Carlo testing results may be incomplete")
             # Store the error in the results
             monte_carlo_results = {
@@ -639,142 +640,116 @@ def run_complete_workflow(strategy_name, tickers=None, start_date=None, end_date
 
 def main():
     """Main entry point for the unified workflow."""
-    parser = argparse.ArgumentParser(description='Run a backtesting workflow')
+    parser = argparse.ArgumentParser(description='Backtest a trading strategy')
     
-    # Required arguments
-    parser.add_argument('--workflow-type', type=str, required=True, 
-                        choices=['simple', 'monte-carlo', 'trade-monte-carlo', 'walk-forward', 'complete'],
-                        help='Type of workflow to run')
-    parser.add_argument('--strategy', type=str, required=True,
-                        help='Strategy to use for the backtest')
-    
-    # Optional arguments
+    # Add general arguments
+    parser.add_argument('--strategy', type=str, required=True, 
+                        help='Strategy name to test')
     parser.add_argument('--tickers', type=str, nargs='+', 
-                        help='Tickers to use for the backtest')
-    parser.add_argument('--start-date', type=str, default="2015-01-01",
-                        help='Start date for the backtest')
-    parser.add_argument('--end-date', type=str, default="2021-12-31",
-                        help='End date for the backtest')
-    parser.add_argument('--out-of-sample-start', type=str, default=None,
-                        help='Start date for out-of-sample period (for trade-monte-carlo)')
+                        help='Ticker symbols to test')
+    parser.add_argument('--start-date', type=str, default='2015-01-01', 
+                        help='Start date for the test period (YYYY-MM-DD)')
+    parser.add_argument('--end-date', type=str, default='2021-12-31', 
+                        help='End date for the test period (YYYY-MM-DD)')
+    parser.add_argument('--out-of-sample-start', type=str,
+                        help='Start date for out-of-sample testing (YYYY-MM-DD)')
     parser.add_argument('--param-file', type=str,
                         help='Path to a parameter file to use for the backtest')
-    parser.add_argument('--num-permutations', type=int, default=10,
-                        help='Number of permutations to use for market data Monte Carlo testing')
     parser.add_argument('--num-simulations', type=int, default=1000,
-                        help='Number of simulations to use for trade-based Monte Carlo testing')
+                        help='Number of simulations to use for Monte Carlo testing')
     parser.add_argument('--output-dir', type=str,
-                        help='Directory to save results')
-    parser.add_argument('--in-sample-ratio', type=float, default=0.7, 
-                        help='Ratio of data to use for in-sample testing')
+                        help='Directory to save output files')
+    parser.add_argument('--in-sample-ratio', type=float, default=0.7,
+                        help='Ratio of data to use for in-sample period')
     parser.add_argument('--verbose', action='store_true',
-                        help='Print verbose output')
-    parser.add_argument('--num-cores', type=int, default=None,
-                        help='Number of CPU cores to use for parallel processing')
-    parser.add_argument('--seed', type=int, default=None,
+                        help='Print additional output')
+    parser.add_argument('--num-cores', type=int,
+                        help='Number of cores to use for parallel processing')
+    parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
+    parser.add_argument('--workflow-type', type=str, default='simple',
+                        choices=['simple', 'monte-carlo', 'trade-monte-carlo', 'complete', 'walk-forward'],
+                        help='Type of workflow to run')
     
+    # Parse the arguments
     args = parser.parse_args()
     
-    # Print available strategies if in verbose mode
+    # Set the verbose output
     if args.verbose:
-        registered_strategies = registry.get_registered_strategies()
-        strategy_names = [strategy['name'] for strategy in registered_strategies]
-        print(f"Available strategies: {strategy_names}")
-        print(f"\nRunning {args.workflow_type} workflow for {args.strategy}")
+        logger.set_level('INFO')
+    else:
+        logger.set_level('WARNING')
     
-    # Run the appropriate workflow
+    # Run the appropriate workflow based on the type
+    results = None
+    
+    # Set the parallel CPU cores if provided
+    num_workers = args.num_cores if args.num_cores else None
+    
     if args.workflow_type == 'simple':
-        # Run the simple workflow
-        run_simple_workflow(
+        # Run a simple backtest
+        print(f"Running simple backtest for {args.strategy}...")
+        results = run_simple_workflow(
             strategy_name=args.strategy,
             tickers=args.tickers,
             start_date=args.start_date,
             end_date=args.end_date,
             param_file=args.param_file,
             output_dir=args.output_dir,
-            detailed_analysis=False,
+            detailed_analysis=args.verbose,
             verbose=args.verbose
         )
+    
     elif args.workflow_type == 'monte-carlo':
         # Run the Monte Carlo test
-        print(f"Running Monte Carlo test for {args.strategy}...")
-        
-        # Convert permutations to integer
-        num_permutations = int(args.num_permutations) if args.num_permutations else 10
+        print(f"Running Trade-Based Monte Carlo test for {args.strategy}...")
         
         # Use params from file if provided
         parameters = None
         if args.param_file:
             try:
                 param_manager = ParameterManager()
-                parameters = param_manager.load_parameter_file(args.param_file)
-                if args.verbose:
-                    print(f"Loaded parameters from {args.param_file}: {parameters}")
+                parameters = param_manager.load_parameters(args.strategy, args.param_file)
             except Exception as e:
-                print(f"Error loading parameters from {args.param_file}: {e}")
-                print("Using default parameters instead.")
+                print(f"Error loading parameters from file: {e}")
+                print("Using default parameters.")
         
-        # Run the Monte Carlo test safely
         results = run_monte_carlo_safely(
-            strategy_name=args.strategy,
-            tickers=args.tickers if isinstance(args.tickers, list) else (args.tickers.split(',') if args.tickers else ['AAPL']),
+            strategy_name=args.strategy, 
+            tickers=args.tickers,
             start_date=args.start_date,
             end_date=args.end_date,
-            num_permutations=num_permutations,
+            num_simulations=args.num_simulations,
             parameters=parameters,
             output_dir=args.output_dir,
-            num_workers=args.num_cores,
+            num_workers=num_workers,
             verbose=args.verbose
         )
         
-        if not results or not results.get('success', False):
-            error_msg = results.get('error', 'Unknown error') if results else 'No results returned'
-            print(f"Monte Carlo testing failed: {error_msg}")
-        else:
-            print("Monte Carlo testing completed successfully.")
+        if results.get("success", False):
+            print("Monte Carlo testing completed successfully!")
+            monte_carlo_results = results.get("results", {})
             
-            # Save detailed results
+            # Save results to file
             if args.output_dir:
-                results_file = os.path.join(args.output_dir, "monte_carlo_results.json")
-                with open(results_file, 'w') as f:
-                    json.dump(results, f, indent=4, cls=CustomJSONEncoder)
-                print(f"Results saved to {results_file}")
-            
-            # Summary of p-values
-            if (results and 'results' in results and results['results'] and 
-                'analysis' in results['results'] and 'p_values' in results['results']['analysis']):
-                p_values = results['results']['analysis']['p_values']
-                print("\nP-values for performance metrics:")
+                json_path = os.path.join(args.output_dir, f"{args.strategy}_monte_carlo_results.json")
+                with open(json_path, 'w') as f:
+                    json.dump(monte_carlo_results, f, indent=4, cls=CustomJSONEncoder)
+                print(f"Results saved to {json_path}")
+                
+            # Print p-values
+            p_values = monte_carlo_results.get("p_values", {})
+            if p_values:
+                print("\nMetric p-values (lower is better, less than 0.05 is significant):")
                 for metric, p_value in p_values.items():
-                    if p_value is not None:
-                        significance = "Significant" if p_value < 0.05 else "Not significant"
-                        print(f"  {metric.replace('_', ' ').title()}: {p_value:.4f} ({significance})")
-            else:
-                print("No p-values available in the results.")
-            
-            # Display trade log information
-            if 'trade_logs' in results:
-                trade_logs = results['trade_logs']
-                print("\nTrade logs generated:")
-                print(f"  Original strategy: {os.path.basename(trade_logs['original'])}")
-                print(f"  Number of permutation logs: {len(trade_logs['permutations'])}")
-                if args.verbose and trade_logs['permutations']:
-                    print("  Permutation trade logs:")
-                    for i, log_path in enumerate(trade_logs['permutations'][:5]):  # Show first 5 for brevity
-                        print(f"    - Permutation {i}: {os.path.basename(log_path)}")
-                    if len(trade_logs['permutations']) > 5:
-                        print(f"    - ... and {len(trade_logs['permutations']) - 5} more")
-                if args.output_dir:
-                    print(f"\nTrade logs summary saved to: {os.path.join(args.output_dir, 'trade_log_summary.json')}")
-                else:
-                    print("\nTrade logs summary saved to the output directory")
+                    significance = "SIGNIFICANT" if p_value < 0.05 else "not significant"
+                    print(f"  - {metric}: {p_value:.4f} ({significance})")
+        else:
+            print(f"Error during Monte Carlo testing: {results.get('error', 'Unknown error')}")
+    
     elif args.workflow_type == 'trade-monte-carlo':
         # Run the Trade-Based Monte Carlo test
         print(f"Running Trade-Based Monte Carlo test for {args.strategy}...")
-        
-        # Convert simulations to integer
-        num_simulations = int(args.num_simulations) if args.num_simulations else 1000
         
         # Use params from file if provided
         parameters = None
@@ -782,85 +757,63 @@ def main():
         if args.param_file:
             try:
                 param_manager = ParameterManager()
-                best_params = param_manager.load_parameter_file(args.param_file)
-                if args.verbose:
-                    print(f"Loaded parameters from {args.param_file}: {best_params}")
+                parameters = param_manager.load_parameters(args.strategy, args.param_file)
+                best_params = parameters
             except Exception as e:
-                print(f"Error loading parameters from {args.param_file}: {e}")
-                print("Using default parameters instead.")
+                print(f"Error loading parameters from file: {e}")
+                print("Using default parameters.")
         
-        # Run the Trade-Based Monte Carlo test safely
         results = run_trade_monte_carlo_safely(
-            strategy_name=args.strategy,
-            tickers=args.tickers if isinstance(args.tickers, list) else (args.tickers.split(',') if args.tickers else ['AAPL']),
+            strategy_name=args.strategy, 
+            tickers=args.tickers,
             start_date=args.start_date,
             end_date=args.end_date,
             out_of_sample_start=args.out_of_sample_start,
-            num_simulations=num_simulations,
+            num_simulations=args.num_simulations,
             parameters=parameters,
             best_params=best_params,
             output_dir=args.output_dir,
-            verbose=args.verbose,
-            seed=args.seed
+            num_workers=num_workers,
+            verbose=args.verbose
         )
         
-        if not results or not results.get('success', False):
-            error_msg = results.get('error', 'Unknown error') if results else 'No results returned'
-            print(f"Trade-Based Monte Carlo testing failed: {error_msg}")
-        else:
-            print("Trade-Based Monte Carlo testing completed successfully.")
+        if results.get("success", False):
+            print("Trade-Based Monte Carlo testing completed successfully!")
+            monte_carlo_results = results.get("results", {})
             
-            # Save detailed results
+            # Save results to file
             if args.output_dir:
-                results_file = os.path.join(args.output_dir, "trade_monte_carlo_results.json")
-                with open(results_file, 'w') as f:
-                    json.dump(results, f, indent=4, cls=CustomJSONEncoder)
-                print(f"Results saved to {results_file}")
-            
-            # Summary of p-values
-            if (results and 'results' in results):
-                print("\nP-values for performance metrics:")
-                for metric, stats in results['results'].items():
-                    if 'p_value' in stats:
-                        p_value = stats['p_value']
-                        significance = "Significant" if p_value < 0.05 else "Not significant"
-                        print(f"  {metric.replace('_', ' ').title()}: {p_value:.4f} ({significance})")
-            else:
-                print("No analysis results available.")
+                json_path = os.path.join(args.output_dir, f"{args.strategy}_trade_monte_carlo_results.json")
+                with open(json_path, 'w') as f:
+                    json.dump(monte_carlo_results, f, indent=4, cls=CustomJSONEncoder)
+                print(f"Results saved to {json_path}")
+                
+            # Print summary
+            analysis = monte_carlo_results.get("analysis", {})
+            if analysis:
+                print("\nMonte Carlo Analysis Summary:")
+                for metric, value in analysis.items():
+                    print(f"  - {metric}: {value}")
+        else:
+            print(f"Error during Trade-Based Monte Carlo testing: {results.get('error', 'Unknown error')}")
+    
     elif args.workflow_type == 'complete':
-        # Run the complete workflow with optimization and Monte Carlo
-        run_complete_workflow(
+        # Run the complete workflow
+        print(f"Running complete workflow for {args.strategy}...")
+        results = run_complete_workflow(
             strategy_name=args.strategy,
             tickers=args.tickers,
             start_date=args.start_date,
             end_date=args.end_date,
             param_file=args.param_file,
-            num_workers=args.num_cores,
+            num_workers=num_workers,
             output_dir=args.output_dir,
             in_sample_ratio=args.in_sample_ratio,
-            num_permutations=args.num_permutations,
-            verbose=args.verbose
-        )
-    elif args.workflow_type == 'walk-forward':
-        # Calculate dates based on in-sample ratio
-        date_range = (datetime.strptime(args.end_date, '%Y-%m-%d') - datetime.strptime(args.start_date, '%Y-%m-%d')).days
-        in_sample_days = int(date_range * args.in_sample_ratio)
-        in_sample_end = (datetime.strptime(args.start_date, '%Y-%m-%d') + pd.Timedelta(days=in_sample_days)).strftime('%Y-%m-%d')
-        out_sample_start = (datetime.strptime(in_sample_end, '%Y-%m-%d') + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
-        
-        run_walk_forward_test(
-            strategy_name=args.strategy,
-            tickers=args.tickers,
-            in_sample_start=args.start_date,
-            in_sample_end=in_sample_end,
-            out_sample_start=out_sample_start,
-            out_sample_end=args.end_date,
-            param_file=args.param_file,
-            output_dir=args.output_dir,
+            num_simulations=args.num_simulations,
             verbose=args.verbose
         )
     
     return 0
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main()) 
