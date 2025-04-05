@@ -290,16 +290,48 @@ class TradeBasedMonteCarloTest:
             'initial_value': original_results.get('initial_value', self.initial_capital),
             'final_value': original_results.get('final_value', 0),
             'total_return': original_results.get('total_return', 0),
-            'sharpe_ratio': original_results.get('sharpe_ratio', 0),
-            'max_drawdown': original_results.get('max_drawdown', 0),
+            'sharpe_ratio': 0,
+            'max_drawdown': 0,
             'win_rate': 0,
             'profit_factor': 0,
             'total_trades': 0
         }
         
+        # Extract Sharpe ratio and max drawdown from metrics if available
+        if 'metrics' in original_results:
+            backtest_metrics = original_results.get('metrics', {})
+            
+            if isinstance(backtest_metrics, dict):
+                # Get sharpe_ratio
+                if 'sharpe_ratio' in backtest_metrics:
+                    metrics['sharpe_ratio'] = backtest_metrics['sharpe_ratio']
+                
+                # Get max_drawdown
+                if 'max_drawdown' in backtest_metrics:
+                    metrics['max_drawdown'] = backtest_metrics['max_drawdown']
+                    
+                # Try to get from trade_analysis nested dict
+                trade_analysis = backtest_metrics.get('trade_analysis', {})
+                if isinstance(trade_analysis, dict):
+                    if 'win_rate' in trade_analysis:
+                        metrics['win_rate'] = trade_analysis['win_rate']
+                    if 'profit_factor' in trade_analysis:
+                        metrics['profit_factor'] = trade_analysis['profit_factor']
+        
+        # Calculate metrics from equity curve if still missing
+        if (metrics['sharpe_ratio'] == 0 or metrics['max_drawdown'] == 0) and 'equity_curve' in original_results:
+            equity_metrics = self._calculate_metrics_from_equity_curve(original_results['equity_curve'])
+            
+            # Update metrics if they are missing
+            if metrics['sharpe_ratio'] == 0 and 'sharpe_ratio' in equity_metrics:
+                metrics['sharpe_ratio'] = equity_metrics['sharpe_ratio']
+            
+            if metrics['max_drawdown'] == 0 and 'max_drawdown' in equity_metrics:
+                metrics['max_drawdown'] = equity_metrics['max_drawdown']
+        
         # Extract win rate and profit factor from trades if available
         trades = original_results.get('trades', [])
-        if trades:
+        if trades and metrics['win_rate'] == 0:
             won_trades = sum(1 for trade in trades if trade.get('pnl', 0) > 0)
             lost_trades = sum(1 for trade in trades if trade.get('pnl', 0) < 0)
             total_trades = len(trades)
@@ -321,7 +353,9 @@ class TradeBasedMonteCarloTest:
             print(f"Total return: {metrics['total_return']:.2f}%")
             print(f"Sharpe ratio: {metrics['sharpe_ratio']:.2f}")
             print(f"Max drawdown: {metrics['max_drawdown']:.2f}%")
-            
+            print(f"Win rate: {metrics['win_rate']:.2f}")
+            print(f"Profit factor: {metrics['profit_factor']:.2f}")
+        
         return metrics
     
     def run_monte_carlo_simulations(self, out_of_sample_start: str) -> List[Dict]:
@@ -395,16 +429,48 @@ class TradeBasedMonteCarloTest:
                     'initial_value': sim_results.get('initial_value', self.initial_capital),
                     'final_value': sim_results.get('final_value', 0),
                     'total_return': sim_results.get('total_return', 0),
-                    'sharpe_ratio': sim_results.get('sharpe_ratio', 0),
-                    'max_drawdown': sim_results.get('max_drawdown', 0),
+                    'sharpe_ratio': 0,
+                    'max_drawdown': 0,
                     'win_rate': 0,
                     'profit_factor': 0,
                     'total_trades': 0
                 }
                 
+                # Extract Sharpe ratio and max drawdown from metrics if available
+                if 'metrics' in sim_results:
+                    backtest_metrics = sim_results.get('metrics', {})
+                    
+                    if isinstance(backtest_metrics, dict):
+                        # Get sharpe_ratio
+                        if 'sharpe_ratio' in backtest_metrics:
+                            metrics['sharpe_ratio'] = backtest_metrics['sharpe_ratio']
+                        
+                        # Get max_drawdown
+                        if 'max_drawdown' in backtest_metrics:
+                            metrics['max_drawdown'] = backtest_metrics['max_drawdown']
+                        
+                        # Try to get from trade_analysis nested dict
+                        trade_analysis = backtest_metrics.get('trade_analysis', {})
+                        if isinstance(trade_analysis, dict):
+                            if 'win_rate' in trade_analysis:
+                                metrics['win_rate'] = trade_analysis['win_rate']
+                            if 'profit_factor' in trade_analysis:
+                                metrics['profit_factor'] = trade_analysis['profit_factor']
+                
+                # Calculate metrics from equity curve if still missing
+                if (metrics['sharpe_ratio'] == 0 or metrics['max_drawdown'] == 0) and 'equity_curve' in sim_results:
+                    equity_metrics = self._calculate_metrics_from_equity_curve(sim_results['equity_curve'])
+                    
+                    # Update metrics if they are missing
+                    if metrics['sharpe_ratio'] == 0 and 'sharpe_ratio' in equity_metrics:
+                        metrics['sharpe_ratio'] = equity_metrics['sharpe_ratio']
+                    
+                    if metrics['max_drawdown'] == 0 and 'max_drawdown' in equity_metrics:
+                        metrics['max_drawdown'] = equity_metrics['max_drawdown']
+                
                 # Extract win rate and profit factor from trades if available
                 trades = sim_results.get('trades', [])
-                if trades:
+                if trades and metrics['win_rate'] == 0:
                     won_trades = sum(1 for trade in trades if trade.get('pnl', 0) > 0)
                     lost_trades = sum(1 for trade in trades if trade.get('pnl', 0) < 0)
                     total_trades = len(trades)
@@ -452,6 +518,11 @@ class TradeBasedMonteCarloTest:
         """
         if self.verbose:
             print("Analyzing Monte Carlo simulation results")
+            print(f"Original metrics: {original_metrics}")
+            print(f"Number of simulation metrics: {len(simulated_metrics)}")
+            # Print sample of first simulation metrics
+            if simulated_metrics:
+                print(f"First simulation metrics: {simulated_metrics[0]}")
         
         # Convert to DataFrame for easier analysis
         sim_df = pd.DataFrame(simulated_metrics)
@@ -463,11 +534,19 @@ class TradeBasedMonteCarloTest:
         for metric in metrics_to_analyze:
             # Skip if metric is not available
             if metric not in sim_df.columns:
+                if self.verbose:
+                    print(f"Warning: Metric '{metric}' not found in simulation results")
                 continue
                 
             # Get values for this metric
             sim_values = sim_df[metric].values
             original_value = original_metrics.get(metric, 0)
+            
+            if self.verbose:
+                print(f"\nAnalyzing {metric}:")
+                print(f"  Original value: {original_value}")
+                print(f"  Simulation values min: {np.min(sim_values)}, max: {np.max(sim_values)}")
+                print(f"  Simulation values mean: {np.mean(sim_values)}, std: {np.std(sim_values)}")
             
             # Calculate statistics
             stats_dict = {
@@ -839,6 +918,76 @@ class TradeBasedMonteCarloTest:
             print(f"Error creating equity curve comparison: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _calculate_metrics_from_equity_curve(self, equity_curve_data):
+        """
+        Calculate key performance metrics from equity curve data
+        
+        Args:
+            equity_curve_data: List of dicts or DataFrame with equity curve data
+            
+        Returns:
+            dict: Dictionary with calculated metrics
+        """
+        metrics = {}
+        
+        try:
+            # Convert to DataFrame if not already
+            if not isinstance(equity_curve_data, pd.DataFrame):
+                equity_curve = pd.DataFrame(equity_curve_data)
+                if 'Date' in equity_curve.columns:
+                    equity_curve['Date'] = pd.to_datetime(equity_curve['Date'])
+                    equity_curve.set_index('Date', inplace=True)
+            else:
+                equity_curve = equity_curve_data.copy()
+            
+            if 'Value' in equity_curve.columns:
+                # Calculate daily returns
+                equity_curve['Daily_Return'] = equity_curve['Value'].pct_change()
+                
+                # Calculate Sharpe ratio (annualized)
+                daily_returns = equity_curve['Daily_Return'].dropna()
+                if len(daily_returns) > 0:
+                    mean_return = daily_returns.mean()
+                    std_return = daily_returns.std()
+                    if std_return > 0:
+                        sharpe = np.sqrt(252) * mean_return / std_return
+                        metrics['sharpe_ratio'] = sharpe
+                    else:
+                        metrics['sharpe_ratio'] = 0 if mean_return >= 0 else -999
+                else:
+                    metrics['sharpe_ratio'] = 0
+                
+                # Calculate max drawdown
+                values = equity_curve['Value'].values
+                peak = np.maximum.accumulate(values)
+                drawdowns = 1 - values / peak
+                max_dd = np.max(drawdowns) if len(drawdowns) > 0 else 0
+                metrics['max_drawdown'] = max_dd * 100  # Convert to percentage
+                
+                # Calculate total return
+                if len(values) > 0:
+                    initial_value = values[0]
+                    final_value = values[-1]
+                    if initial_value > 0:
+                        total_return = (final_value / initial_value - 1) * 100  # Convert to percentage
+                        metrics['total_return'] = total_return
+                    else:
+                        metrics['total_return'] = 0
+                else:
+                    metrics['total_return'] = 0
+            else:
+                metrics['sharpe_ratio'] = 0
+                metrics['max_drawdown'] = 0
+                metrics['total_return'] = 0
+        except Exception as e:
+            if self.verbose:
+                print(f"Error calculating metrics from equity curve: {e}")
+            metrics['sharpe_ratio'] = 0
+            metrics['max_drawdown'] = 0
+            metrics['total_return'] = 0
+        
+        return metrics
     
     def run_test(self, out_of_sample_start: str) -> Dict:
         """
