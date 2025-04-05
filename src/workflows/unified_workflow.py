@@ -116,7 +116,8 @@ def run_simple_workflow(strategy_name, tickers=None, start_date=None, end_date=N
 @log_execution_time('workflow')
 def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
                            num_simulations=10, parameters=None, best_params=None, 
-                           output_dir=None, num_workers=None, verbose=False, seed=42):
+                           output_dir=None, num_workers=None, verbose=False, seed=42,
+                           keep_permuted_data=False):
     """
     Run monte carlo tests safely by handling errors gracefully.
     Uses the TradeBasedMonteCarloTest implementation.
@@ -133,6 +134,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
         num_workers (int): Number of parallel workers to use for Monte Carlo simulations
         verbose (bool): Whether to print verbose output
         seed (int): Random seed for reproducibility
+        keep_permuted_data (bool): Whether to save the permuted stock data files
     
     Returns:
         dict: Results of the Monte Carlo testing
@@ -203,7 +205,8 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
             num_simulations=num_simulations,
             seed=seed,  # Use provided seed for reproducibility
             verbose=verbose,
-            num_workers=num_workers
+            num_workers=num_workers,
+            keep_permuted_data=keep_permuted_data
         )
         
         # Run the test with out-of-sample start date
@@ -294,7 +297,7 @@ def run_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_dat
 def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, end_date=None, 
                             out_of_sample_start=None, num_simulations=1000, parameters=None, 
                             best_params=None, output_dir=None, verbose=False, seed=None,
-                            num_workers=None):
+                            num_workers=None, keep_permuted_data=False):
     """
     Run trade-based Monte Carlo tests safely by handling errors gracefully.
     Uses the TradeBasedMonteCarloTest implementation which resamples trade returns.
@@ -312,6 +315,7 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
         verbose (bool): Whether to print verbose output
         seed (int): Random seed for reproducibility
         num_workers (int): Number of parallel workers to use for Monte Carlo simulations
+        keep_permuted_data (bool): Whether to save the permuted stock data files
     
     Returns:
         dict: Results of the trade-based Monte Carlo testing
@@ -379,7 +383,8 @@ def run_trade_monte_carlo_safely(strategy_name, tickers=None, start_date=None, e
             num_simulations=num_simulations,
             seed=seed,
             verbose=verbose,
-            num_workers=num_workers
+            num_workers=num_workers,
+            keep_permuted_data=keep_permuted_data
         )
         
         # Run the test with out-of-sample start date
@@ -681,6 +686,8 @@ def main():
     parser.add_argument('--workflow-type', type=str, default='simple',
                         choices=['simple', 'monte-carlo', 'trade-monte-carlo', 'complete', 'walk-forward'],
                         help='Type of workflow to run')
+    parser.add_argument('--keep-permuted-data', action='store_true',
+                        help='Save the permuted stock data files for analysis')
     
     # Parse the arguments
     args = parser.parse_args()
@@ -735,7 +742,8 @@ def main():
             output_dir=args.output_dir,
             num_workers=num_workers,
             verbose=args.verbose,
-            seed=args.seed
+            seed=args.seed,
+            keep_permuted_data=args.keep_permuted_data
         )
         
         if results.get("success", False):
@@ -785,9 +793,10 @@ def main():
             parameters=parameters,
             best_params=best_params,
             output_dir=args.output_dir,
-            num_workers=num_workers,
             verbose=args.verbose,
-            seed=args.seed
+            seed=args.seed,
+            num_workers=num_workers,
+            keep_permuted_data=args.keep_permuted_data
         )
         
         if results.get("success", False):
