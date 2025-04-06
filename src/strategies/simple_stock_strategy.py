@@ -34,11 +34,13 @@ class SimpleStockStrategy(bt.Strategy):
     Parameters:
         sma_period (int): The period for the Simple Moving Average
         position_size (int): Number of shares to buy/sell
+        threshold_pct (float): Percentage threshold above/below SMA to trigger signals (0.02 = 2%)
     """
     
     params = (
         ('sma_period', 20),
         ('position_size', 10),
+        ('threshold_pct', 0.0),  # Default is 0%, which means any cross triggers a signal
     )
 
     def __init__(self):
@@ -84,12 +86,18 @@ class SimpleStockStrategy(bt.Strategy):
                 
             # Get current values
             close = data.close[0]
+            high = data.high[0]
+            low = data.low[0]
             sma = self.smas[data][0]
             position = self.getposition(data).size
+            
+            # Calculate thresholds
+            buy_threshold = sma * (1 - self.params.threshold_pct)  # Now below SMA
+            sell_threshold = sma * (1 + self.params.threshold_pct)  # Now above SMA
 
             # Trading logic applied to each ticker
-            if close > sma and position == 0:
-                # Buy signal: price above SMA and no position
+            if low < buy_threshold and position == 0:
+                # Buy signal: price dropped below threshold below SMA and no position
                 self.buy(data=data, size=self.params.position_size)
                 
                 # Track trade
@@ -101,8 +109,8 @@ class SimpleStockStrategy(bt.Strategy):
                     'size': self.params.position_size
                 })
                 
-            elif close < sma and position > 0:
-                # Sell signal: price below SMA and has position
+            elif high > sell_threshold and position > 0:
+                # Sell signal: price exceeded threshold above SMA and has position
                 self.sell(data=data, size=position)
                 
                 # Calculate P&L

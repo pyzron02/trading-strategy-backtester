@@ -42,11 +42,18 @@ def _run_single_backtest(args):
     # Create directory if it doesn't exist
     os.makedirs(param_dir, exist_ok=True)
     
-    # Save parameters to file
+    # Save parameters to file with improved formatting
     params_file = os.path.join(param_dir, "parameters.txt")
     with open(params_file, 'w') as f:
+        f.write(f"Parameter Set {i} for {strategy_name}\n")
+        f.write(f"Testing period: {start_date} to {end_date}\n\n")
+        f.write("Parameters:\n")
+        # Format the parameters in a clear, consistent way
         for param, value in params.items():
-            f.write(f"{param}: {value}\n")
+            f.write(f"  {param}: {value}\n")
+        
+        # Add timestamp for tracking
+        f.write(f"\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
     try:
         # Run backtest with these parameters
@@ -65,8 +72,33 @@ def _run_single_backtest(args):
         with open(results_file, 'wb') as f:
             pickle.dump(results, f)
         
+        # Update parameters.txt with the results if they're available
+        if results:
+            try:
+                # Extract key metrics for the parameter file
+                with open(params_file, 'a') as f:
+                    f.write("\nResults:\n")
+                    if 'metrics' in results:
+                        for metric_name, metric_value in results['metrics'].items():
+                            f.write(f"  {metric_name}: {metric_value}\n")
+                    
+                    if 'total_return' in results:
+                        f.write(f"  total_return: {results['total_return']}\n")
+                    
+                    if 'final_value' in results and 'initial_value' in results:
+                        initial = results['initial_value']
+                        final = results['final_value']
+                        pct_return = ((final - initial) / initial) * 100 if initial > 0 else 0
+                        f.write(f"  return_pct: {pct_return:.2f}%\n")
+            except Exception as e:
+                print(f"Warning: Could not update parameters.txt with results: {e}")
+        
         return (i, results, params)
     except Exception as e:
+        # Log the error to the parameters file
+        with open(params_file, 'a') as f:
+            f.write(f"\nERROR: {e}\n")
+        
         print(f"Error in backtest {i} with params {params}: {e}")
         return (i, None, params)
 
@@ -287,8 +319,11 @@ class InSampleExcellence:
                 print(f"  {param}: {value}")
             print(f"Best {metric}: {best_result.get(metric, 'N/A')}")
             
-            # Save best parameters
-            self._save_best_parameters(best_result, metric)
+            # Extract metrics dictionary for best result
+            best_metrics = {k: v for k, v in best_result.items() if k != 'parameters'}
+            
+            # Save best parameters with separated metrics dictionary
+            results = self._save_best_parameters(best_result['parameters'], best_metrics, param_combinations, metric)
             
             # Plot parameter importance
             self._plot_parameter_importance(metric)
@@ -296,6 +331,7 @@ class InSampleExcellence:
             # Return best parameters and metrics
             return {
                 'best_parameters': best_result['parameters'],
+                'best_metrics': best_metrics,
                 'best_sharpe': best_result.get('sharpe_ratio', 0),
                 'best_profit_factor': best_result.get('profit_factor', 0),
                 'best_total_return': best_result.get('total_return', 0),
@@ -305,6 +341,7 @@ class InSampleExcellence:
             print("No valid results were found during optimization")
             return {
                 'best_parameters': {},
+                'best_metrics': {},
                 'best_sharpe': 0,
                 'best_profit_factor': 0,
                 'best_total_return': 0,
@@ -398,34 +435,74 @@ class InSampleExcellence:
         
         return metrics
     
-    def _save_best_parameters(self, best_result, metric):
+    def _save_best_parameters(self, best_params, best_metrics, parameter_combinations, metric_name):
         """
-        Save the best parameters to a file.
-        
-        Args:
-            best_result (dict): Best parameter combination and its performance
-            metric (str): Metric used for optimization
+        Save the best parameters to a file and return them for further use.
         """
-        # Save best parameters to a pickle file
-        best_params_file = os.path.join(self.output_dir, 'best_parameters.pkl')
-        with open(best_params_file, 'wb') as f:
-            pickle.dump(best_result['parameters'], f)
+        # Get the best parameter set info
+        best_params_dict = best_params.copy()
         
-        # Save best parameters to a text file
+        # If not a dict (e.g. a parameter set object), convert
+        if not isinstance(best_params_dict, dict):
+            best_params_dict = best_params_dict.to_dict()
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Save to pickle file
+        best_params_pickle = os.path.join(self.output_dir, 'best_parameters.pkl')
+        with open(best_params_pickle, 'wb') as f:
+            pickle.dump(best_params_dict, f)
+        
+        # Save to human-readable text file
         best_params_txt = os.path.join(self.output_dir, 'best_parameters.txt')
         with open(best_params_txt, 'w') as f:
-            f.write(f"Best Parameters for {self.strategy_name}\n")
-            f.write(f"Optimization Metric: {metric}\n")
-            f.write(f"In-Sample Period: {self.start_date} to {self.end_date}\n\n")
+            f.write(f"Strategy: {self.strategy_name}\n")
+            f.write(f"Optimization Metric: {metric_name}\n")
+            f.write(f"In-sample Period: {self.start_date} to {self.end_date}\n\n")
             f.write("Parameters:\n")
-            for param, value in best_result['parameters'].items():
+            for param, value in best_params_dict.items():
                 f.write(f"  {param}: {value}\n")
+            
             f.write("\nPerformance Metrics:\n")
-            for key, value in best_result.items():
-                if key != 'parameters':
-                    f.write(f"  {key}: {value}\n")
+            for metric, value in best_metrics.items():
+                if isinstance(value, (int, float)):
+                    f.write(f"  {metric}: {value:.4f}\n")
+                else:
+                    f.write(f"  {metric}: {value}\n")
+
+        # Save to standard parameters.txt file that tools expect
+        params_txt = os.path.join(self.output_dir, 'parameters.txt')
+        with open(params_txt, 'w') as f:
+            # Header
+            f.write(f"# {self.strategy_name} - Optimized Parameters\n")
+            f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Optimization Metric: {metric_name}\n")
+            f.write(f"# In-sample Period: {self.start_date} to {self.end_date}\n\n")
+            
+            # Parameters in key:value format
+            for param, value in best_params_dict.items():
+                f.write(f"{param}: {value}\n")
+            
+            # Performance metrics (with simple formatting for numeric values)
+            f.write("\n# Performance Metrics\n")
+            for metric, value in best_metrics.items():
+                if isinstance(value, (int, float)):
+                    f.write(f"{metric}: {value:.6f}\n")
+                else:
+                    f.write(f"{metric}: {value}\n")
         
-        print(f"Best parameters saved to {best_params_file} and {best_params_txt}")
+        logger.info('in_sample', f"Best parameters saved to {best_params_txt} and {params_txt}")
+        
+        # Create dictionary of results
+        results = {
+            'best_parameters': best_params_dict,
+            'best_metrics': best_metrics,
+            'all_results': parameter_combinations,
+            'metric_name': metric_name
+        }
+        
+        return results
     
     def _plot_parameter_importance(self, metric):
         """
@@ -469,14 +546,20 @@ class InSampleExcellence:
             grouped = df.groupby('param_value')['metric_value'].mean().reset_index()
             
             # Plot
-            axes[i].bar(grouped['param_value'].astype(str), grouped['metric_value'])
+            x_values = range(len(grouped))  # Create numeric x positions
+            axes[i].bar(x_values, grouped['metric_value'])
             axes[i].set_title(f'Effect of {param} on {metric}')
             axes[i].set_xlabel(param)
             axes[i].set_ylabel(metric)
             
+            # Set both x-ticks and x-tick labels
+            axes[i].set_xticks(x_values)  # Set tick positions
+            
             # Rotate x-axis labels if there are many values
             if len(grouped) > 5:
                 axes[i].set_xticklabels(grouped['param_value'].astype(str), rotation=45)
+            else:
+                axes[i].set_xticklabels(grouped['param_value'].astype(str))
         
         plt.tight_layout()
         
