@@ -221,6 +221,9 @@ class TradeBasedMonteCarloTest:
         # Keep the Date column intact
         dates = permuted_df['Date'].copy()
         
+        # Set random seed for reproducibility but different for each permutation
+        np.random.seed(permutation_id + 42)
+        
         # Process each ticker separately
         for ticker in self.tickers:
             # Find all columns for this ticker
@@ -275,16 +278,76 @@ class TradeBasedMonteCarloTest:
             # Update the closing price column with the new prices
             permuted_df[close_col] = new_prices
             
-            # Update other price columns (High, Low, Open) to maintain consistency
-            # This ensures the OHLC relationships are preserved
-            other_price_cols = [col for col in ticker_columns if col != close_col and any(
-                x in col.lower() for x in ['open', 'high', 'low', 'price', 'adj'])]
+            # Define price columns to update
+            price_cols = {
+                'high': next((col for col in ticker_columns if col.lower().endswith('_high') or 'high' in col.lower()), None),
+                'low': next((col for col in ticker_columns if col.lower().endswith('_low') or 'low' in col.lower()), None),
+                'open': next((col for col in ticker_columns if col.lower().endswith('_open') or 'open' in col.lower()), None)
+            }
             
-            for col in other_price_cols:
-                # Get the original relationship with close price
-                orig_ratio = permuted_df[col] / permuted_df[close_col].replace(0, np.nan)
-                # Apply the same ratio to new close prices to get new column values
-                permuted_df[col] = new_prices * orig_ratio
+            # Calculate historical ratios and percentiles if columns exist
+            ratio_percentiles = {}
+            
+            for price_type, col in price_cols.items():
+                if col is not None:
+                    # Calculate the original ratio with close price
+                    orig_df = stock_data_df.copy()
+                    ratio = orig_df[col] / orig_df[close_col].replace(0, np.nan)
+                    
+                    # Remove NaN and infinite values
+                    valid_ratios = ratio.dropna().replace([np.inf, -np.inf], np.nan).dropna()
+                    
+                    if len(valid_ratios) >= 10:  # Ensure sufficient data
+                        # Calculate 5th and 95th percentiles
+                        p05 = np.percentile(valid_ratios, 5)
+                        p95 = np.percentile(valid_ratios, 95)
+                        
+                        # Add some constraints based on price type
+                        if price_type == 'high':
+                            # High should be >= Close
+                            p05 = max(p05, 1.0)
+                        elif price_type == 'low':
+                            # Low should be <= Close
+                            p95 = min(p95, 1.0)
+                        
+                        ratio_percentiles[price_type] = {
+                            'p05': p05,
+                            'p95': p95,
+                            'column': col
+                        }
+                    else:
+                        if self.verbose:
+                            print(f"Not enough valid ratios for {ticker} {price_type}")
+            
+            # Apply randomized ratios to create new OHLC values
+            for price_type, percentiles in ratio_percentiles.items():
+                # Get column name and percentile boundaries
+                col = percentiles['column']
+                p05 = percentiles['p05']
+                p95 = percentiles['p95']
+                
+                # Generate random ratios within the percentile bounds for each day
+                random_ratios = np.random.uniform(p05, p95, size=len(new_prices))
+                
+                # Apply ratios to Close prices
+                if price_type == 'high':
+                    # Ensure High is always >= Close
+                    permuted_df[col] = new_prices * np.maximum(random_ratios, 1.0)
+                elif price_type == 'low':
+                    # Ensure Low is always <= Close
+                    permuted_df[col] = new_prices * np.minimum(random_ratios, 1.0)
+                else:  # Open
+                    permuted_df[col] = new_prices * random_ratios
+                    
+                # Apply additional constraints to maintain OHLC relationship
+                if price_type == 'open':
+                    # Ensure Open is between High and Low
+                    high_col = price_cols.get('high')
+                    low_col = price_cols.get('low')
+                    if high_col is not None and low_col is not None:
+                        # Constrain Open to be within High and Low
+                        permuted_df[col] = np.minimum(permuted_df[high_col], 
+                                                    np.maximum(permuted_df[low_col], permuted_df[col]))
             
             # Handle volume columns separately if they exist
             volume_cols = [col for col in ticker_columns if 'volume' in col.lower()]
@@ -316,6 +379,9 @@ class TradeBasedMonteCarloTest:
             
             if self.verbose and permutation_id == 0:
                 print(f"Created bootstrap simulation for {ticker} with {len(valid_returns)} unique returns")
+                # Print ratio statistics for the first permutation
+                for price_type, percentiles in ratio_percentiles.items():
+                    print(f"  {ticker} {price_type.title()} ratio range: {percentiles['p05']:.4f} to {percentiles['p95']:.4f}")
         
         # Ensure the Date column is preserved
         permuted_df['Date'] = dates
@@ -1195,6 +1261,175 @@ class TradeBasedMonteCarloTest:
         
         return metrics
     
+    def create_permuted_price_comparison(self) -> None:
+        """
+        Create a plot comparing the permuted stock price series with the original data.
+        
+        This method generates a visualization showing:
+        - The original stock price series in red
+        - Multiple permuted price series in light blue
+        - Summary statistics and date ranges
+        
+        The plot helps visualize the range of price paths generated by the bootstrap simulation.
+        """
+        if self.verbose:
+            print("Creating permuted price series comparison plot")
+        
+        # Create visualizations directory if it doesn't exist
+        viz_dir = os.path.join(self.output_dir, 'visualizations')
+        os.makedirs(viz_dir, exist_ok=True)
+        
+        # Check if permuted data exists
+        if not os.path.exists(self.permuted_data_dir) or not os.listdir(self.permuted_data_dir):
+            print(f"Warning: No permuted data found in {self.permuted_data_dir}")
+            return
+        
+        # Load original stock data
+        if not self.original_stock_csv or not os.path.exists(self.original_stock_csv):
+            print(f"Warning: Original stock data CSV not found at {self.original_stock_csv}")
+            return
+        
+        # Find original stock data copy (it might be in the permuted_data directory)
+        original_data_path = os.path.join(self.permuted_data_dir, "original_stock_data.csv")
+        if not os.path.exists(original_data_path):
+            original_data_path = self.original_stock_csv
+        
+        try:
+            # Load original data
+            original_data = pd.read_csv(original_data_path)
+            original_data['Date'] = pd.to_datetime(original_data['Date'])
+            
+            # Create separate plots for each ticker
+            for ticker in self.tickers:
+                # Find the closing price column
+                close_col = f"{ticker}_Close"
+                if close_col not in original_data.columns:
+                    price_cols = [col for col in original_data.columns if col.startswith(f"{ticker}_") and 
+                                 any(x in col.lower() for x in ['close', 'price', 'adj'])]
+                    if not price_cols:
+                        print(f"Warning: No closing price column found for ticker {ticker}, skipping")
+                        continue
+                    close_col = price_cols[0]
+                
+                # Create figure for this ticker
+                plt.figure(figsize=(14, 8))
+                
+                # First, collect all permuted data files
+                permuted_files = sorted([f for f in os.listdir(self.permuted_data_dir) 
+                                        if f.startswith('permuted_data_') and f.endswith('.csv')])
+                
+                # Limit to a reasonable number of series to plot
+                max_series_to_plot = min(30, len(permuted_files))
+                file_sample = permuted_files[:max_series_to_plot]
+                
+                # Load and plot each permuted series
+                permuted_series = []
+                valid_series_count = 0
+                
+                for file_name in file_sample:
+                    file_path = os.path.join(self.permuted_data_dir, file_name)
+                    try:
+                        perm_data = pd.read_csv(file_path)
+                        perm_data['Date'] = pd.to_datetime(perm_data['Date'])
+                        
+                        if close_col in perm_data.columns:
+                            # Convert pandas Series to NumPy arrays before plotting
+                            dates_array = perm_data['Date'].to_numpy()
+                            price_array = perm_data[close_col].to_numpy()
+                            
+                            # Plot permuted price series in light blue with low alpha
+                            plt.plot(dates_array, price_array, 
+                                    color='skyblue', alpha=0.15, linewidth=0.8)
+                            permuted_series.append(price_array)
+                            valid_series_count += 1
+                    except Exception as e:
+                        if self.verbose:
+                            print(f"Error loading permuted file {file_name}: {e}")
+                
+                # Convert original data to NumPy arrays before plotting
+                original_dates = original_data['Date'].to_numpy()
+                original_prices = original_data[close_col].to_numpy()
+                
+                # Plot original price series in red with thick line
+                plt.plot(original_dates, original_prices, 
+                        color='red', linewidth=2.5, label='Original Data')
+                
+                # Calculate summary statistics if we have permuted series
+                if permuted_series:
+                    # Convert to numpy arrays of equal length
+                    min_length = min(len(series) for series in permuted_series)
+                    aligned_series = np.array([series[:min_length] for series in permuted_series])
+                    
+                    # Calculate statistics across permutations
+                    mean_series = np.mean(aligned_series, axis=0)
+                    std_series = np.std(aligned_series, axis=0)
+                    
+                    # Truncate original data to same length
+                    orig_series = original_prices[:min_length]
+                    
+                    # Calculate correlation between original and mean
+                    try:
+                        correlation = np.corrcoef(orig_series, mean_series)[0, 1]
+                    except:
+                        correlation = np.nan
+                    
+                    # Add statistics to the plot - use truncated dates array
+                    trunc_dates = original_dates[:min_length]
+                    plt.plot(trunc_dates, mean_series, 
+                            color='blue', linewidth=1.5, label='Mean of Permutations')
+                    
+                    # Add shaded area for standard deviation
+                    plt.fill_between(
+                        trunc_dates,
+                        mean_series - std_series,
+                        mean_series + std_series,
+                        color='blue', alpha=0.2, label='±1 Std Dev'
+                    )
+                    
+                    # Create stats text box
+                    stats_text = (
+                        f"Permutation Statistics:\n"
+                        f"Number of permutations: {valid_series_count}\n"
+                        f"Correlation with original: {correlation:.4f}\n"
+                        f"Mean final price: ${mean_series[-1]:.2f}\n"
+                        f"Std Dev of final price: ${std_series[-1]:.2f}\n"
+                        f"Original final price: ${orig_series[-1]:.2f}"
+                    )
+                    
+                    # Position the text box in the upper left corner
+                    plt.annotate(stats_text, xy=(0.02, 0.97), xycoords='axes fraction',
+                                bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.8),
+                                verticalalignment='top', fontsize=10)
+                
+                # Add title and labels
+                title = f"{ticker} Price Series Comparison - Original vs. Permuted"
+                subtitle = f"Returns-based Bootstrap Monte Carlo Simulation"
+                plt.title(f"{title}\n{subtitle}", fontsize=16)
+                plt.xlabel('Date', fontsize=12)
+                plt.ylabel(f'{ticker} Price ($)', fontsize=12)
+                
+                # Format y-axis as currency
+                plt.gca().yaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter('${x:.2f}'))
+                
+                # Add grid and legend
+                plt.grid(True, alpha=0.3)
+                plt.legend(loc='upper left', fontsize=10)
+                
+                # Adjust layout
+                plt.tight_layout()
+                
+                # Save the plot
+                plot_path = os.path.join(viz_dir, f'{ticker}_permuted_price_comparison.png')
+                plt.savefig(plot_path, dpi=150)
+                if self.verbose:
+                    print(f"Saved permuted price comparison for {ticker} to {plot_path}")
+                plt.close()
+                
+        except Exception as e:
+            print(f"Error creating permuted price comparison: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def run_test(self, out_of_sample_start: str) -> Dict:
         """
         Run the complete out-of-sample Monte Carlo test.
@@ -1239,6 +1474,7 @@ class TradeBasedMonteCarloTest:
                     print("Creating visualizations")
                 self.create_visualizations(original_metrics, simulated_metrics)
                 self.create_equity_curve_comparison()
+                self.create_permuted_price_comparison()
                 if self.verbose:
                     print(f"Visualizations saved to {os.path.join(self.output_dir, 'visualizations')}")
             except Exception as viz_err:
