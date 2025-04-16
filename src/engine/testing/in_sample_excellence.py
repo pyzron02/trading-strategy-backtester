@@ -32,12 +32,13 @@ def _run_single_backtest(args):
     
     Args:
         args (tuple): Tuple containing (strategy_name, tickers, params, start_date, 
-                      end_date, param_dir, warmup_period, i)
+                      end_date, param_dir, warmup_period, initial_capital, commission, 
+                      data_dir, i)
                       
     Returns:
         tuple: (i, results, params) - index, backtest results, and parameters
     """
-    strategy_name, tickers, params, start_date, end_date, param_dir, warmup_period, i = args
+    strategy_name, tickers, params, start_date, end_date, param_dir, warmup_period, initial_capital, commission, data_dir, i = args
     
     # Create directory if it doesn't exist
     os.makedirs(param_dir, exist_ok=True)
@@ -64,7 +65,10 @@ def _run_single_backtest(args):
             start_date=start_date,
             end_date=end_date,
             output_dir=param_dir,
-            warmup_period=warmup_period
+            initial_capital=initial_capital,
+            commission=commission,
+            data_dir=data_dir,
+            plot=False  # Don't generate plots for individual parameter trials
         )
         
         # Save results to a file
@@ -110,7 +114,9 @@ class InSampleExcellence:
     """
     
     def __init__(self, strategy_name, tickers=None, start_date='2015-01-01', end_date='2019-12-31',
-                 output_dir='output/in_sample_excellence', parameter_grid=None, random_seed=42):
+                 output_dir='output/in_sample_excellence', parameter_grid=None, param_grid_file=None,
+                 n_trials=100, optimization_metric='sharpe_ratio', random_seed=42, initial_capital=100000.0,
+                 commission=0.001, data_dir="input", max_combinations=None, verbose=False, plot=False):
         """
         Initialize the InSampleExcellence test.
         
@@ -121,6 +127,9 @@ class InSampleExcellence:
             end_date (str): End date for the test period (YYYY-MM-DD)
             output_dir (str): Directory to save test results
             parameter_grid (dict): Grid of parameters to optimize
+            param_grid_file (str): Path to a JSON file with parameter grid definition
+            n_trials (int): Number of parameter combinations to try
+            optimization_metric (str): Metric to optimize (e.g., 'sharpe_ratio')
             random_seed (int): Random seed for reproducibility
         """
         self.strategy_name = strategy_name
@@ -129,7 +138,16 @@ class InSampleExcellence:
         self.end_date = end_date
         self.output_dir = output_dir
         self.parameter_grid = parameter_grid
+        self.param_grid_file = param_grid_file
+        self.n_trials = n_trials
+        self.optimization_metric = optimization_metric
         self.random_seed = random_seed
+        self.initial_capital = initial_capital
+        self.commission = commission
+        self.data_dir = data_dir
+        self.max_combinations = max_combinations
+        self.verbose = verbose
+        self.plot = plot  # Whether to generate plots
         
         # Create output directory if it doesn't exist
         os.makedirs(self.output_dir, exist_ok=True)
@@ -166,6 +184,22 @@ class InSampleExcellence:
         # If parameter_grid is provided, use it
         if self.parameter_grid is not None:
             return self.parameter_grid
+        
+        # If param_grid_file is provided, load from file
+        if self.param_grid_file is not None and os.path.exists(self.param_grid_file):
+            try:
+                with open(self.param_grid_file, 'r') as f:
+                    param_grid = json.load(f)
+                # Log that we're using parameter grid from file
+                with open(self.log_file, 'a') as f:
+                    f.write(f"Using parameter grid from file: {self.param_grid_file}\n")
+                    f.write(f"Parameter grid: {param_grid}\n\n")
+                return param_grid
+            except Exception as e:
+                # Log error and fall back to default grid
+                with open(self.log_file, 'a') as f:
+                    f.write(f"Error loading parameter grid from file: {e}\n")
+                    f.write("Falling back to default parameter grid.\n\n")
             
         # Otherwise, use default parameter grids based on strategy name
         if strategy_name == 'SimpleStock':
@@ -226,127 +260,186 @@ class InSampleExcellence:
     
     def run_optimization(self, metric='sharpe_ratio', max_combinations=100, n_jobs=None):
         """
-        Run the parameter optimization process.
+        Run optimization process and find the best parameter combination.
         
         Args:
-            metric (str): Metric to optimize for (e.g., 'sharpe_ratio', 'profit_factor', 'total_return')
+            metric (str): Metric to optimize (e.g., 'sharpe_ratio', 'profit_factor')
             max_combinations (int): Maximum number of parameter combinations to test
-            n_jobs (int): Number of parallel jobs. If None, will use all available CPU cores.
+            n_jobs (int): Number of parallel processes to use
             
         Returns:
-            dict: Results of the optimization process
+            tuple: (best_parameters, trials_dataframe)
         """
-        # Determine number of parallel jobs to use
+        self.optimization_metric = metric
+        parameter_combinations = self._generate_parameter_combinations(self.param_grid, max_combinations)
+        
+        # If parameter combinations is empty, return early
+        if not parameter_combinations:
+            with open(self.log_file, 'a') as f:
+                f.write("No parameter combinations could be generated.\n")
+            return None, pd.DataFrame()
+        
+        # Create parameter directories
+        param_dirs = []
+        for i in range(len(parameter_combinations)):
+            param_dir = os.path.join(self.output_dir, f"params_{i}")
+            os.makedirs(param_dir, exist_ok=True)
+            param_dirs.append(param_dir)
+        
+        # Prepare arguments for parallel execution
+        args_list = []
+        for i, (params, param_dir) in enumerate(zip(parameter_combinations, param_dirs)):
+            args_list.append((
+                self.strategy_name, 
+                self.tickers, 
+                params, 
+                self.start_date, 
+                self.end_date, 
+                param_dir,
+                None,  # warmup_period
+                getattr(self, 'initial_capital', 100000.0),
+                getattr(self, 'commission', 0.001),
+                getattr(self, 'data_dir', 'input'),
+                i
+            ))
+        
+        # Determine number of processes to use
         if n_jobs is None:
-            n_jobs = multiprocessing.cpu_count()
-        n_jobs = max(1, min(n_jobs, multiprocessing.cpu_count()))  # Ensure valid range
+            n_jobs = max(1, multiprocessing.cpu_count() - 1)
+        n_jobs = min(n_jobs, len(args_list))
         
-        print(f"Starting parameter optimization for {self.strategy_name}")
-        print(f"Optimizing for {metric}")
-        print(f"Testing up to {max_combinations} parameter combinations")
-        print(f"Using {n_jobs} CPU cores for parallel processing")
+        # Log progress information
+        with open(self.log_file, 'a') as f:
+            f.write(f"Running optimization with {len(parameter_combinations)} parameter combinations\n")
+            f.write(f"Using {n_jobs} parallel processes\n")
+            f.write("Starting parallel backtests...\n\n")
         
-        # Get parameter grid
-        param_grid = self.param_grid
-        print(f"Parameter grid: {param_grid}")
+        # Clear previous results
+        self.results = []
         
-        # Generate parameter combinations
-        param_combinations = self._generate_parameter_combinations(param_grid, max_combinations)
-        print(f"Testing {len(param_combinations)} parameter combinations")
-        
-        # Create a timestamp for this test run
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        test_dir = os.path.join(self.output_dir, f"test_{timestamp}")
-        os.makedirs(test_dir, exist_ok=True)
-        
-        # Prepare arguments for parallel processing
-        backtest_args = []
-        for i, params in enumerate(param_combinations):
-            # Create a unique directory for this parameter set
-            param_dir = os.path.join(test_dir, f"params_{i}")
-            
-            # Calculate warmup period based on strategy and parameters
-            warmup_period = 60  # Default
-            if self.strategy_name == 'MACrossover':
-                if params and 'slow_period' in params:
-                    warmup_period = params['slow_period'] * 2
-                else:
-                    warmup_period = 60  # Default is twice the default slow period (30)
-            
-            # Prepare args tuple
-            args = (self.strategy_name, self.tickers, params, self.start_date, 
-                   self.end_date, param_dir, warmup_period, i)
-            backtest_args.append(args)
-        
-        # Run backtests in parallel
-        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-            # Submit all jobs
-            future_to_idx = {executor.submit(_run_single_backtest, args): i 
-                            for i, args in enumerate(backtest_args)}
-            
-            # Process results as they complete
-            with tqdm(total=len(param_combinations), desc="Testing parameters") as pbar:
-                for future in as_completed(future_to_idx):
-                    i, results, params = future.result()
-                    pbar.update(1)
+        # Run backtests in parallel with progress bar
+        with tqdm(total=len(args_list), desc="Backtesting") as pbar:
+            try:
+                # Use process pool for parallel execution
+                with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                    # Submit all jobs
+                    future_to_idx = {executor.submit(_run_single_backtest, args): i for i, args in enumerate(args_list)}
                     
-                    if results is not None:
-                        # Calculate metrics from the results dictionary directly
-                        metrics = self._extract_metrics_from_results(results)
-                        
-                        # Add parameters and metrics to results
-                        result = {
-                            'parameters': params,
-                            **metrics
-                        }
-                        self.results.append(result)
-                        
-                        # Log results
-                        with open(self.log_file, 'a') as f:
-                            f.write(f"Parameters {i}:\n")
-                            for param, value in params.items():
-                                f.write(f"  {param}: {value}\n")
-                            f.write(f"  {metric}: {metrics.get(metric, 'N/A')}\n\n")
+                    # Process results as they complete
+                    for future in as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        try:
+                            i, result, params = future.result()
+                            if result:
+                                self.results.append({
+                                    'parameters': params,
+                                    'metrics': result.get('metrics', {}),
+                                    'total_return': result.get('total_return', 0),
+                                    'sharpe_ratio': result.get('sharpe_ratio', 0),
+                                    'max_drawdown': result.get('max_drawdown', 0),
+                                    'equity_curve': result.get('equity_curve', None)
+                                })
+                            else:
+                                self.results.append({
+                                    'parameters': params,
+                                    'metrics': {},
+                                    'total_return': 0,
+                                    'sharpe_ratio': 0,
+                                    'max_drawdown': 0,
+                                    'equity_curve': None
+                                })
+                        except Exception as e:
+                            with open(self.log_file, 'a') as f:
+                                f.write(f"Error in backtest {idx}: {str(e)}\n")
+                        pbar.update(1)
+            except Exception as e:
+                with open(self.log_file, 'a') as f:
+                    f.write(f"Error in parallel execution: {str(e)}\n")
         
-        # Find best parameters based on the specified metric
-        if self.results:
-            # Sort results by the specified metric (higher is better)
-            sorted_results = sorted(self.results, key=lambda x: x.get(metric, 0), reverse=True)
-            best_result = sorted_results[0]
+        # Calculate metrics from results
+        metrics = self._calculate_metrics(self.output_dir)
+        
+        # Get best parameter combination based on the selected metric
+        best_params = None
+        best_value = None
+        trials_data = []
+        
+        # Determine whether this metric should be maximized or minimized
+        is_maximize = True
+        if metric.startswith('max_drawdown'):
+            is_maximize = False  # For drawdown, lower is better
+        
+        # Extract parameters and metrics for each trial
+        for i, result in enumerate(self.results):
+            if not result:
+                continue
+                
+            trial_data = {}
             
-            print(f"\nBest parameters found:")
-            for param, value in best_result['parameters'].items():
-                print(f"  {param}: {value}")
-            print(f"Best {metric}: {best_result.get(metric, 'N/A')}")
+            # Add parameters with prefix
+            if 'parameters' in result:
+                for key, value in result['parameters'].items():
+                    trial_data[f'param_{key}'] = value
             
-            # Extract metrics dictionary for best result
-            best_metrics = {k: v for k, v in best_result.items() if k != 'parameters'}
+            # Add metrics
+            if 'metrics' in result:
+                trial_data.update(result['metrics'])
             
-            # Save best parameters with separated metrics dictionary
-            results = self._save_best_parameters(best_result['parameters'], best_metrics, param_combinations, metric)
+            # Add other result fields
+            for key in ['total_return', 'sharpe_ratio', 'max_drawdown']:
+                if key in result:
+                    trial_data[key] = result[key]
             
-            # Plot parameter importance
-            self._plot_parameter_importance(metric)
+            # Add trial number
+            trial_data['trial_number'] = i
             
-            # Return best parameters and metrics
-            return {
-                'best_parameters': best_result['parameters'],
-                'best_metrics': best_metrics,
-                'best_sharpe': best_result.get('sharpe_ratio', 0),
-                'best_profit_factor': best_result.get('profit_factor', 0),
-                'best_total_return': best_result.get('total_return', 0),
-                'all_results': self.results
-            }
-        else:
-            print("No valid results were found during optimization")
-            return {
-                'best_parameters': {},
-                'best_metrics': {},
-                'best_sharpe': 0,
-                'best_profit_factor': 0,
-                'best_total_return': 0,
-                'all_results': []
-            }
+            # Extract the metric value we're optimizing for
+            current_value = None
+            
+            # First look in metrics
+            if 'metrics' in result and metric in result['metrics']:
+                current_value = result['metrics'][metric]
+            # Then look directly in result
+            elif metric in result:
+                current_value = result[metric]
+            
+            # Update best parameters if this is better
+            if current_value is not None and np.isfinite(current_value):
+                if best_value is None or (is_maximize and current_value > best_value) or (not is_maximize and current_value < best_value):
+                    best_value = current_value
+                    best_params = result.get('parameters', {})
+            
+            trials_data.append(trial_data)
+        
+        # Create DataFrame for trials
+        trials_df = pd.DataFrame(trials_data) if trials_data else pd.DataFrame()
+        
+        # Save metrics to file
+        self._save_best_parameters(
+            best_params,
+            {metric: best_value} if best_value is not None else {},
+            parameter_combinations,
+            metric
+        )
+        
+        # Log completion
+        with open(self.log_file, 'a') as f:
+            f.write(f"Optimization complete.\n")
+            if best_params:
+                f.write(f"Best parameters: {best_params}\n")
+                f.write(f"Best {metric}: {best_value}\n")
+            else:
+                f.write("No valid results found.\n")
+        
+        # Plot parameter importance if we have enough data
+        if not trials_df.empty and len(trials_df) > 5:
+            try:
+                self._plot_parameter_importance(metric)
+            except Exception as e:
+                with open(self.log_file, 'a') as f:
+                    f.write(f"Error creating parameter importance plot: {str(e)}\n")
+        
+        return best_params, trials_df
     
     def _calculate_metrics(self, results_path):
         """
@@ -511,6 +604,10 @@ class InSampleExcellence:
         Args:
             metric (str): Metric to analyze
         """
+        # Skip plotting if plot is disabled
+        if not self.plot:
+            return
+            
         if not self.results:
             return
         
@@ -613,6 +710,60 @@ class InSampleExcellence:
                     metrics[key] = results[key]
         
         return metrics
+
+    def run(self):
+        """
+        Run the optimization process.
+        
+        Returns:
+            tuple: (best_parameters, trials_dataframe)
+        """
+        # Generate parameter combinations
+        parameter_combinations = self._generate_parameter_combinations(self.param_grid, max_combinations=self.n_trials)
+        
+        # Log information about the optimization process
+        with open(self.log_file, 'a') as f:
+            f.write(f"Running optimization with {len(parameter_combinations)} parameter combinations\n")
+            f.write(f"Optimization metric: {self.optimization_metric}\n\n")
+        
+        # Run the optimization
+        best_params, trials_df = self.run_optimization(
+            metric=self.optimization_metric,
+            max_combinations=self.n_trials
+        )
+        
+        # Check if we have valid results
+        if best_params is None or trials_df is None or trials_df.empty:
+            print("Warning: No valid parameter combinations found during optimization")
+            
+            # Try to salvage results if we have any parameter combinations
+            if parameter_combinations and len(parameter_combinations) > 0:
+                # Use the first parameter combination as a fallback
+                best_params = parameter_combinations[0]
+                print(f"Using the first parameter combination as fallback: {best_params}")
+                
+                # Create a minimal trials dataframe if needed
+                if trials_df is None or trials_df.empty:
+                    if hasattr(self, 'results') and self.results:
+                        # Try to construct from existing results
+                        trials_df = pd.DataFrame(self.results)
+                    else:
+                        # Create a minimal dataframe with just parameters
+                        trials_data = []
+                        for i, params in enumerate(parameter_combinations):
+                            param_data = {f'param_{k}': v for k, v in params.items()}
+                            param_data['trial_number'] = i
+                            param_data[self.optimization_metric] = 0.0  # Default metric value
+                            trials_data.append(param_data)
+                        trials_df = pd.DataFrame(trials_data)
+        
+        # Save trial data to CSV
+        if trials_df is not None and not trials_df.empty:
+            trials_csv = os.path.join(self.output_dir, f"{self.strategy_name}_trials.csv")
+            trials_df.to_csv(trials_csv, index=False)
+            print(f"Trial data saved to {trials_csv}")
+        
+        return best_params, trials_df
 
 def main():
     parser = argparse.ArgumentParser(description="Optimize strategy parameters on historical data.")

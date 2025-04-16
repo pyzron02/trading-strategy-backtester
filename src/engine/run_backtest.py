@@ -15,6 +15,7 @@ import json
 import matplotlib.pyplot as plt
 import importlib
 from multiprocessing import Pool, cpu_count
+from typing import List, Optional, Dict, Any
 # Importing necessary libraries:
 # - os/sys: For file and path operations
 # - argparse: For parsing command-line arguments
@@ -27,6 +28,7 @@ from multiprocessing import Pool, cpu_count
 # - json: For JSON serialization
 # - matplotlib.pyplot (plt): For plotting
 # - multiprocessing: For parallel processing
+# - typing: For type annotations
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -74,563 +76,709 @@ class TradeLogger(bt.Analyzer):
 # Custom JSON encoder to handle NumPy types and other non-serializable objects
 class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, np.integer):
+        if isinstance(obj, (pd.Timestamp, datetime.datetime, datetime.date)):
+            return obj.isoformat()
+        elif isinstance(obj, pd.Series):
+            return obj.to_dict()
+        elif isinstance(obj, pd.DataFrame):
+            return obj.to_dict(orient='records')
+        elif isinstance(obj, np.integer):
             return int(obj)
         elif isinstance(obj, np.floating):
+            if np.isnan(obj):
+                return "NaN"
+            elif np.isinf(obj):
+                return "Infinity" if obj > 0 else "-Infinity"
             return float(obj)
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
-        elif isinstance(obj, pd.Timestamp):
-            return obj.strftime('%Y-%m-%d %H:%M:%S')
-        elif isinstance(obj, datetime):
-            return obj.strftime('%Y-%m-%d %H:%M:%S')
-        elif isinstance(obj, date):
-            return obj.strftime('%Y-%m-%d')
-        elif hasattr(obj, 'to_dict'):
-            return obj.to_dict()
-        elif pd.isna(obj):  # Handle NaN/None values
+        elif pd.isna(obj):
             return None
         return super(CustomJSONEncoder, self).default(obj)
 
-def run_backtest(output_dir=None, strategy_name='SimpleStock', tickers=None, parameters=None, 
-                start_date='2015-01-01', end_date='2019-12-31', stock_csv=None, window=False, plot=False,
-                warmup_period=None):
+def get_strategy_class(strategy_name):
     """
-    Run a backtest for a strategy on historical data.
+    Get the strategy class for a given strategy name.
     
     Args:
-        output_dir (str): Directory to save results
-        strategy_name (str): Name of strategy to backtest
-        tickers (list): List of ticker symbols to include
-        parameters (dict): Strategy parameters
-        start_date (str): Start date for backtest (YYYY-MM-DD)
-        end_date (str): End date for backtest (YYYY-MM-DD)
-        stock_csv (str): Path to CSV file with stock data
-        window (bool): Whether to display backtrader's live plotting window
-        plot (bool): Whether to save plots of backtest results
-        warmup_period (int): Number of days to add before start_date as warmup for indicators
+        strategy_name (str): Name of the strategy
         
     Returns:
-        dict: Backtest results
+        class: The strategy class
     """
-    # If warmup_period isn't specified, set a default based on strategy
-    if warmup_period is None:
-        # For MACrossover, use twice the slow period for safety
-        if strategy_name == 'MACrossover':
-            # Default slow_period is 30, so 60 days warmup should be safe
-            if parameters and 'slow_period' in parameters:
-                warmup_period = parameters['slow_period'] * 2
-            else:
-                warmup_period = 60  # Default - twice the default slow period (30)
-        else:
-            # For other strategies, use a standard 50-day warmup
-            warmup_period = 50
-    
-    # Calculate the actual fromdate with warmup period
-    if start_date:
-        fromdate = pd.to_datetime(start_date) - pd.Timedelta(days=warmup_period)
-        fromdate = fromdate.to_pydatetime()
-    else:
-        fromdate = None
-    
-    # Get project root directory
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    
-    # Handle output directory
-    if output_dir is None:
-        # Default output directory
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_dir = os.path.join(project_root, 'output', f"{strategy_name}_{timestamp}")
-    elif not os.path.isabs(output_dir):
-        # If relative path, make it absolute
-        output_dir = os.path.join(project_root, output_dir)
-    
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-        
-    # Initialize Cerebro engine
-    cerebro = bt.Cerebro()
-    
-    # Set initial cash
-    initial_cash = 100000.0
-    cerebro.broker.setcash(initial_cash)
-    print(f"Initial cash: {initial_cash}")
-    
-    # Get absolute path for stock_csv if not provided
-    if stock_csv is None:
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        stock_csv = os.path.join(project_root, 'input', 'stock_data.csv')
-
-    # Check if file exists
-    if not os.path.exists(stock_csv):
-        raise FileNotFoundError(f"CSV file not found: {stock_csv}")
-    
-    # Read the CSV file to get column names and their positions
-    with open(stock_csv, 'r') as f:
-        header = f.readline().strip().split(',')
-    
-    # Create a mapping of column names to their indices
-    column_map = {col: i for i, col in enumerate(header)}
-    print("CSV columns:", list(column_map.keys()))  # Debug output
-
-    # Auto-detect tickers if not provided
-    if tickers is None:
-        # Extract unique ticker symbols from column names (format: TICKER_Field)
-        all_tickers = set()
-        ticker_pattern = re.compile(r'([A-Z]+)_(?:Open|High|Low|Close|Volume)')
-        
-        for col in column_map.keys():
-            match = ticker_pattern.match(col)
-            if match:
-                ticker = match.group(1)
-                if ticker != 'SP500':  # Exclude SP500
-                    all_tickers.add(ticker)
-        
-        tickers = sorted(list(all_tickers))
-        print(f"Auto-detected tickers: {tickers}")
-    # Auto-detects tickers from column names if not provided
-    # Uses regular expressions to identify ticker symbols in column names (format: TICKER_Field)
-    # Excludes the SP500 index and sorts the list of detected tickers
-    
-    # If tickers is still empty, raise an error
-    if not tickers:
-        raise ValueError("No valid tickers found in the CSV file. Please check the file format.")
-    # Raises an error if no valid tickers were found
-
-    # Add data feeds for each ticker
-    valid_data_feeds = 0
-    for ticker in tickers:
-        try:
-            # Check if all required columns exist for this ticker
-            required_cols = [f'{ticker}_{field}' for field in ['Open', 'High', 'Low', 'Close', 'Volume']]
-            missing_cols = [col for col in required_cols if col not in column_map]
-            if missing_cols:
-                print(f"Warning: Skipping {ticker} due to missing columns: {missing_cols}")
-                continue
-            # Checks if all required columns (Open, High, Low, Close, Volume) exist for each ticker
-            
-            data = bt.feeds.GenericCSVData(
-                dataname=stock_csv,
-                dtformat='%Y-%m-%d',
-                datetime=column_map['Date'],  # 'Date' column index
-                open=column_map[f'{ticker}_Open'],
-                high=column_map[f'{ticker}_High'],
-                low=column_map[f'{ticker}_Low'],
-                close=column_map[f'{ticker}_Close'],
-                volume=column_map[f'{ticker}_Volume'],
-                openinterest=-1,
-                fromdate=fromdate,
-                todate=pd.to_datetime(end_date).to_pydatetime() if end_date else None,
-                nullvalue=0.0
-            )
-            cerebro.adddata(data, name=ticker)
-            print(f"Data feed added for {ticker}")
-            valid_data_feeds += 1
-            # Creates a GenericCSVData feed for the ticker
-            # Maps the CSV columns to the required fields (datetime, open, high, low, close, volume)
-            # Adds the data feed to the Cerebro engine and increments the counter
-        except KeyError as e:
-            print(f"Error: Could not find data for {ticker} in CSV. {e}")
-            continue
-            # Handles KeyError exceptions when data for a ticker is missing
-
-    # Check if any data feeds were added
-    if valid_data_feeds == 0:
-        print("No valid data feeds added. Aborting backtest.")
-        return
-    # Aborts the backtest if no valid data feeds were added
-
     # Add the strategies directory to the Python path
     strategies_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'strategies')
     if strategies_dir not in sys.path:
         sys.path.append(strategies_dir)
-    # Adds the strategies directory to the Python path
-    # Ensures that strategy modules can be imported
-
-    # Add strategy based on name
+    
     try:
         if strategy_name == 'SimpleStock':
-            from strategies.simplestock import SimpleStock
-            if parameters:
-                cerebro.addstrategy(SimpleStock, **parameters)
-            else:
-                cerebro.addstrategy(SimpleStock)
+            from strategies.simple_stock_strategy import SimpleStockStrategy
+            return SimpleStockStrategy
         elif strategy_name == 'MultiPosition':
-            try:
-                from strategies.multi_position_strategy import MultiPositionStrategy
-                if parameters:
-                    cerebro.addstrategy(MultiPositionStrategy, **parameters)
-                else:
-                    cerebro.addstrategy(MultiPositionStrategy)
-            except Exception as e:
-                print(f"Error loading MultiPositionStrategy from strategies directory: {e}")
-                print("Using fallback MultiPosition strategy from strategies module")
-                
-                # Import the strategy from strategies module
-                try:
-                    from strategies import MultiPosition
-                    if parameters:
-                        cerebro.addstrategy(MultiPosition, **parameters)
-                    else:
-                        cerebro.addstrategy(MultiPosition)
-                except Exception as e2:
-                    print(f"Error importing from strategies module: {e2}")
-                    raise
+            from strategies.multi_position_strategy import MultiPositionStrategy
+            return MultiPositionStrategy
         elif strategy_name == 'AuctionMarket':
-            try:
-                from strategies.auction_market_strategy import AuctionMarketStrategy
-                if parameters:
-                    cerebro.addstrategy(AuctionMarketStrategy, **parameters)
-                else:
-                    cerebro.addstrategy(AuctionMarketStrategy)
-            except Exception as e:
-                print(f"Error loading AuctionMarketStrategy from strategies directory: {e}")
-                print("Using fallback AuctionMarket strategy from strategies module")
-                
-                # Import the strategy from strategies module
-                try:
-                    from strategies import AuctionMarket
-                    if parameters:
-                        cerebro.addstrategy(AuctionMarket, **parameters)
-                    else:
-                        cerebro.addstrategy(AuctionMarket)
-                except Exception as e2:
-                    print(f"Error importing from strategies module: {e2}")
-                    raise
+            from strategies.auction_market_strategy import AuctionMarketStrategy
+            return AuctionMarketStrategy
         elif strategy_name == 'MACrossover':
-            try:
-                from strategies.ma_crossover import MACrossover
-                if parameters:
-                    cerebro.addstrategy(MACrossover, **parameters)
-                else:
-                    cerebro.addstrategy(MACrossover)
-            except Exception as e:
-                print(f"Error loading MACrossover from strategies directory: {e}")
-                print("Using fallback MACrossover strategy from strategies module")
-                
-                # Import the strategy from strategies module
-                try:
-                    from strategies import MACrossover
-                    if parameters:
-                        cerebro.addstrategy(MACrossover, **parameters)
-                    else:
-                        cerebro.addstrategy(MACrossover)
-                except Exception as e2:
-                    print(f"Error importing from strategies module: {e2}")
-                    raise
+            from strategies.ma_crossover import MACrossover
+            return MACrossover
         else:
-            raise ValueError(f"Unknown strategy: {strategy_name}")
+            # Try to import dynamically
+            try:
+                # Try from the strategies directory
+                module_name = f"strategies.{strategy_name.lower()}_strategy"
+                module = __import__(module_name, fromlist=[strategy_name])
+                class_name = f"{strategy_name}Strategy"
+                if hasattr(module, class_name):
+                    return getattr(module, class_name)
+                
+                # Try with exact module name
+                module_name = f"strategies.{strategy_name.lower()}"
+                module = __import__(module_name, fromlist=[strategy_name])
+                if hasattr(module, strategy_name):
+                    return getattr(module, strategy_name)
+                
+                # Try with exact class name
+                if hasattr(module, strategy_name):
+                    return getattr(module, strategy_name)
+                
+                # Try the registry
+                from strategies import registry
+                return registry.get_strategy_class(strategy_name)
+            except Exception as e:
+                print(f"Error importing strategy {strategy_name}: {e}")
+                return None
     except Exception as e:
-        print(f"Error loading strategy: {e}")
-        print("Attempting to load fallback strategy from strategies module")
+        print(f"Error loading strategy class {strategy_name}: {e}")
+        return None
+
+def run_backtest(
+    strategy_name: str,
+    tickers: List[str],
+    start_date: str,
+    end_date: str,
+    output_dir: Optional[str] = None,
+    parameters: Optional[Dict[str, Any]] = None,
+    stock_csv: Optional[str] = None,
+    plot: bool = True,
+    initial_capital: float = 100000.0,
+    commission: float = 0.001,
+    data_dir: str = "input",
+    verbose: bool = False
+) -> Dict[str, Any]:
+    """
+    Run a backtest for the given strategy and parameters.
+    
+    Args:
+        strategy_name: Name of the trading strategy to use
+        tickers: List of ticker symbols to trade
+        start_date: Start date for the backtest (YYYY-MM-DD)
+        end_date: End date for the backtest (YYYY-MM-DD)
+        output_dir: Directory to save backtest results
+        parameters: Dictionary of strategy parameters
+        stock_csv: Path to CSV file with stock data (optional)
+        plot: Whether to generate plots
+        initial_capital: Initial capital for the backtest
+        commission: Commission rate for trades
+        data_dir: Directory containing input data
+        verbose: Enable verbose output
         
-        try:
-            # Import dynamically from the strategies module
-            module_name = f"strategies.{strategy_name}"
-            imported_module = importlib.import_module(module_name)
-            
-            # Check if the strategy exists in the module
-            if hasattr(imported_module, strategy_name):
-                strategy_class = getattr(imported_module, strategy_name)
-                print(f"Using {strategy_name} strategy from strategies module")
-                if parameters:
-                    cerebro.addstrategy(strategy_class, **parameters)
-                else:
-                    cerebro.addstrategy(strategy_class)
-            else:
-                raise ValueError(f"Strategy {strategy_name} not found in strategies module")
-        except Exception as e2:
-            raise ValueError(f"Failed to load strategy from strategies module: {e2}. Original error: {e}")
-
-    # Add TradeLogger analyzer
-    cerebro.addanalyzer(TradeLogger, _name='tradelogger')
-    # Adds the TradeLogger analyzer to the Cerebro engine
-
-    # Run the backtest
-    print("Starting backtest...")
-    results = cerebro.run()
-    if not results:
-        print("No strategies ran successfully.")
-        return
-    strat = results[0]
-    print("Backtest completed")
-    # Runs the backtest and stores the results
-    # Gets the first strategy instance from the results
-    # Returns early if no strategies ran successfully
-
-    # Save equity curve if available
-    if hasattr(strat, 'equity_curve'):
-        equity_df = pd.DataFrame(strat.equity_curve, columns=['Date', 'Value'])
-        equity_df['Date'] = pd.to_datetime(equity_df['Date'])
-        equity_df.to_csv(os.path.join(output_dir, 'equity_curve.csv'), index=False)
-        print(f"Equity curve saved with {len(equity_df)} entries")
+    Returns:
+        Dict containing backtest results
+    """
+    if verbose:
+        print(f"Running backtest for {strategy_name} with {tickers}")
+    
+    # Create output directory if it doesn't exist
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    
+    # Ensure parameters is a dict
+    if parameters is None:
+        parameters = {}
+    
+    # Set default parameters if not provided
+    if strategy_name is None:
+        strategy_name = "SimpleStock"  # Default strategy
+        
+    if tickers is None:
+        tickers = ["SPY"]  # Default ticker
+    
+    # Set default warmup period based on strategy if not provided
+    if parameters and 'warmup_period' in parameters:
+        warmup_period = parameters['warmup_period']
     else:
-        print("Warning: No equity_curve available in strategy")
-    # Saves the equity curve as a CSV file if available
-    # Converts the equity curve to a DataFrame and saves it
-    # Prints a warning if no equity curve is available
-
-    # Save trade log
-    trade_logger = strat.analyzers.getbyname('tradelogger')
-    trade_log_df = pd.DataFrame(trade_logger.get_analysis())
-    trade_log_df.to_csv(os.path.join(output_dir, 'trade_log.csv'), index=False)
-    print(f"Trade log saved with {len(trade_log_df)} entries")
-    # Saves the trade log as a CSV file
-    # Gets the trade logger analyzer from the strategy
-    # Converts the trade log to a DataFrame and saves it
-
-    # Create a serializable results dictionary instead of saving the full strategy objects
-    serializable_results = {
-        'strategy_name': strategy_name,
-        'tickers': tickers,
-        'parameters': parameters,
-        'start_date': start_date,
-        'end_date': end_date,
-        'initial_cash': cerebro.broker.startingcash,
-        'final_value': cerebro.broker.getvalue(),
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Default warmup period
+        warmup_period = 252  # One year of trading days
+    
+    # Find the stock CSV file if not provided
+    if stock_csv is None:
+        # Look in common locations
+        input_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), data_dir)
+        
+        # Always prioritize stock_data.csv from data_setup.py
+        stock_data_csv = os.path.join(input_dir, "stock_data.csv")
+        if os.path.exists(stock_data_csv):
+            stock_csv = stock_data_csv
+            if verbose:
+                print(f"Using stock_data.csv from data_setup.py at: {stock_csv}")
+        else:
+            # Build possible file paths as fallback
+            ticker_str = "_".join(tickers) if isinstance(tickers, list) else tickers
+            possible_paths = [
+                os.path.join(input_dir, f"{ticker_str}.csv"),
+                os.path.join(input_dir, "stocks", f"{ticker_str}.csv"),
+                os.path.join(input_dir, "data", f"{ticker_str}.csv"),
+            ]
+            
+            # Check if any of the possible paths exist
+            for path in possible_paths:
+                if os.path.exists(path):
+                    stock_csv = path
+                    if verbose:
+                        print(f"Using fallback data file: {stock_csv}")
+                    break
+            else:
+                # If no path exists, try to download the data
+                try:
+                    # First, try to use data_setup.py to fetch the data properly
+                    from data_preprocessing.data_setup import fetch_stock_data
+                    try:
+                        print(f"Attempting to fetch data using data_setup.py for {tickers}")
+                        fetch_stock_data(tickers, start_date, end_date)
+                        if os.path.exists(stock_data_csv):
+                            stock_csv = stock_data_csv
+                            print(f"Successfully fetched and prepared data using data_setup.py at: {stock_csv}")
+                        else:
+                            raise FileNotFoundError("stock_data.csv not created by data_setup.py")
+                    except Exception as e:
+                        print(f"Error using data_setup.py: {e}. Falling back to yfinance direct download.")
+                        # Fallback to direct yfinance download
+                        import yfinance as yf
+                        # Convert tickers to a comma-separated string if it's a list
+                        ticker_str = ",".join(tickers) if isinstance(tickers, list) else tickers
+                        # Download data
+                        data = yf.download(ticker_str, start=start_date, end=end_date)
+                        # Save to CSV
+                        stock_csv = os.path.join(input_dir, "stock_data.csv")
+                        data.to_csv(stock_csv)
+                        print(f"Downloaded data for {ticker_str} and saved to {stock_csv}")
+                except Exception as e:
+                    error_message = f"Error downloading data: {e}"
+                    print(error_message)
+                    if output_dir:
+                        with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+                            f.write(f"{error_message}\n")
+                    return {"status": "error", "message": error_message}
+    
+    # Read the CSV file to extract column names
+    try:
+        df = pd.read_csv(stock_csv)
+        columns = list(df.columns)
+        
+        # Map column names to their indices for easier reference
+        col_map = {col: i for i, col in enumerate(columns)}
+        
+        # Debug output of available columns
+        print(f"Available columns in CSV: {columns}")
+        
+        # Get ticker names if not provided
+        if tickers is None or len(tickers) == 0:
+            tickers = [col.split('_')[0] for col in columns if '_Close' in col]
+            # Exclude SP500 from tickers, as it's usually used as a benchmark
+            if 'SP500' in tickers:
+                tickers.remove('SP500')
+        
+        # Convert start and end dates to datetime
+        from_date = pd.to_datetime(start_date)
+        to_date = pd.to_datetime(end_date)
+        
+        # Initialize Cerebro
+        cerebro = bt.Cerebro()
+        cerebro.broker.setcash(initial_capital)  # Set initial cash
+        cerebro.broker.setcommission(commission)  # Set commission
+        
+        # Validate tickers against available data
+        valid_tickers = []
+        for ticker in tickers:
+            close_col = f"{ticker}_Close"
+            if close_col in columns:
+                valid_tickers.append(ticker)
+            else:
+                print(f"Warning: No data for ticker {ticker} in CSV file")
+        
+        if not valid_tickers:
+            error_message = f"No valid tickers found in CSV file: {stock_csv}"
+            print(error_message)
+            with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+                f.write(f"{error_message}\n")
+            return None
+        
+        tickers = valid_tickers
+        
+        # Add data feeds for each ticker
+        skipped_tickers = []
+        for ticker in tickers:
+            # Check if required columns exist for this ticker
+            required_columns = [f"{ticker}_Open", f"{ticker}_High", f"{ticker}_Low", f"{ticker}_Close"]
+            if not all(col in columns for col in required_columns):
+                missing_cols = [col for col in required_columns if col not in columns]
+                print(f"Warning: Skipping {ticker} due to missing columns: {missing_cols}")
+                skipped_tickers.append(ticker)
+                continue
+            
+            try:
+                # Create a data feed from the CSV
+                data = bt.feeds.GenericCSVData(
+                    dataname=stock_csv,
+                    fromdate=from_date,
+                    todate=to_date,
+                    nullvalue=0.0,
+                    dtformat='%Y-%m-%d',
+                    datetime=0,  # Column 0 is the date
+                    open=col_map.get(f"{ticker}_Open"),
+                    high=col_map.get(f"{ticker}_High"),
+                    low=col_map.get(f"{ticker}_Low"),
+                    close=col_map.get(f"{ticker}_Close"),
+                    volume=col_map.get(f"{ticker}_Volume", -1),  # -1 means not used
+                    openinterest=-1,  # Not used
+                    name=ticker
+                )
+                cerebro.adddata(data)
+                print(f"Added data feed for {ticker}")
+            except Exception as e:
+                print(f"Error adding data feed for {ticker}: {e}")
+                skipped_tickers.append(ticker)
+        
+        # Remove skipped tickers from the list
+        for ticker in skipped_tickers:
+            if ticker in tickers:
+                tickers.remove(ticker)
+        
+        if not tickers:
+            error_message = "All tickers were skipped due to data issues"
+            print(error_message)
+            with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+                f.write(f"{error_message}\n")
+            return None
+    
+    except Exception as e:
+        error_message = f"Error processing CSV file: {e}"
+        print(error_message)
+        with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+            f.write(f"{error_message}\n")
+        return None
+    
+    # Get the strategy class
+    try:
+        StrategyClass = get_strategy_class(strategy_name)
+        if StrategyClass is None:
+            error_message = f"Strategy class not found for {strategy_name}"
+            print(error_message)
+            with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+                f.write(f"{error_message}\n")
+            return None
+    except Exception as e:
+        error_message = f"Error loading strategy class: {e}"
+        print(error_message)
+        with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+            f.write(f"{error_message}\n")
+        return None
+    
+    # Print parameter debug information
+    print(f"Parameters before adding strategy: {parameters}")
+    
+    # Normalize parameters to handle empty/None cases
+    if parameters is None:
+        parameters = {}
+    
+    # Add the strategy to Cerebro
+    cerebro.addstrategy(StrategyClass, **parameters)
+    
+    # Add analyzers
+    cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
+    cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+    cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
+    cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+    
+    # Run the backtest
+    print(f"Starting backtest with {len(tickers)} tickers: {tickers}")
+    results = cerebro.run()
+    
+    # There should be only one strategy instance
+    if not results or len(results) == 0:
+        error_message = "Backtest failed to run"
+        print(error_message)
+        with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+            f.write(f"{error_message}\n")
+        return None
+    
+    strategy = results[0]
+    
+    # Extract comprehensive metrics
+    metrics = {}
+    
+    # Initial and final values
+    initial_value = cerebro.broker.startingcash
+    final_value = cerebro.broker.getvalue()
+    
+    # Returns, drawdown, and Sharpe ratio
+    total_return = (final_value / initial_value) - 1
+    max_drawdown = strategy.analyzers.drawdown.get_analysis().get('max', {}).get('drawdown', 0)
+    max_drawdown_money = strategy.analyzers.drawdown.get_analysis().get('max', {}).get('moneydown', 0)
+    
+    # Get sharpe ratio - properly handle the case where it's not available
+    try:
+        sharpe_ratio = strategy.analyzers.sharpe.get_analysis().get('sharperatio', 0)
+        if sharpe_ratio is None:
+            sharpe_ratio = 0
+    except (AttributeError, TypeError, KeyError):
+        sharpe_ratio = 0
+    
+    # Add key performance metrics to the metrics dictionary
+    metrics.update({
+        'initial_value': initial_value,
+        'final_value': final_value,
+        'total_return': total_return,
+        'total_return_pct': total_return * 100,  # Percentage format
+        'max_drawdown': max_drawdown,
+        'max_drawdown_pct': max_drawdown * 100 if max_drawdown else 0,  # Percentage format
+        'max_drawdown_money': max_drawdown_money,
+        'sharpe_ratio': sharpe_ratio
+    })
+    
+    # Get annual returns if available
+    try:
+        returns_analysis = strategy.analyzers.returns.get_analysis()
+        annual_return = returns_analysis.get('ravg', 0)
+        metrics['annual_return'] = annual_return
+        metrics['annual_return_pct'] = annual_return * 100  # Percentage format
+    except (AttributeError, TypeError):
+        metrics['annual_return'] = 0
+        metrics['annual_return_pct'] = 0
+    
+    # Get SP500 return for the same period as benchmark
+    benchmark_return = 0
+    try:
+        # First try SPY which is often used as a benchmark
+        benchmark_col = None
+        for possible_col in ['SPY_Close', 'SP500_Close', 'S&P500_Close', 'SPX_Close']:
+            if possible_col in columns:
+                benchmark_col = possible_col
+                break
+        
+        if benchmark_col:
+            benchmark_df = df[['Date', benchmark_col]].copy()
+            benchmark_df['Date'] = pd.to_datetime(benchmark_df['Date'])
+            
+            # Filter by date range
+            if from_date and to_date:
+                benchmark_df = benchmark_df[(benchmark_df['Date'] >= from_date.strftime('%Y-%m-%d')) & 
+                                          (benchmark_df['Date'] <= to_date.strftime('%Y-%m-%d'))]
+            
+            # Calculate return
+            if len(benchmark_df) >= 2:
+                first_price = benchmark_df[benchmark_col].iloc[0]
+                last_price = benchmark_df[benchmark_col].iloc[-1]
+                benchmark_return = (last_price / first_price) - 1
+    except Exception as e:
+        print(f"Error calculating benchmark return: {e}")
+    
+    # Calculate alpha
+    alpha = total_return - benchmark_return
+    
+    metrics.update({
+        'benchmark_return': benchmark_return,
+        'benchmark_return_pct': benchmark_return * 100,  # Percentage format
+        'alpha': alpha,
+        'alpha_pct': alpha * 100  # Percentage format
+    })
+    
+    # Trade statistics
+    trade_stats = strategy.analyzers.trades.get_analysis()
+    
+    # Detailed trade analysis
+    total_trades = trade_stats.get('total', {}).get('total', 0)
+    
+    # Also extract trades from the strategy's custom trade tracking if available
+    if hasattr(strategy, 'trades') and strategy.trades:
+        # Use the strategy's custom trade log if it has more information
+        custom_trades = [t for t in strategy.trades if t['type'] == 'close']
+        if len(custom_trades) >= total_trades:
+            # Calculate from custom trades (more accurate since position tracking is improved)
+            total_trades = len(custom_trades)
+            won = len([t for t in custom_trades if t.get('pnl', 0) > 0])
+            lost = len([t for t in custom_trades if t.get('pnl', 0) <= 0])
+            win_rate = won / total_trades if total_trades > 0 else 0
+            
+            # Get PnL information
+            gross_won = sum([t.get('pnl', 0) for t in custom_trades if t.get('pnl', 0) > 0])
+            gross_lost = sum([t.get('pnl', 0) for t in custom_trades if t.get('pnl', 0) <= 0])
+            
+            # Calculate average win/loss
+            avg_win = gross_won / won if won > 0 else 0
+            avg_loss = gross_lost / lost if lost > 0 else 0
+            
+            # Calculate profit factor with safety check for division by zero
+            profit_factor = abs(gross_won / gross_lost) if gross_lost != 0 and gross_lost < 0 else float('inf')
+            
+            # Average trade PnL
+            avg_trade_pnl = sum([t.get('pnl', 0) for t in custom_trades]) / total_trades if total_trades > 0 else 0
+            
+            # Get consecutive wins/losses sequences
+            win_streaks, loss_streaks = [], []
+            current_win_streak, current_loss_streak = 0, 0
+            
+            for trade in custom_trades:
+                if trade.get('pnl', 0) > 0:
+                    # Win
+                    current_win_streak += 1
+                    if current_loss_streak > 0:
+                        loss_streaks.append(current_loss_streak)
+                        current_loss_streak = 0
+                else:
+                    # Loss
+                    current_loss_streak += 1
+                    if current_win_streak > 0:
+                        win_streaks.append(current_win_streak)
+                        current_win_streak = 0
+            
+            # Add the last streak
+            if current_win_streak > 0:
+                win_streaks.append(current_win_streak)
+            if current_loss_streak > 0:
+                loss_streaks.append(current_loss_streak)
+            
+            max_consecutive_wins = max(win_streaks) if win_streaks else 0
+            max_consecutive_losses = max(loss_streaks) if loss_streaks else 0
+            
+            # Trade duration not available in custom log typically
+            avg_trade_length = trade_stats.get('len', {}).get('average', 0)
+        else:
+            # Fallback to built-in analyzer if custom trades don't have enough data
+            if total_trades > 0:
+                # Get win/loss counts
+                won = trade_stats.get('won', {}).get('total', 0)
+                lost = trade_stats.get('lost', {}).get('total', 0)
+                win_rate = won / total_trades if total_trades > 0 else 0
+                
+                # Get gross PnL for winning trades (won -> pnl -> total)
+                try:
+                    gross_won = float(trade_stats.get('won', {}).get('pnl', {}).get('total', 0))
+                except (TypeError, ValueError, AttributeError):
+                    gross_won = 0
+                    
+                # Get gross PnL for losing trades (lost -> pnl -> total)
+                try:
+                    # Lost trades PnL is negative, so we take the absolute value
+                    gross_lost = abs(float(trade_stats.get('lost', {}).get('pnl', {}).get('total', 0)))
+                except (TypeError, ValueError, AttributeError):
+                    gross_lost = 0
+                
+                # Get average win/loss values
+                try:
+                    avg_win = float(trade_stats.get('won', {}).get('pnl', {}).get('average', 0))
+                except (TypeError, ValueError, AttributeError):
+                    avg_win = 0
+                    
+                try:
+                    avg_loss = float(trade_stats.get('lost', {}).get('pnl', {}).get('average', 0))
+                except (TypeError, ValueError, AttributeError):
+                    avg_loss = 0
+                
+                # Calculate profit factor with safety check for division by zero
+                profit_factor = gross_won / gross_lost if gross_lost > 0 else float('inf')
+                
+                # Get average trade PnL (pnl -> net -> average)
+                try:
+                    avg_trade_pnl = float(trade_stats.get('pnl', {}).get('net', {}).get('average', 0))
+                except (TypeError, ValueError, AttributeError):
+                    # Fallback to gross average if net is not available
+                    try:
+                        avg_trade_pnl = float(trade_stats.get('pnl', {}).get('gross', {}).get('average', 0))
+                    except (TypeError, ValueError, AttributeError):
+                        avg_trade_pnl = 0
+                
+                # Get max consecutive wins and losses
+                try:
+                    max_consecutive_wins = trade_stats.get('streak', {}).get('won', {}).get('longest', 0)
+                except (TypeError, AttributeError):
+                    max_consecutive_wins = 0
+                    
+                try:
+                    max_consecutive_losses = trade_stats.get('streak', {}).get('lost', {}).get('longest', 0)
+                except (TypeError, AttributeError):
+                    max_consecutive_losses = 0
+                
+                # Get average trade duration
+                try:
+                    avg_trade_length = trade_stats.get('len', {}).get('average', 0)
+                except (TypeError, AttributeError):
+                    avg_trade_length = 0
+    
+    # Update metrics with trade statistics
+    if total_trades > 0:
+        metrics.update({
+            'total_trades': total_trades,
+            'winning_trades': won,
+            'losing_trades': lost,
+            'win_rate': win_rate,
+            'win_rate_pct': win_rate * 100,  # Percentage format
+            'profit_factor': profit_factor,
+            'avg_trade_pnl': avg_trade_pnl,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'gross_profit': gross_won,
+            'gross_loss': gross_lost if isinstance(gross_lost, float) and gross_lost < 0 else -gross_lost,  # Make it negative for clarity
+            'net_profit': gross_won + (gross_lost if isinstance(gross_lost, float) and gross_lost < 0 else -gross_lost),
+            'max_consecutive_wins': max_consecutive_wins,
+            'max_consecutive_losses': max_consecutive_losses,
+            'avg_trade_length': avg_trade_length
+        })
+    
+    # Equity curve (if available)
+    equity_curve = None
+    if hasattr(strategy, 'equity_curve') and strategy.equity_curve:
+        # Convert to pandas DataFrame
+        equity_curve = pd.DataFrame(strategy.equity_curve)
+        
+        # Save to CSV
+        equity_curve_file = os.path.join(output_dir, 'equity_curve.csv')
+        equity_curve.to_csv(equity_curve_file, index=False)
+        print(f"Saved equity curve to {equity_curve_file}")
+    
+    # Trade log (if available)
+    trade_log = None
+    if hasattr(strategy, 'trades') and strategy.trades:
+        # Convert to pandas DataFrame
+        trade_log = pd.DataFrame(strategy.trades)
+        
+        # Save to CSV
+        trade_log_file = os.path.join(output_dir, 'trade_log.csv')
+        trade_log.to_csv(trade_log_file, index=False)
+        print(f"Saved trade log to {trade_log_file}")
+    
+    # Generate plots only if explicitly requested via the --plot flag
+    if plot:
+        try:
+            fig = cerebro.plot(style='candle', barup='green', bardown='red',
+                    volume=False, grid=True)
+            # Save the plot to a file
+            plot_file = os.path.join(output_dir, f"{strategy_name}_backtest_plot.png")
+            # If fig is a list of figures, save the first one
+            if isinstance(fig, list) and len(fig) > 0:
+                fig[0][0].savefig(plot_file)
+                print(f"Saved plot to {plot_file}")
+            elif hasattr(fig, 'savefig'):
+                fig.savefig(plot_file)
+                print(f"Saved plot to {plot_file}")
+        except Exception as e:
+            print(f"Error generating plot: {e}")
+    
+    # Create result dictionary
+    result = {
+        "status": "success",
+        "strategy_name": strategy_name,
+        "start_date": start_date,  # Include start_date explicitly
+        "end_date": end_date,      # Include end_date explicitly
+        "parameters": parameters,
+        "metrics": metrics,
+        "equity_curve": equity_curve,
+        "trade_log": trade_log
     }
     
-    # Handle equity curve
-    if hasattr(strat, 'equity_curve'):
-        # Convert the equity curve to a serializable format
-        equity_curve_data = []
-        for item in strat.equity_curve:
-            equity_curve_data.append({
-                'Date': item['Date'] if isinstance(item, dict) else item[0],
-                'Value': item['Value'] if isinstance(item, dict) else item[1]
-            })
-        serializable_results['equity_curve'] = equity_curve_data
-    else:
-        serializable_results['equity_curve'] = None
-    
-    # Add trade log
-    serializable_results['trade_log'] = trade_log_df.to_dict(orient='records')
-
-    # Add analyzer results in a serializable format
-    try:
-        # Extract key metrics from analyzers
-        serializable_results['metrics'] = {}
-        
-        # Sharpe ratio
-        if hasattr(strat.analyzers, 'sharpe'):
-            sharpe_ratio = strat.analyzers.sharpe.get_analysis()
-            serializable_results['metrics']['sharpe_ratio'] = sharpe_ratio.get('sharperatio', 0.0)
-        
-        # Returns
-        if hasattr(strat.analyzers, 'returns'):
-            returns = strat.analyzers.returns.get_analysis()
-            serializable_results['metrics']['total_return'] = returns.get('rtot', 0.0)
-            serializable_results['metrics']['average_return'] = returns.get('ravg', 0.0)
-        
-        # Drawdown
-        if hasattr(strat.analyzers, 'drawdown'):
-            drawdown = strat.analyzers.drawdown.get_analysis()
-            serializable_results['metrics']['max_drawdown'] = drawdown.get('max', {}).get('drawdown', 0.0)
-            serializable_results['metrics']['max_drawdown_length'] = drawdown.get('max', {}).get('len', 0)
-        
-        # SQN
-        if hasattr(strat.analyzers, 'sqn'):
-            sqn = strat.analyzers.sqn.get_analysis()
-            serializable_results['metrics']['sqn'] = sqn.get('sqn', 0.0)
-        
-        # Trade analysis
-        if hasattr(strat.analyzers, 'tradeanalyzer'):
-            ta = strat.analyzers.tradeanalyzer.get_analysis()
-            
-            # Extract trade stats in a more reliable way
-            trade_stats = {}
-            
-            # Total trades
-            trade_stats['total_trades'] = ta.get('total', {}).get('total', 0) if isinstance(ta.get('total', {}), dict) else 0
-            
-            # Won trades
-            if 'won' in ta and isinstance(ta['won'], dict):
-                trade_stats['won_trades'] = ta['won'].get('total', 0)
-                trade_stats['won_pnl'] = ta['won'].get('pnl', 0.0) if 'pnl' in ta['won'] else 0.0
-            else:
-                trade_stats['won_trades'] = 0
-                trade_stats['won_pnl'] = 0.0
-            
-            # Lost trades
-            if 'lost' in ta and isinstance(ta['lost'], dict):
-                trade_stats['lost_trades'] = ta['lost'].get('total', 0)
-                trade_stats['lost_pnl'] = ta['lost'].get('pnl', 0.0) if 'pnl' in ta['lost'] else 0.0
-            else:
-                trade_stats['lost_trades'] = 0
-                trade_stats['lost_pnl'] = 0.0
-            
-            # Calculate win rate
-            if trade_stats['total_trades'] > 0:
-                trade_stats['win_rate'] = trade_stats['won_trades'] / trade_stats['total_trades']
-            else:
-                trade_stats['win_rate'] = 0.0
-            
-            # Calculate profit factor
-            if abs(trade_stats['lost_pnl']) > 0:
-                trade_stats['profit_factor'] = abs(trade_stats['won_pnl']) / abs(trade_stats['lost_pnl'])
-            else:
-                trade_stats['profit_factor'] = 0.0 if trade_stats['won_pnl'] == 0 else float('inf')
-            
-            serializable_results['metrics']['trade_analysis'] = trade_stats
-    except Exception as e:
-        print(f"Warning: Could not extract analyzer metrics: {str(e)}")
-        serializable_results['metrics'] = {'error': str(e)}
-
-    # Save serializable results as JSON (more reliable than pickle)
-    with open(os.path.join(output_dir, 'backtest_results.json'), 'w') as f:
-        json.dump(serializable_results, f, indent=4, cls=CustomJSONEncoder)
-    print(f"Backtest results saved to {output_dir}/backtest_results.json")
-
-    # For backwards compatibility, try to save a simplified version with pickle
-    try:
-        # Make a copy of the serializable results, converting NumPy arrays and other problematic types
-        pickle_safe_results = {}
-        for key, value in serializable_results.items():
-            if key == 'equity_curve' and value is not None:
-                # Convert equity curve data to simpler format
-                pickle_safe_results[key] = [
-                    {'Date': str(entry['Date']), 'Value': float(entry['Value'])} 
-                    for entry in value
-                ]
-            elif key == 'trade_log':
-                # Convert trade log to simple list of dicts with strings and basic types
-                pickle_safe_results[key] = []
-                for trade in value:
-                    safe_trade = {}
-                    for k, v in trade.items():
-                        if isinstance(v, (int, float, str, bool, type(None))):
-                            safe_trade[k] = v
-                        else:
-                            safe_trade[k] = str(v)
-                    pickle_safe_results[key].append(safe_trade)
-            elif key == 'metrics' and isinstance(value, dict):
-                # Handle metrics dict
-                pickle_safe_results[key] = {}
-                for k, v in value.items():
-                    if isinstance(v, dict):
-                        # Handle nested dicts (like trade_analysis)
-                        pickle_safe_results[key][k] = {}
-                        for sub_k, sub_v in v.items():
-                            if isinstance(sub_v, (int, float, str, bool, type(None))):
-                                pickle_safe_results[key][k][sub_k] = sub_v
-                            else:
-                                pickle_safe_results[key][k][sub_k] = str(sub_v)
-                    elif isinstance(v, (int, float, str, bool, type(None))):
-                        pickle_safe_results[key][k] = v
-                    else:
-                        pickle_safe_results[key][k] = str(v)
-            else:
-                # For other fields, use simple conversion
-                if isinstance(value, (int, float, str, bool, type(None), list, dict)):
-                    pickle_safe_results[key] = value
-                else:
-                    pickle_safe_results[key] = str(value)
-        
-        # Save the pickle-safe results
-        try:
-            with open(os.path.join(output_dir, 'backtest_results.pkl'), 'wb') as f:
-                pickle.dump(pickle_safe_results, f, protocol=pickle.HIGHEST_PROTOCOL)
-            print(f"Pickle results also saved to {output_dir}/backtest_results.pkl")
-        except Exception as e:
-            print(f"Warning: Could not save pickle file: {str(e)}")
-            print("JSON results file can be used instead.")
-    except Exception as e:
-        print(f"Warning: Could not create pickle-safe results: {str(e)}")
-        print("JSON results file can be used instead.")
-
-    # Save a summary of results to a text file
+    # Save detailed results to a text file
     with open(os.path.join(output_dir, 'results.txt'), 'w') as f:
-        # Calculate and write key metrics
-        initial_value = cerebro.broker.startingcash
-        final_value = cerebro.broker.getvalue()
-        total_return = ((final_value / initial_value) - 1) * 100
-        
-        # Get benchmark return if available (SP500)
-        benchmark_return = 0.0
-        
-        # Use a fallback based on the approximate annual return of the S&P 500
-        if start_date and end_date:
-            try:
-                start_year = pd.to_datetime(start_date).year
-                end_year = pd.to_datetime(end_date).year
-                years = max(1, end_year - start_year)
-                # Approximate annual return of S&P 500 (conservative estimate: 8% per year)
-                annual_return = 8.0
-                benchmark_return = annual_return * years
-                print(f"Using approximate benchmark return for {years} years at {annual_return}% per year: {benchmark_return:.2f}%")
-            except Exception as e:
-                print(f"Could not calculate approximate benchmark return: {e}")
-                benchmark_return = 0.0
-        
-        # Write metrics to file
+        # Strategy and test information
         f.write(f"Strategy: {strategy_name}\n")
         f.write(f"Parameters: {parameters}\n")
         f.write(f"Tickers: {tickers}\n")
+        f.write(f"Period: {start_date} to {end_date}\n\n")
+        
+        # Performance summary
+        f.write(f"==============================================================\n")
+        f.write(f"PERFORMANCE SUMMARY\n")
+        f.write(f"==============================================================\n")
         f.write(f"Initial Value: ${initial_value:.2f}\n")
         f.write(f"Final Value: ${final_value:.2f}\n")
-        f.write(f"Total Return: {total_return:.2f}%\n")
-        f.write(f"Benchmark Return (SP500): {benchmark_return:.2f}%\n")
-        f.write(f"Alpha: {total_return - benchmark_return:.2f}%\n")
-    # Saves a summary of results to a text file
-    # Calculates key metrics (initial/final value, total return, benchmark return, alpha)
-    # Uses SP500 as the benchmark if available
-    # Writes metrics to a text file in a human-readable format
-    
-    # Return results as a dictionary
-    
-    # Calculate drawdowns from equity curve if available
-    drawdowns = pd.Series()
-    if hasattr(strat, 'equity_curve'):
-        try:
-            # Convert equity_curve to DataFrame if it's not already
-            if not isinstance(strat.equity_curve, pd.DataFrame):
-                equity_df = pd.DataFrame(strat.equity_curve, columns=['Date', 'Value'])
-                equity_df['Date'] = pd.to_datetime(equity_df['Date'])
-                equity_df.set_index('Date', inplace=True)
-            else:
-                equity_df = strat.equity_curve
+        f.write(f"Absolute Return: ${final_value - initial_value:.2f}\n")
+        f.write(f"Total Return: {total_return:.2%}\n")
+        f.write(f"Benchmark Return: {benchmark_return:.2%}\n")
+        f.write(f"Alpha: {alpha:.2%}\n")
+        if 'annual_return' in metrics:
+            f.write(f"Annual Return: {metrics['annual_return']:.2%}\n")
+        f.write(f"Sharpe Ratio: {metrics.get('sharpe_ratio', 0):.4f}\n")
+        if metrics.get('win_rate', 0) > 0:
+            f.write(f"Profit Factor: {metrics.get('profit_factor', 0):.2f}\n")
+        f.write("\n")
+        
+        # Risk metrics
+        f.write(f"==============================================================\n")
+        f.write(f"RISK METRICS\n")
+        f.write(f"==============================================================\n")
+        f.write(f"Maximum Drawdown: {metrics.get('max_drawdown_pct', 0):.2f}%\n")
+        f.write(f"Maximum Drawdown (Money): ${metrics.get('max_drawdown_money', 0):.2f}\n")
+        if metrics.get('sharpe_ratio', 0) > 0:
+            f.write(f"Calmar Ratio: {metrics.get('annual_return', 0) / (metrics.get('max_drawdown', 0.01)):.4f}\n")
+            f.write(f"Sortino Ratio: {metrics.get('sortino_ratio', 0):.4f}\n")
+        f.write(f"Volatility (Annualized): {metrics.get('annualized_volatility', 0):.2%}\n\n")
+        
+        # Trade statistics
+        f.write(f"==============================================================\n")
+        f.write(f"TRADE STATISTICS\n")
+        f.write(f"==============================================================\n")
+        f.write(f"Total Trades: {metrics.get('total_trades', 0)}\n")
+        if metrics.get('total_trades', 0) > 0:
+            f.write(f"Winning Trades: {metrics.get('winning_trades', 0)} ({metrics.get('win_rate_pct', 0):.1f}%)\n")
+            f.write(f"Losing Trades: {metrics.get('losing_trades', 0)} ({100 - metrics.get('win_rate_pct', 0):.1f}%)\n")
+            f.write(f"Profit Factor: {metrics.get('profit_factor', 0):.4f}\n")
+            f.write(f"Average Trade PnL: ${metrics.get('avg_trade_pnl', 0):.2f}\n")
+            
+            # More details for trades if we have them
+            if metrics.get('gross_profit', 0) != 0 or metrics.get('gross_loss', 0) != 0:
+                f.write(f"\nProfit & Loss:\n")
+                f.write(f"  Gross Profit: ${metrics.get('gross_profit', 0):.2f}\n")
+                f.write(f"  Gross Loss: ${metrics.get('gross_loss', 0):.2f}\n")
+                f.write(f"  Net Profit: ${metrics.get('net_profit', 0):.2f}\n")
+            
+            if metrics.get('avg_win', 0) != 0 or metrics.get('avg_loss', 0) != 0:
+                f.write(f"\nTrade Sizing:\n")
+                f.write(f"  Average Win: ${metrics.get('avg_win', 0):.2f}\n")
+                f.write(f"  Average Loss: ${metrics.get('avg_loss', 0):.2f}\n")
+                win_loss_ratio = abs(metrics.get('avg_win', 0) / metrics.get('avg_loss', 1))
+                f.write(f"  Win/Loss Ratio: {win_loss_ratio:.2f}\n")
+            
+            if metrics.get('max_consecutive_wins', 0) > 0 or metrics.get('max_consecutive_losses', 0) > 0:
+                f.write(f"\nWin/Loss Streaks:\n")
+                f.write(f"  Max Consecutive Wins: {metrics.get('max_consecutive_wins', 0)}\n")
+                f.write(f"  Max Consecutive Losses: {metrics.get('max_consecutive_losses', 0)}\n")
                 
-            # Calculate drawdowns
-            values = equity_df['Value'].values
-            cummax = np.maximum.accumulate(values)
-            drawdowns = pd.Series(1.0 - values / cummax, index=equity_df.index)
-            
-            # Calculate daily returns
-            equity_df['Daily Return'] = equity_df['Value'].pct_change()
-            
-            # Get monthly returns by resampling daily returns
-            monthly_returns = equity_df['Daily Return'].resample('ME').apply(
-                lambda x: (1 + x).prod() - 1
-            ) * 100  # Convert to percentage
-            # Calculates drawdowns and monthly returns from the equity curve
-            # Converts the equity curve to a DataFrame if needed
-            # Uses the pandas resample method with 'ME' (month end) frequency to calculate monthly returns
-        except Exception as e:
-            print(f"Warning: Error calculating drawdowns and monthly returns: {e}")
-            monthly_returns = pd.Series()
-    else:
-        print("Warning: Cannot calculate drawdowns or monthly returns - no equity curve available")
-        monthly_returns = pd.Series()
-    # Handles exceptions when calculating drawdowns and monthly returns
-    # Sets default empty Series objects if calculations fail or no equity curve is available
+            if metrics.get('avg_trade_length', 0) > 0:
+                f.write(f"\nTrade Duration:\n")
+                f.write(f"  Average Trade Length: {metrics.get('avg_trade_length', 0):.1f} bars\n")
     
-    return {
-        'strategy': strategy_name,
-        'parameters': parameters,
-        'tickers': tickers,
-        'initial_value': cerebro.broker.startingcash,
-        'final_value': cerebro.broker.getvalue(),
-        'total_return': total_return,
-        'benchmark_return': benchmark_return,
-        'alpha': total_return - benchmark_return,
-        'equity_curve': strat.equity_curve if hasattr(strat, 'equity_curve') else [],
-        'trades': trade_logger.get_analysis(),
-        'drawdowns': drawdowns,
-        'monthly_returns': monthly_returns
-    }
-    # Returns a dictionary with all backtest results and metrics
-    # Includes strategy info, performance metrics, equity curve, trades, drawdowns, and monthly returns
+    # Save detailed results to JSON and pickle
+    json_file = os.path.join(output_dir, 'backtest_results.json')
+    with open(json_file, 'w') as f:
+        # Convert non-serializable objects to strings or other serializable types
+        serializable_results = result.copy()
+        if 'equity_curve' in serializable_results:
+            serializable_results['equity_curve'] = serializable_results['equity_curve'].to_dict('records') if serializable_results['equity_curve'] is not None else None
+        if 'trade_log' in serializable_results:
+            serializable_results['trade_log'] = serializable_results['trade_log'].to_dict('records') if serializable_results['trade_log'] is not None else None
+        
+        json.dump(serializable_results, f, indent=4, default=str)
+    
+    # Save to pickle (can store more complex objects)
+    pickle_file = os.path.join(output_dir, 'backtest_results.pkl')
+    with open(pickle_file, 'wb') as f:
+        pickle.dump(result, f)
+    
+    print(f"Backtest complete. Results saved to {output_dir}")
+    return result
 
 def run_parallel_backtests(backtest_configs, num_workers=None):
     """
@@ -695,13 +843,15 @@ if __name__ == "__main__":
     parser.add_argument('--window', action='store_true',
                         help="Whether to display backtrader's live plotting window")
     parser.add_argument('--plot', action='store_true',
-                        help="Whether to save plots of backtest results")
+                        help="Generate and save plots of backtest results (disabled by default)")
     parser.add_argument('--warmup_period', type=int, default=None,
                         help="Number of days to add before start_date as warmup for indicators")
     args = parser.parse_args()
     
     tickers = args.tickers.split(',') if args.tickers else None
-    run_backtest(output_dir=args.output_dir, strategy_name=args.strategy_name, tickers=tickers, start_date=args.start_date, end_date=args.end_date, stock_csv=args.stock_csv, window=args.window, plot=args.plot, warmup_period=args.warmup_period)
+    run_backtest(output_dir=args.output_dir, strategy_name=args.strategy_name, tickers=tickers, 
+                 start_date=args.start_date, end_date=args.end_date, stock_csv=args.stock_csv, 
+                 plot=args.plot, verbose=True)
     # Main block that runs when the script is executed directly
     # Sets up command-line argument parsing for strategy name, output directory, tickers, and date range
     # Parses a comma-separated list of tickers if provided
