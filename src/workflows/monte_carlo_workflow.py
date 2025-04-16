@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,7 @@ from workflows.workflow_utils import (
 # Import engine components
 from engine.run_backtest import run_backtest
 from monte_carlo.monte_carlo_analysis import MonteCarloAnalysis
+from monte_carlo.visualizations import MonteCarloVisualizer
 from workflows.simple_workflow import ensure_data_available
 
 def calculate_trading_days(start_date_str: str, end_date_str: str) -> int:
@@ -82,7 +84,8 @@ def run_monte_carlo_workflow(
     confidence_level: float = 0.95,
     bootstrap_pct: float = 0.5,
     random_seed: Optional[int] = None,
-    plot: bool = False
+    plot: bool = False,
+    enhanced_plots: bool = False
 ) -> Dict[str, Any]:
     """
     Run a Monte Carlo workflow for the given strategy.
@@ -99,6 +102,7 @@ def run_monte_carlo_workflow(
         keep_permuted_data: Whether to keep the permuted data files
         verbose: Whether to print detailed output
         plot: Whether to generate plots (default: False)
+        enhanced_plots: Whether to generate enhanced visualization with multiple plots (default: False)
         initial_capital: Initial capital for backtest
         commission: Commission rate for trades
         data_dir: Directory containing input data
@@ -337,15 +341,43 @@ def run_monte_carlo_workflow(
                 }
             
             # Generate plots only if plot flag is enabled
-            plot_file = os.path.join(output_dir, f"{strategy_name}_monte_carlo.png")
-            logger.debug(f"Plot flag is set to: {plot}")
-            
-            # If there's no price movement, there's nothing to plot
             equity_values = mc_analyzer.equity_values
-            if plot and (len(equity_values) > 1) and (equity_values.iloc[0] != equity_values.iloc[-1]):
-                logger.debug(f"Generating Monte Carlo plot with {len(equity_values)} data points")
-                mc_analyzer.plot(save_path=plot_file)
-                logger.info(f"Plot saved to: {plot_file}")
+            plot_files = {}
+            
+            logger.debug(f"Plot flag is set to: {plot}, enhanced_plots flag is set to: {enhanced_plots}")
+            
+            # Only proceed with plotting if there's price movement
+            if (len(equity_values) > 1) and (equity_values.iloc[0] != equity_values.iloc[-1]):
+                # Basic plot using the MonteCarloAnalysis class
+                if plot:
+                    plot_file = os.path.join(output_dir, f"{strategy_name}_monte_carlo.png")
+                    logger.debug(f"Generating basic Monte Carlo plot with {len(equity_values)} data points")
+                    mc_analyzer.plot(save_path=plot_file)
+                    plot_files['basic'] = plot_file
+                    logger.info(f"Basic Monte Carlo plot saved to: {plot_file}")
+                
+                # Enhanced plots using the MonteCarloVisualizer class
+                if enhanced_plots:
+                    logger.debug(f"Generating enhanced Monte Carlo visualizations")
+                    visualizer = MonteCarloVisualizer(
+                        equity_values=equity_values,
+                        simulated_paths=mc_analyzer.simulated_paths,
+                        simulation_results=mc_results,
+                        confidence_level=confidence_level,
+                        output_dir=output_dir,
+                        strategy_name=strategy_name
+                    )
+                    
+                    # Create all available plot types
+                    enhanced_plot_files = visualizer.create_all_plots(save=True)
+                    
+                    # Merge with plot_files
+                    plot_files.update(enhanced_plot_files)
+                    
+                    logger.info(f"Enhanced visualizations saved to: {output_dir}")
+                    for plot_type, file_path in enhanced_plot_files.items():
+                        if file_path:
+                            logger.debug(f"- {plot_type}: {os.path.basename(file_path)}")
             else:
                 logger.debug(f"Skipping plot generation: plot={plot}, data_points={len(equity_values) if equity_values is not None else 0}, price_movement={equity_values.iloc[0] != equity_values.iloc[-1] if equity_values is not None and len(equity_values) > 1 else False}")
             
@@ -394,7 +426,8 @@ def run_monte_carlo_workflow(
                 "backtest_metrics": backtest_result.get("metrics", {}),
                 "monte_carlo_results": mc_results,
                 "equity_curve": backtest_data,  # Add this to make complete_workflow.py happy
-                "output_dir": output_dir
+                "output_dir": output_dir,
+                "plot_files": plot_files
             }
             
         except Exception as e:

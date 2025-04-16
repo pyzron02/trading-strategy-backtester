@@ -40,6 +40,7 @@ def parse_args():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--param-file", type=str, help="Parameter file for the strategy")
     parser.add_argument("--plot", action="store_true", help="Generate and save plots of backtest results (disabled by default)")
+    parser.add_argument("--enhanced-plots", action="store_true", help="Generate enhanced visualization dashboard for Monte Carlo simulations (disabled by default)")
     
     # Optimization parameters
     optimization_group = parser.add_argument_group("Optimization parameters")
@@ -203,6 +204,12 @@ def run_cli():
     if args.workflow in ["simple", "monte_carlo", "complete"]:
         workflow_params.update({
             "plot": args.plot
+        })
+        
+    # Add enhanced_plots parameter for monte_carlo workflows
+    if args.workflow in ["monte_carlo", "complete"] and args.enhanced_plots:
+        workflow_params.update({
+            "enhanced_plots": args.enhanced_plots
         })
     
     # Run workflow with unified parameters

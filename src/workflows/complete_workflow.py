@@ -45,7 +45,8 @@ def run_complete_workflow(
     verbose: bool = False,
     initial_capital: float = 100000.0,
     commission: float = 0.001,
-    data_dir: str = "input"
+    data_dir: str = "input",
+    enhanced_plots: bool = False
 ) -> Dict[str, Any]:
     """
     Run a complete workflow including backtest, optimization, and Monte Carlo simulation.
@@ -67,6 +68,7 @@ def run_complete_workflow(
         initial_capital: Initial capital for backtest
         commission: Commission rate for trades
         data_dir: Directory containing input data
+        enhanced_plots: Whether to generate enhanced visualization dashboard for Monte Carlo
     
     Returns:
         Dict containing the results from all workflow steps
@@ -234,7 +236,8 @@ def run_complete_workflow(
         "initial_capital": initial_capital,
         "commission": commission,
         "data_dir": data_dir,
-        "plot": plot
+        "plot": plot,
+        "enhanced_plots": enhanced_plots
     }
     
     monte_carlo_result = run_monte_carlo_workflow(**monte_carlo_kwargs)
