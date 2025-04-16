@@ -1,8 +1,8 @@
 """
-Example scripts for the trading strategy testing framework.
+Example configurations for the trading strategy backtester.
 
-This package contains example scripts that demonstrate how to use the
-trading strategy testing framework with various strategies.
+This package contains example configuration files and settings
+for various trading strategies supported by the framework.
 """
 
-__all__ = ['test_simple_stock_example'] 
+__all__ = [] 

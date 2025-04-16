@@ -1,23 +1,23 @@
-# Trading Strategy Backtester Framework
+# Trading Strategy Backtester
 
-This project provides a Python-based framework for backtesting, optimizing, and evaluating trading strategies using historical market data. It specializes in Monte Carlo simulations for robust strategy validation.
+A robust framework for backtesting, optimizing, and evaluating trading strategies using historical market data, with a focus on Monte Carlo simulations for strategy validation.
 
 ## Features
 
-- **Monte Carlo Testing:** Core feature for robust strategy validation using the `DirectMonteCarloTest` class
+- **Monte Carlo Testing:** Validate strategy robustness through multiple simulations
   - Data permutation techniques for statistical validation
   - P-value calculations for key performance metrics
-  - Parameter optimization and trade generation enhancement
+  - Advanced equity curve and trade distribution visualization
   
-- **Backtesting Engine:** Utilizes the `backtrader` library for event-driven backtesting
+- **Backtesting Engine:** Event-driven backtesting system
   - Customizable strategy implementation
   - Detailed performance metrics and trade logging
   - Portfolio value tracking and equity curve generation
 
 - **Strategy Support:** 
-  - Built-in strategies (`SimpleStock`, `MACrossover`, `AuctionMarket`, `MultiPosition`)
+  - Built-in strategies (SimpleStock, MACrossover, AuctionMarket, MultiPosition)
   - Strategy registry for custom implementations
-  - Parameter variation during testing
+  - Parameter optimization
 
 - **Performance Metrics:** 
   - Total Return
@@ -25,146 +25,33 @@ This project provides a Python-based framework for backtesting, optimizing, and 
   - Max Drawdown
   - Win Rate
   - Profit Factor
-  - Trade Count validation
+  - Trade statistics
 
 - **Parallel Processing:** 
-  - Multi-core support for faster Monte Carlo simulations
+  - Multi-core support for faster simulations
   - Configurable worker count
-  - Parallel execution of backtests with multiple parameter combinations
-  - Automatic CPU core detection and allocation
-
-## Monte Carlo Simulation
-
-The Monte Carlo simulation framework creates synthetic but statistically similar market conditions to test how a trading strategy performs under different scenarios. This helps determine if a strategy's performance is due to actual edge or random chance.
-
-### Overall Process Flow
-
-```
-┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌─────────────┐     ┌──────────────┐
-│ Load Stock  │────▶│ Run Original │────▶│ Generate Data │────▶│ Run Monte   │────▶│ Analyze      │
-│ Data        │     │ Backtest     │     │ Permutations  │     │ Carlo Tests │     │ Results      │
-└─────────────┘     └──────────────┘     └───────────────┘     └─────────────┘     └──────────────┘
-```
-
-### Data Loading & Preparation
-
-```
-┌─────────────┐     ┌───────────────┐     ┌───────────────┐
-│ Stock Data  │────▶│ Data Cleaning │────▶│ Format        │
-│ CSV Files   │     │ & Validation  │     │ for Backtrader│
-└─────────────┘     └───────────────┘     └───────────────┘
-```
-
-### Monte Carlo Simulation Process
-
-```
-┌────────────┐                                     ┌─────────────┐
-│ Original   │                                     │ Statistical │
-│ Backtest   │──┐                                  │ Analysis    │
-└────────────┘  │                                  └─────────────┘
-                │                                         ▲
-                ▼                                         │
-┌─────────────────────────────────────────────────────────────────────┐
-│                   Monte Carlo Permutations                           │
-│                                                                      │
-│  ┌────────────┐    ┌────────────┐    ┌────────────┐    ┌──────────┐ │
-│  │Permutation │    │Permutation │    │Permutation │    │   ...    │ │
-│  │    #1      │    │    #2      │    │    #3      │    │          │ │
-│  └────────────┘    └────────────┘    └────────────┘    └──────────┘ │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Data Permutation Methods
-
-The code implements three different permutation methods to create synthetic market data:
-
-```
-1. Returns Permutation
-   ┌───────────┐     ┌────────────┐     ┌───────────────┐
-   │ Calculate │────▶│ Shuffle    │────▶│ Reconstruct   │
-   │ Returns   │     │ Returns    │     │ Price Series  │
-   └───────────┘     └────────────┘     └───────────────┘
-
-2. Block Permutation
-   ┌───────────┐     ┌────────────┐     ┌───────────────┐
-   │ Create    │────▶│ Shuffle    │────▶│ Reconstruct   │
-   │ Blocks    │     │ Blocks     │     │ Price Series  │
-   └───────────┘     └────────────┘     └───────────────┘
-
-3. Stationary Bootstrap
-   ┌────────────┐     ┌────────────────────┐     ┌───────────────┐
-   │ Generate   │────▶│ Sample Blocks with │────▶│ Reconstruct   │
-   │ Block Size │     │ Random Lengths     │     │ Price Series  │
-   └────────────┘     └────────────────────┘     └───────────────┘
-```
-
-### Parameter Optimization & Trade Generation
-
-The framework ensures that every Monte Carlo permutation generates meaningful trades through:
-
-```
-┌────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ Initial        │────▶│ Adaptive        │────▶│ Aggressive      │
-│ Parameters     │     │ Parameters Per  │     │ Parameters      │
-│                │     │ Permutation     │     │ (If No Trades)  │
-└────────────────┘     └─────────────────┘     └─────────────────┘
-```
-
-### Statistical Analysis
-
-```
-┌────────────────┐     ┌─────────────────┐     ┌───────────────┐     ┌─────────────────┐
-│ Original       │     │ Calculate       │     │ Compare with  │     │ Generate        │
-│ Performance    │────▶│ Performance     │────▶│ Permutation   │────▶│ Visualizations  │
-│ Metrics        │     │ Distribution    │     │ Distribution  │     │ & P-values      │
-└────────────────┘     └─────────────────┘     └───────────────┘     └─────────────────┘
-```
-
-### Visualization Suite
-
-The framework generates comprehensive visualizations:
-
-```
-┌─────────────────┐     ┌────────────────┐     ┌────────────────┐
-│ Distribution    │     │ Equity Curve   │     │ Price Path     │
-│ Plots Per Metric│─────│ Visualizations │─────│ Comparisons    │
-│                 │     │                │     │                │
-└─────────────────┘     └────────────────┘     └────────────────┘
-```
-
-### Key Concepts
-
-1. **Permutation Testing**: By randomly shuffling historical data while preserving its statistical properties, the system tests if strategy performance is due to actual edge or random chance.
-
-2. **Multiple Permutation Methods**: Different shuffling approaches preserve different market characteristics.
-
-3. **Parameter Optimization**: Automatically finds and reports the best parameters across permutations based on composite performance scores.
-
-4. **Adaptive Parameters**: Ensures trades are generated for every permutation by adjusting parameters and implementing fallback mechanisms.
-
-5. **P-value Calculation**: The proportion of permutations that outperform the original strategy indicates statistical significance.
-
-6. **Trade Validation**: Ensures that strategies actually generate trades and tracks trade counts as a key metric.
+  - Parallel execution of backtests
 
 ## Directory Structure
 
 ```
 .
 ├── src/
-│   ├── monte_carlo/       # Direct Monte Carlo implementation
-│   │   └── direct_monte_carlo.py  # Core Monte Carlo testing logic
-│   ├── strategies/        # Trading strategy implementations
-│   │   ├── simple_stock.py
-│   │   └── ma_crossover.py
-│   └── utils/             # Utility functions
-├── input/                 # Stock data input files
-├── output/                # Test results and visualizations
-│   └── monte_carlo_test_*/  # Timestamped Monte Carlo test results
-├── run_complete_monte_carlo.py  # Main entry point script
-├── requirements.txt       # Python dependencies
-├── LICENSE                # MIT license
-└── README.md              # This documentation
+│   ├── engine/             # Core backtesting engine components
+│   ├── data_preprocessing/ # Data preparation tools
+│   ├── evaluators/         # Performance evaluation utilities
+│   ├── monte_carlo/        # Monte Carlo simulation implementation
+│   ├── optimizers/         # Parameter optimization components
+│   ├── runners/            # Single-purpose script runners
+│   ├── strategies/         # Trading strategy implementations
+│   ├── utils/              # Utility functions
+│   └── workflows/          # High-level workflow orchestrators
+├── input/                  # Stock data input files
+├── output/                 # Test results and visualizations
+├── tests/                  # Automated tests
+├── run_trade_monte_carlo.py # Monte Carlo workflow entry point
+├── requirements.txt        # Python dependencies
+└── LICENSE                 # MIT license
 ```
 
 ## Installation
@@ -181,89 +68,127 @@ The framework generates comprehensive visualizations:
    python -m venv venv
    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
    pip install -r requirements.txt
-   pip install backtrader # Add backtrader explicitly
    ```
-   *Note: Ensure `backtrader`, `pandas`, `numpy`, and `matplotlib` are installed.*
 
 ## Usage
 
-The primary entry point is `run_complete_monte_carlo.py` for running Monte Carlo tests:
+### Simple Backtest
+
+To run a simple backtest with a specific strategy:
 
 ```bash
-python run_complete_monte_carlo.py \
-    --strategy SimpleStock \
-    --tickers AAPL \
-    --num-permutations 100 \
-    --num-cores 4 \
+python src/utils/run_simple_workflow.py \
+    --strategy MACrossover \
+    --tickers AAPL,MSFT \
+    --start-date 2020-01-01 \
+    --end-date 2025-01-01 \
     --verbose
 ```
 
-**Common Arguments:**
+### Monte Carlo Simulation
 
-* `--strategy`: Name of the strategy (e.g., `SimpleStock`, `MACrossover`).
-* `--tickers`: Comma-separated list of stock tickers (e.g., `AAPL,MSFT`).
-* `--start-date`: Start date for data (YYYY-MM-DD). Default uses all available data.
-* `--end-date`: End date for data (YYYY-MM-DD). Default uses all available data.
-* `--in-sample-ratio`: Ratio of data to use for in-sample period (0.0 to 1.0). Default is 0.7.
-* `--num-permutations`: Number of Monte Carlo permutations to run. Default is 100.
-* `--num-cores`, `--num-workers`: Number of CPU cores for parallel processing. Default uses all available cores except one.
-* `--output-dir`: Specify a custom output directory. Default is timestamped directory.
-* `--verbose`: Enable detailed logging.
+For robust strategy validation using Monte Carlo simulations:
 
-## Parallel Processing
+```bash
+python run_trade_monte_carlo.py \
+    --strategy MultiPosition \
+    --tickers NVDA,GOOG \
+    --num-simulations 100 \
+    --start-date 2020-01-01 \
+    --end-date 2025-01-01 \
+    --verbose
+```
 
-The framework supports parallel processing for improved performance:
+### Optimization Workflow
 
-1. **Monte Carlo Simulations**: By default, Monte Carlo simulations run on multiple CPU cores:
-   ```bash
-   python run_complete_monte_carlo.py --strategy SimpleStock --num-simulations 1000 --num-cores 8
-   ```
-   You can also use `--num-workers` as an alternative:
-   ```bash
-   python run_complete_monte_carlo.py --strategy SimpleStock --num-simulations 1000 --num-workers 8
-   ```
+To optimize strategy parameters:
 
-2. **Batch Parameter Testing**: Test multiple parameter combinations in parallel:
-   ```bash
-   python run_parameter_optimization.py --strategy MACrossover --num-cores 8
-   ```
+```bash
+python src/workflows/optimization_workflow.py \
+    --strategy MACrossover \
+    --tickers AAPL \
+    --start-date 2020-01-01 \
+    --end-date 2025-01-01 \
+    --n-trials 50 \
+    --verbose
+```
 
-3. **Automatic Core Detection**: If `--num-cores` is not specified, the system automatically uses all available cores except one to prevent system slowdown.
+## Monte Carlo Simulation Process
 
-4. **Core Management**: CPU core allocation can be controlled via:
-   * `--num-cores` or `--num-workers` command-line argument (both work the same way)
-   * `num_workers` parameter in direct API usage
-   * Environment variable `TRADING_BACKTEST_CORES`
+The Monte Carlo simulation framework creates synthetic but statistically similar market conditions to test how a trading strategy performs under different scenarios. This helps determine if a strategy's performance is due to actual edge or random chance.
 
-## Output Structure
+### Overall Process Flow
 
-Results are saved in timestamped directories like `output/monte_carlo_test_YYYYMMDD_HHMMSS/`. Common outputs include:
+```
+┌────────────┐     ┌──────────────┐     ┌───────────────┐     ┌─────────────┐     ┌──────────────┐
+│ Load Data  │────▶│ Run Original │────▶│ Generate Data │────▶│ Run Monte   │────▶│ Analyze      │
+│            │     │ Backtest     │     │ Permutations  │     │ Carlo Tests │     │ Results      │
+└────────────┘     └──────────────┘     └───────────────┘     └─────────────┘     └──────────────┘
+```
 
-* **Original Backtest Results:**
-  * `original_results.json`: Performance metrics for original backtest
-  * `trade_log_original.csv`: Log of all trades from original backtest
-  * `equity_curve.csv`: Portfolio value over time for original backtest
+### Data Permutation Methods
 
-* **Permutation Results:**
-  * Individual permutation results in separate directories
-  * Parameter variations used for each permutation
-  * Best parameters found across all permutations
+The framework implements multiple permutation methods to create synthetic market data:
 
-* **Visualizations:**
-  * Distribution plots for key metrics (PNG files)
-  * Equity curves comparing original vs. permutations
-  * Price path visualizations
-  * Statistical significance indicators
+1. **Returns Permutation**: Shuffles daily returns while preserving their distribution
+2. **Block Permutation**: Preserves short-term autocorrelation by shuffling blocks of data
+3. **Stationary Bootstrap**: Uses variable-length blocks for more realistic simulations
 
-* **Summary Reports:**
-  * P-values for performance metrics
-  * Best parameters recommendation
-  * Overall strategy robustness assessment
+### Statistical Analysis
 
-## Contributing
+```
+┌────────────────┐     ┌─────────────────┐     ┌───────────────┐     ┌─────────────────┐
+│ Original       │     │ Calculate       │     │ Compare with  │     │ Generate        │
+│ Performance    │────▶│ Performance     │────▶│ Permutation   │────▶│ Visualizations  │
+│ Metrics        │     │ Distribution    │     │ Distribution  │     │ & P-values      │
+└────────────────┘     └─────────────────┘     └───────────────┘     └─────────────────┘
+```
 
-[Optional: Add guidelines for contribution]
+## Creating Custom Strategies
+
+To create a custom strategy:
+
+1. Create a new strategy file in `src/strategies/`
+2. Inherit from the base `Strategy` class
+3. Implement the required methods (setup, process_data, generate_signals)
+4. Register your strategy in the `registry.py` file
+
+Example:
+
+```python
+from strategies.strategy import Strategy
+
+class MyCustomStrategy(Strategy):
+    def setup(self, parameters=None):
+        # Initialize parameters
+        self.param1 = parameters.get('param1', default_value)
+        
+    def process_data(self, data):
+        # Process market data
+        
+    def generate_signals(self, data):
+        # Generate buy/sell signals
+        return signals
+```
+
+## Performance Evaluation
+
+The system generates comprehensive evaluation metrics and visualizations:
+
+- Equity curve with drawdown analysis
+- Trade distribution statistics
+- Monte Carlo confidence intervals
+- P-value calculations for strategy robustness
+- Comparison visualizations of original vs. permuted performance
+
+## Key Considerations
+
+1. **Data Quality**: Ensure your input data is clean and properly formatted
+2. **Parameter Sensitivity**: Use Monte Carlo tests to evaluate parameter sensitivity
+3. **Statistical Significance**: Focus on p-values to assess strategy robustness
+4. **Look-Ahead Bias**: Avoid using future data in strategy logic
+5. **Execution Costs**: Include realistic commission and slippage models in backtests
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details. 

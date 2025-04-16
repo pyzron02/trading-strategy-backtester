@@ -22,6 +22,7 @@ from typing import List, Dict, Tuple, Optional, Any, Union
 import sys
 import warnings
 import shutil
+import time
 
 # Add the src directory to the path to enable importing from strategies
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -165,6 +166,275 @@ class TradeBasedMonteCarloTest:
             print(f"Permuted data will be saved in: {self.permuted_data_dir}")
         else:
             print("Permuted data files will be deleted after simulation")
+    
+    @classmethod
+    def from_trade_log(cls, trade_log, initial_capital=100000.0, n_iterations=1000, output_dir=None, 
+                     strategy_name=None, parameters=None, tickers=None, verbose=False, keep_permuted_data=False):
+        """
+        Alternative constructor that creates a Monte Carlo simulation from a trade log.
+        
+        Args:
+            trade_log (list or DataFrame): List of trade records from a backtest
+            initial_capital (float): Initial capital for the simulation
+            n_iterations (int): Number of Monte Carlo iterations
+            output_dir (str): Directory to save simulation results
+            strategy_name (str, optional): Name of the strategy, will be extracted from trade log if not provided
+            parameters (dict, optional): Strategy parameters
+            tickers (list, optional): List of ticker symbols
+            verbose (bool): Whether to print detailed output
+            keep_permuted_data (bool): Whether to keep permuted data files
+            
+        Returns:
+            TradeBasedMonteCarloTest: Instance configured for trade log simulations
+        """
+        # Extract strategy name from the trade log if not provided
+        if strategy_name is None:
+            strategy_name = "Unknown"
+            if isinstance(trade_log, pd.DataFrame) and 'strategy' in trade_log.columns and len(trade_log) > 0:
+                strategy_name = trade_log['strategy'].iloc[0]
+        
+        # Use provided tickers or default
+        if tickers is None:
+            tickers = ["SPY"]  # Default ticker, not used for trade log simulation
+        
+        # Use provided parameters or empty dict
+        if parameters is None:
+            parameters = {}
+            
+        # Create a basic instance with minimal required information
+        instance = cls(
+            strategy_name=strategy_name,
+            parameters=parameters,
+            tickers=tickers,
+            output_dir=output_dir,
+            num_simulations=n_iterations,
+            initial_capital=initial_capital,
+            verbose=verbose,
+            keep_permuted_data=keep_permuted_data
+        )
+        
+        # Store the trade log directly
+        instance.trade_log = trade_log
+        
+        # Set simulation mode to trade-based (rather than bootstrapping stock data)
+        instance.simulation_mode = "trade_log"
+        
+        return instance
+    
+    def run(self, progress_callback=None):
+        """
+        Run the Monte Carlo simulation.
+        
+        Args:
+            progress_callback: Optional callback function to update progress
+            
+        Returns:
+            dict: Dictionary of simulation results
+        """
+        if hasattr(self, 'simulation_mode') and self.simulation_mode == "trade_log":
+            return self._run_trade_log_simulation(progress_callback)
+        else:
+            # Call the original test method for stock data permutation
+            return self.run_test(None)  # No need for out_of_sample_start in this case
+    
+    def _run_trade_log_simulation(self, progress_callback=None):
+        """
+        Run Monte Carlo simulation using the trade log.
+        
+        Args:
+            progress_callback: Optional callback function to update progress
+            
+        Returns:
+            dict: Dictionary of simulation results
+        """
+        if not hasattr(self, 'trade_log') or self.trade_log is None:
+            raise ValueError("No trade log available for simulation")
+        
+        print(f"Running trade-based Monte Carlo simulation with {self.num_simulations} iterations")
+        
+        # Convert trade log to DataFrame if it's not already
+        if not isinstance(self.trade_log, pd.DataFrame):
+            trade_log_df = pd.DataFrame(self.trade_log)
+        else:
+            trade_log_df = self.trade_log.copy()
+        
+        # Extract key statistics from trade log
+        trade_stats = self._extract_trade_statistics(trade_log_df)
+        
+        # Store original metrics
+        self.original_metrics = {
+            'total_return': trade_stats.get('total_return', 0),
+            'sharpe_ratio': trade_stats.get('sharpe_ratio', 0),
+            'max_drawdown': trade_stats.get('max_drawdown', 0),
+            'win_rate': trade_stats.get('win_rate', 0)
+        }
+        
+        # Run simulations
+        all_results = []
+        for i in range(self.num_simulations):
+            if progress_callback:
+                progress_callback(i, self.num_simulations)
+            
+            # Generate simulated trade outcomes by bootstrapping
+            sim_results = self._simulate_trades(trade_log_df)
+            all_results.append(sim_results)
+        
+        # Calculate summary statistics
+        self.simulated_metrics = all_results
+        
+        # Calculate summary stats
+        metrics_keys = all_results[0].keys()
+        summary = {}
+        
+        for key in metrics_keys:
+            values = [result[key] for result in all_results]
+            summary[f"median_{key}"] = np.median(values)
+            summary[f"mean_{key}"] = np.mean(values)
+            summary[f"std_{key}"] = np.std(values)
+            summary[f"min_{key}"] = np.min(values)
+            summary[f"max_{key}"] = np.max(values)
+        
+        # Save summary to output directory
+        results_file = os.path.join(self.output_dir, "monte_carlo_results.json")
+        with open(results_file, 'w') as f:
+            json.dump(summary, f, indent=4, cls=CustomJSONEncoder)
+        
+        print(f"Monte Carlo simulation complete. Results saved to {results_file}")
+        return summary
+    
+    def _extract_trade_statistics(self, trade_log_df):
+        """Extract key statistics from the trade log"""
+        stats = {}
+        
+        # Basic counts
+        trades_count = len(trade_log_df)
+        if trades_count == 0:
+            return stats
+        
+        # Calculate P&L if it exists
+        if 'pnl' in trade_log_df.columns:
+            # Win rate
+            winning_trades = trade_log_df[trade_log_df['pnl'] > 0]
+            stats['win_rate'] = len(winning_trades) / trades_count if trades_count > 0 else 0
+            
+            # Profit factor
+            total_gain = winning_trades['pnl'].sum() if len(winning_trades) > 0 else 0
+            losing_trades = trade_log_df[trade_log_df['pnl'] <= 0]
+            total_loss = abs(losing_trades['pnl'].sum()) if len(losing_trades) > 0 else 0
+            stats['profit_factor'] = total_gain / total_loss if total_loss > 0 else float('inf')
+            
+            # Average win/loss
+            avg_win = winning_trades['pnl'].mean() if len(winning_trades) > 0 else 0
+            avg_loss = abs(losing_trades['pnl'].mean()) if len(losing_trades) > 0 else 0
+            stats['avg_win_loss_ratio'] = avg_win / avg_loss if avg_loss > 0 else float('inf')
+            
+            # Total return
+            stats['total_return'] = trade_log_df['pnl'].sum() / self.initial_capital
+            
+            # Calculate equity curve if datetime is available
+            if 'datetime' in trade_log_df.columns:
+                # Sort by datetime
+                sorted_trades = trade_log_df.sort_values('datetime')
+                
+                # Create cumulative equity curve
+                equity = np.cumsum(sorted_trades['pnl'].values)
+                equity = self.initial_capital + equity
+                
+                # Calculate maximum drawdown
+                peak = np.maximum.accumulate(equity)
+                drawdown = (equity - peak) / peak
+                stats['max_drawdown'] = abs(min(drawdown)) if len(drawdown) > 0 else 0
+                
+                # Calculate Sharpe ratio if we have enough trades
+                if len(equity) > 1:
+                    returns = np.diff(equity) / equity[:-1]
+                    annualized_return = (equity[-1] / equity[0]) ** (252 / len(equity)) - 1
+                    annualized_volatility = np.std(returns) * np.sqrt(252)
+                    stats['sharpe_ratio'] = annualized_return / annualized_volatility if annualized_volatility > 0 else 0
+        
+        return stats
+    
+    def _simulate_trades(self, trade_log_df):
+        """
+        Simulate trades by bootstrapping from the trade log
+        
+        Args:
+            trade_log_df: DataFrame containing trade records
+            
+        Returns:
+            dict: Simulated performance metrics
+        """
+        # Extract PnL from trades
+        if 'pnl' not in trade_log_df.columns:
+            raise ValueError("Trade log must contain 'pnl' column for simulation")
+        
+        # Get number of trades
+        n_trades = len(trade_log_df)
+        
+        # Bootstrap trades (sample with replacement)
+        np.random.seed(int(time.time() * 1000) % 100000)  # Use current time for seeding
+        sampled_indices = np.random.choice(n_trades, n_trades, replace=True)
+        sampled_trades = trade_log_df.iloc[sampled_indices]
+        
+        # Calculate equity curve
+        equity = np.cumsum(sampled_trades['pnl'].values)
+        equity = self.initial_capital + equity
+        
+        # Calculate metrics
+        metrics = {}
+        
+        # Total return
+        metrics['final_equity'] = equity[-1] if len(equity) > 0 else self.initial_capital
+        metrics['total_return'] = (equity[-1] - self.initial_capital) / self.initial_capital if len(equity) > 0 else 0
+        
+        # Maximum drawdown
+        peak = np.maximum.accumulate(equity)
+        drawdown = (equity - peak) / peak
+        metrics['max_drawdown'] = abs(min(drawdown)) if len(drawdown) > 0 else 0
+        
+        # Sharpe ratio
+        if len(equity) > 1:
+            returns = np.diff(equity) / equity[:-1]
+            annualized_return = (equity[-1] / equity[0]) ** (252 / len(equity)) - 1
+            annualized_volatility = np.std(returns) * np.sqrt(252)
+            metrics['sharpe_ratio'] = annualized_return / annualized_volatility if annualized_volatility > 0 else 0
+        else:
+            metrics['sharpe_ratio'] = 0
+        
+        # Win rate
+        if 'pnl' in sampled_trades.columns:
+            winning_trades = sampled_trades[sampled_trades['pnl'] > 0]
+            metrics['win_rate'] = len(winning_trades) / len(sampled_trades) if len(sampled_trades) > 0 else 0
+        
+        return metrics
+    
+    def calculate_confidence_intervals(self, confidence=0.95):
+        """
+        Calculate confidence intervals for the Monte Carlo simulation results.
+        
+        Args:
+            confidence: Confidence level (default: 0.95 for 95% confidence)
+            
+        Returns:
+            dict: Dictionary of confidence intervals for each metric
+        """
+        if not self.simulated_metrics:
+            return {}
+        
+        # Get all available metrics
+        metrics = self.simulated_metrics[0].keys()
+        
+        # Calculate confidence intervals
+        intervals = {}
+        for metric in metrics:
+            values = [result[metric] for result in self.simulated_metrics]
+            lower_percentile = (1 - confidence) / 2 * 100
+            upper_percentile = (1 - (1 - confidence) / 2) * 100
+            lower = np.percentile(values, lower_percentile)
+            upper = np.percentile(values, upper_percentile)
+            intervals[metric] = (lower, upper)
+        
+        return intervals
     
     def _find_stock_data_csv(self):
         """
@@ -505,7 +775,7 @@ class TradeBasedMonteCarloTest:
             print(f"Max drawdown: {metrics['max_drawdown']:.2f}%")
             print(f"Win rate: {metrics['win_rate']:.2f}")
             print(f"Profit factor: {metrics['profit_factor']:.2f}")
-        
+    
         return metrics
     
     def run_monte_carlo_simulations(self, out_of_sample_start: str) -> List[Dict]:
@@ -714,7 +984,7 @@ class TradeBasedMonteCarloTest:
                 # and not making copies. In this case, make copies of permuted data files.
                 print(f"DEBUG: Expected {self.num_simulations} files but found {len(csv_files)}. Attempting to copy missing files...")
                 
-                for i in range(self.num_simulations):
+            for i in range(self.num_simulations):
                     src_file = permuted_csvs[i]
                     dst_file = os.path.join(self.permuted_data_dir, f"permuted_data_{i}.csv")
                     
@@ -1182,7 +1452,7 @@ class TradeBasedMonteCarloTest:
             plt.savefig(equity_plot_path_png, dpi=150)
             plt.savefig(equity_plot_path_pdf)
             plt.close()
-            
+                    
             if self.verbose:
                 print(f"Equity curve comparison saved to {equity_plot_path_png} and {equity_plot_path_pdf}")
                 
@@ -1274,7 +1544,7 @@ class TradeBasedMonteCarloTest:
         """
         if self.verbose:
             print("Creating permuted price series comparison plot")
-        
+            
         # Create visualizations directory if it doesn't exist
         viz_dir = os.path.join(self.output_dir, 'visualizations')
         os.makedirs(viz_dir, exist_ok=True)
@@ -1288,7 +1558,7 @@ class TradeBasedMonteCarloTest:
         if not self.original_stock_csv or not os.path.exists(self.original_stock_csv):
             print(f"Warning: Original stock data CSV not found at {self.original_stock_csv}")
             return
-        
+                
         # Find original stock data copy (it might be in the permuted_data directory)
         original_data_path = os.path.join(self.permuted_data_dir, "original_stock_data.csv")
         if not os.path.exists(original_data_path):
@@ -1308,7 +1578,7 @@ class TradeBasedMonteCarloTest:
                                  any(x in col.lower() for x in ['close', 'price', 'adj'])]
                     if not price_cols:
                         print(f"Warning: No closing price column found for ticker {ticker}, skipping")
-                        continue
+                    continue
                     close_col = price_cols[0]
                 
                 # Create figure for this ticker
@@ -1450,21 +1720,21 @@ class TradeBasedMonteCarloTest:
             # Step 1: Run original backtest
             if self.verbose:
                 print(f"Running original backtest with {self.strategy_name} strategy")
-                
+            
             original_metrics = self.run_original_backtest(out_of_sample_start)
             self.original_metrics = original_metrics
             
             # Step 2: Run Monte Carlo simulations
             if self.verbose:
                 print(f"Running {self.num_simulations} Monte Carlo simulations")
-                
+            
             simulated_metrics = self.run_monte_carlo_simulations(out_of_sample_start)
             self.simulated_metrics = simulated_metrics
             
             # Step 3: Analyze results
             if self.verbose:
                 print("Analyzing Monte Carlo simulation results")
-                
+            
             analysis_results = self.analyze_results(original_metrics, simulated_metrics)
             self.analysis_results = analysis_results
             

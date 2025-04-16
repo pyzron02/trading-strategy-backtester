@@ -37,5 +37,15 @@ def ensure_directories():
     
     return 0
 
+def ensure_output_directory(output_dir):
+    """
+    Ensure the specified output directory exists.
+    
+    Args:
+        output_dir: Path to the output directory
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Ensured output directory exists: {output_dir}")
+
 if __name__ == '__main__':
     sys.exit(ensure_directories()) 
