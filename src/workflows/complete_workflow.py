@@ -183,6 +183,36 @@ def run_complete_workflow(
     
     backtest_result = run_simple_workflow(**backtest_kwargs)
     
+    # Store backtest results in combined_results
+    if backtest_result and backtest_result.get("status") == "success":
+        # Debug the structure of backtest_result
+        logger.debug(f"Backtest result keys: {backtest_result.keys() if isinstance(backtest_result, dict) else 'Not a dict'}")
+        
+        # Try to extract the metrics from the right location
+        backtest_data = {}
+        
+        # First look for results key
+        if "results" in backtest_result:
+            backtest_data = backtest_result["results"]
+            logger.debug(f"Found results key with sub-keys: {backtest_data.keys() if isinstance(backtest_data, dict) else 'Not a dict'}")
+        
+        # If no results found or results is empty, look for equity_curve or metrics directly
+        if not backtest_data and "metrics" in backtest_result:
+            backtest_data = {"metrics": backtest_result["metrics"]}
+            logger.debug("Found metrics directly in backtest_result")
+            
+        if "equity_curve" in backtest_result:
+            if not backtest_data:
+                backtest_data = {}
+            backtest_data["equity_curve"] = backtest_result["equity_curve"]
+            logger.debug("Found equity_curve directly in backtest_result")
+        
+        combined_results["simple_backtest"] = backtest_data
+        logger.info("Simple backtest completed successfully")
+    else:
+        logger.warning(f"Simple backtest failed: {backtest_result.get('message', 'Unknown error')}")
+        combined_results["simple_backtest"] = {"status": "error", "message": backtest_result.get('message', 'Unknown error')}
+    
     # Step 3: Run Monte Carlo simulation
     print_section("Step 3: Monte Carlo Simulation")
     
@@ -209,9 +239,27 @@ def run_complete_workflow(
     
     monte_carlo_result = run_monte_carlo_workflow(**monte_carlo_kwargs)
     
-    if "equity_curve" in monte_carlo_result:
-        combined_results["monte_carlo"] = monte_carlo_result.get("results", {})
+    # Store Monte Carlo results in combined_results
+    if monte_carlo_result and monte_carlo_result.get("status") == "success":
+        # Print the monte_carlo_result keys for debugging
+        logger.debug(f"Monte Carlo result keys: {monte_carlo_result.keys() if isinstance(monte_carlo_result, dict) else 'Not a dict'}")
+        
+        # Extract actual results from the returned object
+        monte_carlo_data = {}
+        
+        # Try different possible locations for the Monte Carlo results
+        if "monte_carlo_results" in monte_carlo_result:
+            monte_carlo_data = monte_carlo_result["monte_carlo_results"]
+        elif "results" in monte_carlo_result:
+            if "monte_carlo_results" in monte_carlo_result["results"]:
+                monte_carlo_data = monte_carlo_result["results"]["monte_carlo_results"]
+            else:
+                monte_carlo_data = monte_carlo_result["results"]
+        
+        # Assign to combined_results
+        combined_results["monte_carlo"] = monte_carlo_data
         logger.info("Monte Carlo simulation completed successfully")
+        
         # If all parts have run, mark as complete
         if combined_results.get("simple_backtest") and combined_results.get("optimization"):
             combined_results["status"] = "success"
@@ -241,8 +289,22 @@ def run_complete_workflow(
         f.write("SIMPLE BACKTEST RESULTS\n")
         f.write("=" * 80 + "\n")
         
+        # Look for backtest results in the standard location
         if "simple_backtest" in combined_results and isinstance(combined_results["simple_backtest"], dict):
-            metrics = combined_results["simple_backtest"].get("metrics", {})
+            backtest_data = combined_results["simple_backtest"]
+            # First try to get metrics directly
+            metrics = backtest_data.get("metrics", {})
+            
+            # If empty, check if metrics are nested in the result structure
+            if not metrics and "results" in backtest_data:
+                metrics = backtest_data["results"].get("metrics", {})
+                
+            # If still empty, try other possible locations
+            if not metrics and "backtest_result" in backtest_data:
+                metrics = backtest_data["backtest_result"].get("metrics", {})
+            
+            logger.debug(f"Backtest metrics found: {bool(metrics)}")
+            
             if metrics:
                 # Performance metrics
                 f.write("\n----- Performance Metrics -----\n")
@@ -275,8 +337,12 @@ def run_complete_workflow(
                 f.write(f"Max Consecutive Losses: {metrics.get('max_consecutive_losses', 0)}\n")
             else:
                 f.write("No metrics available for simple backtest\n")
+                # Log debug info about the combined_results structure
+                logger.debug(f"Backtest data structure: {backtest_data.keys() if isinstance(backtest_data, dict) else 'Not a dict'}")
         else:
             f.write("Simple backtest failed or was skipped\n")
+            # Log debug info about the combined_results structure
+            logger.debug(f"Simple backtest data missing. Available keys: {combined_results.keys()}")
         
         # Optimization Results
         if "optimization" in combined_results and combined_results["optimization"].get("status") != "skipped":
@@ -323,12 +389,30 @@ def run_complete_workflow(
                 f.write("Optimization failed or no best parameters found\n")
         
         # Monte Carlo Results
-        if "monte_carlo" in combined_results and combined_results["monte_carlo"].get("status") != "skipped":
+        if "monte_carlo" in combined_results:
             f.write("\n" + "=" * 80 + "\n")
             f.write("MONTE CARLO SIMULATION RESULTS\n")
             f.write("=" * 80 + "\n")
             
-            monte_carlo_results = combined_results.get("monte_carlo", {}).get("results", {})
+            # Try to get monte carlo results with fallbacks for different possible structures
+            monte_carlo_data = combined_results.get("monte_carlo", {})
+            monte_carlo_results = {}
+            
+            # First try direct access
+            if isinstance(monte_carlo_data, dict):
+                # Try different possible keys where results might be stored
+                if "monte_carlo_results" in monte_carlo_data:
+                    monte_carlo_results = monte_carlo_data["monte_carlo_results"]
+                elif "results" in monte_carlo_data:
+                    monte_carlo_results = monte_carlo_data["results"]
+                else:
+                    # If no nested results, maybe the data is directly in monte_carlo_data
+                    # Check for expected Monte Carlo fields
+                    if any(key in monte_carlo_data for key in ['mean_return', 'probability_of_profit', 'initial_equity']):
+                        monte_carlo_results = monte_carlo_data
+            
+            logger.debug(f"Monte Carlo results found: {bool(monte_carlo_results)}")
+            
             if monte_carlo_results:
                 # Summary stats
                 f.write(f"\nNumber of Simulations: {monte_carlo_results.get('num_simulations', n_simulations)}\n")
@@ -368,6 +452,11 @@ def run_complete_workflow(
                 f.write(f"Probability of Profit: {monte_carlo_results.get('probability_of_profit', 0.0):.2%}\n")
             else:
                 f.write("Monte Carlo simulation failed or no results available\n")
+                # Log debug info about the combined_results structure
+                logger.debug(f"Monte Carlo data structure: {monte_carlo_data.keys() if isinstance(monte_carlo_data, dict) else 'Not a dict'}")
+        else:
+            # No monte carlo section found
+            logger.debug(f"Monte Carlo data missing. Available keys: {combined_results.keys()}")
         
         # Overall workflow status
         f.write("\n" + "=" * 80 + "\n")
