@@ -107,23 +107,26 @@ def run_complete_workflow(
         optimization_output_dir = os.path.join(output_dir, "1_optimization")
         if not os.path.exists(optimization_output_dir):
             os.makedirs(optimization_output_dir)
+            
+        # Prepare optimization kwargs
+        optimization_kwargs = {
+            "strategy_name": strategy_name,
+            "tickers": tickers,
+            "start_date": start_date,
+            "end_date": end_date,
+            "output_dir": optimization_output_dir,
+            "parameters": parameters,
+            "param_file": param_file,
+            "n_trials": n_trials,
+            "optimization_metric": optimization_metric,
+            "verbose": verbose,
+            "initial_capital": initial_capital,
+            "commission": commission,
+            "data_dir": data_dir,
+            "plot": plot
+        }
         
-        optimization_result = run_optimization_workflow(
-            strategy_name=strategy_name,
-            tickers=tickers,
-            start_date=start_date,
-            end_date=end_date,
-            output_dir=optimization_output_dir,
-            parameters=parameters,
-            param_file=param_file,
-            n_trials=n_trials,
-            optimization_metric=optimization_metric,
-            verbose=verbose,
-            initial_capital=initial_capital,
-            commission=commission,
-            data_dir=data_dir,
-            plot=plot  # Pass plot parameter to control whether charts are generated
-        )
+        optimization_result = run_optimization_workflow(**optimization_kwargs)
         
         if optimization_result["status"] == "success":
             # Extract best parameters for Monte Carlo
@@ -163,19 +166,22 @@ def run_complete_workflow(
         logger.warning("Optimization failed or did not produce best parameters. Using original parameters.")
         best_params = parameters
     
-    backtest_result = run_simple_workflow(
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        output_dir=backtest_output_dir,
-        parameters=best_params,
-        plot=plot,
-        verbose=verbose,
-        initial_capital=initial_capital,
-        commission=commission,
-        data_dir=data_dir
-    )
+    # Prepare backtest kwargs
+    backtest_kwargs = {
+        "strategy_name": strategy_name,
+        "tickers": tickers,
+        "start_date": start_date,
+        "end_date": end_date,
+        "output_dir": backtest_output_dir,
+        "parameters": best_params,
+        "plot": plot,
+        "verbose": verbose,
+        "initial_capital": initial_capital,
+        "commission": commission,
+        "data_dir": data_dir
+    }
+    
+    backtest_result = run_simple_workflow(**backtest_kwargs)
     
     # Step 3: Run Monte Carlo simulation
     print_section("Step 3: Monte Carlo Simulation")
@@ -184,21 +190,24 @@ def run_complete_workflow(
     if not os.path.exists(monte_carlo_output_dir):
         os.makedirs(monte_carlo_output_dir)
     
-    monte_carlo_result = run_monte_carlo_workflow(
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        output_dir=monte_carlo_output_dir,
-        parameters=best_params,
-        n_simulations=n_simulations,
-        keep_permuted_data=keep_permuted_data,
-        verbose=verbose,
-        initial_capital=initial_capital,
-        commission=commission,
-        data_dir=data_dir,
-        plot=plot  # Pass the plot flag to control whether charts are generated
-    )
+    # Prepare monte carlo kwargs
+    monte_carlo_kwargs = {
+        "strategy_name": strategy_name,
+        "tickers": tickers,
+        "start_date": start_date,
+        "end_date": end_date,
+        "output_dir": monte_carlo_output_dir,
+        "parameters": best_params,
+        "n_simulations": n_simulations,
+        "keep_permuted_data": keep_permuted_data,
+        "verbose": verbose,
+        "initial_capital": initial_capital,
+        "commission": commission,
+        "data_dir": data_dir,
+        "plot": plot
+    }
+    
+    monte_carlo_result = run_monte_carlo_workflow(**monte_carlo_kwargs)
     
     if "equity_curve" in monte_carlo_result:
         combined_results["monte_carlo"] = monte_carlo_result.get("results", {})
