@@ -108,14 +108,17 @@ def run_unified_workflow(workflow_type, **kwargs):
     # Log that we're using stock_data.csv as the default input
     logger.info("All workflows will prioritize using stock_data.csv as the data source")
     
-    # Ensure stock_data.csv exists for the given tickers and dates
+    # Check if stock_data.csv exists but do not regenerate it
     stock_csv = None
     try:
-        if tickers and start_date and end_date:
-            stock_csv = ensure_data_available(tickers, start_date, end_date, data_dir)
-            logger.info(f"Verified availability of stock data at: {stock_csv}")
+        stock_data_path = os.path.join(data_dir, "stock_data.csv")
+        if os.path.exists(stock_data_path):
+            stock_csv = stock_data_path
+            logger.info(f"Using existing stock data at: {stock_csv}")
+        else:
+            logger.warning(f"Stock data file not found at: {stock_data_path}. Please run data_setup.py first.")
     except Exception as e:
-        logger.warning(f"Could not verify or generate stock_data.csv: {e}")
+        logger.warning(f"Error accessing stock_data.csv: {e}")
     
     # Check if the workflow type should be auto-selected based on parameter file
     if workflow_type == "simple" and param_file and is_parameter_grid(param_file):

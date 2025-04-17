@@ -68,6 +68,9 @@ def parse_args():
     parser.add_argument('--keep-permuted-data', action='store_true',
                         help='Keep permuted data files after simulation')
                         
+    parser.add_argument('--enhanced-plots', action='store_true',
+                        help='Generate enhanced visualization plots')
+                        
     # Parameters for the strategy (as JSON string or file path)
     parser.add_argument('--parameters', type=str, default="{}",
                         help='JSON string or file path for strategy parameters')
@@ -121,6 +124,7 @@ def main():
         'initial_capital': args.initial_capital,
         'commission': args.commission,
         'parameters': parameters,
+        'enhanced_plots': args.enhanced_plots,
         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
@@ -140,7 +144,8 @@ def main():
         seed=args.seed,
         verbose=args.verbose,
         num_workers=args.num_workers,
-        keep_permuted_data=args.keep_permuted_data
+        keep_permuted_data=args.keep_permuted_data,
+        enhanced_plots=args.enhanced_plots
     )
     
     # Run the test

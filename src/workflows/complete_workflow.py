@@ -99,9 +99,18 @@ def run_complete_workflow(
     }
     
     try:
-        # Ensure stock_data.csv is available and contains required tickers
-        stock_csv = ensure_data_available(tickers, start_date, end_date, data_dir)
-        logger.info(f"Using stock data from: {stock_csv}")
+        # Check if stock_data.csv exists but don't regenerate it
+        stock_data_path = os.path.join(data_dir, "stock_data.csv")
+        if os.path.exists(stock_data_path):
+            stock_csv = stock_data_path
+            logger.info(f"Using existing stock data from: {stock_csv}")
+        else:
+            logger.error(f"Stock data file not found at: {stock_data_path}. Please run data_setup.py first.")
+            return {
+                "status": "error",
+                "message": f"Stock data file not found. Please run data_setup.py first.",
+                "output_dir": output_dir
+            }
         
         # Step 1: Run optimization to find the best parameters
         print_section("Step 1: Parameter Optimization")

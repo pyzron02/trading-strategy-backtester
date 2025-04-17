@@ -196,8 +196,8 @@ class MonteCarloAnalysis:
         final_equity_original = self.equity_values.iloc[-1]
         return_original = (final_equity_original / initial_equity) - 1
         
-        # Extract final equity values from all simulations
-        final_equity_values = self.simulated_paths.iloc[-1].values
+        # Extract final equity values from all simulations and convert to numpy array
+        final_equity_values = np.array(self.simulated_paths.iloc[-1].values)
         
         # Calculate returns
         returns = (final_equity_values / initial_equity) - 1
@@ -224,8 +224,9 @@ class MonteCarloAnalysis:
         var_pct = sorted_returns[var_idx]
         cvar_pct = np.mean(sorted_returns[:var_idx])
         
-        # Calculate probability of profit
-        probability_of_profit = len(returns[returns > 0]) / len(returns)
+        # Calculate probability of profit (fix multi-dimensional indexing)
+        returns_array = np.array(returns)  # Convert to numpy array before indexing
+        probability_of_profit = np.sum(returns_array > 0) / len(returns_array)
         
         # Get best and worst returns
         worst_return = np.min(returns)

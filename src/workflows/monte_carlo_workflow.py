@@ -195,9 +195,31 @@ def run_monte_carlo_workflow(
     print_parameters(parameters)
     
     try:
-        # Ensure stock_data.csv is available and contains required tickers
-        stock_csv = ensure_data_available(tickers, start_date, end_date, data_dir)
-        logger.info(f"Using stock data from: {stock_csv}")
+        # Check if stock_data.csv exists but don't regenerate it
+        stock_data_path = os.path.join(data_dir, "stock_data.csv")
+        if os.path.exists(stock_data_path):
+            stock_csv = stock_data_path
+            logger.info(f"Using existing stock data from: {stock_csv}")
+        else:
+            error_msg = f"Stock data file not found at: {stock_data_path}. Please run data_setup.py first."
+            logger.error(error_msg)
+            
+            # Log workflow failure
+            print_workflow_log(
+                workflow_name="Monte Carlo Workflow",
+                strategy_name=strategy_name,
+                tickers=tickers,
+                start_date=start_date,
+                end_date=end_date,
+                status="FAILED",
+                additional_info={"error": error_msg}
+            )
+            
+            return {
+                "status": "error",
+                "message": error_msg,
+                "output_dir": output_dir
+            }
         
         # Run backtest to get equity curve data
         print_section("Running Initial Backtest for Monte Carlo Analysis")

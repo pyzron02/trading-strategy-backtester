@@ -80,7 +80,8 @@ class TradeBasedMonteCarloTest:
         seed: int = None,
         verbose: bool = False,
         num_workers: int = None,
-        keep_permuted_data: bool = False
+        keep_permuted_data: bool = False,
+        enhanced_plots: bool = False
     ):
         """
         Initialize the Trade-Based Monte Carlo Test.
@@ -110,6 +111,7 @@ class TradeBasedMonteCarloTest:
         self.original_stock_csv = None
         self.num_workers = num_workers
         self.keep_permuted_data = keep_permuted_data
+        self.enhanced_plots = enhanced_plots
         
         # Create output directory if not provided
         if output_dir is None:
@@ -1186,8 +1188,9 @@ class TradeBasedMonteCarloTest:
             original_value = float(original_metrics.get(metric, 0))
             
             # Create histogram plot using plain matplotlib instead of seaborn
-            # This avoids the multi-dimensional indexing issue
-            n, bins, patches = plt.hist(sim_values, bins=15, alpha=0.6, density=True)
+            # Convert values to numpy array to avoid multi-dimensional indexing issue
+            sim_values_array = np.array(sim_values) if not isinstance(sim_values, np.ndarray) else sim_values
+            n, bins, patches = plt.hist(sim_values_array, bins=15, alpha=0.6, density=True)
             
             # Calculate simple statistics for better visualization
             mean_value = float(np.mean(sim_values))
@@ -1204,18 +1207,20 @@ class TradeBasedMonteCarloTest:
             plt.axvline(median_value, color='blue', linestyle='-.', linewidth=2, 
                         label=f'Median: {median_value:.4f}')
             
-            p5 = float(np.percentile(sim_values, 5))
-            p95 = float(np.percentile(sim_values, 95))
+            # Convert to numpy array to avoid multi-dimensional indexing issues
+            sim_values_array = np.array(sim_values) if not isinstance(sim_values, np.ndarray) else sim_values
+            p5 = float(np.percentile(sim_values_array, 5))
+            p95 = float(np.percentile(sim_values_array, 95))
             plt.axvline(p5, color='orange', linestyle=':', linewidth=2, 
                         label=f'5th Percentile: {p5:.4f}')
             plt.axvline(p95, color='orange', linestyle=':', linewidth=2, 
                         label=f'95th Percentile: {p95:.4f}')
             
-            # Calculate p-value
+            # Calculate p-value (use the numpy array to avoid multi-dimensional indexing)
             if metric != 'max_drawdown':
-                p_value = float(np.mean(sim_values >= original_value))
+                p_value = float(np.mean(sim_values_array >= original_value))
             else:
-                p_value = float(np.mean(sim_values <= original_value))
+                p_value = float(np.mean(sim_values_array <= original_value))
             
             # Add title and labels with enhanced statistical information
             plt.title(f'{title} Distribution - Monte Carlo Simulation\n'
@@ -1745,6 +1750,81 @@ class TradeBasedMonteCarloTest:
                 self.create_visualizations(original_metrics, simulated_metrics)
                 self.create_equity_curve_comparison()
                 self.create_permuted_price_comparison()
+                
+                # Create enhanced visualizations if enabled
+                if self.enhanced_plots:
+                    try:
+                        if self.verbose:
+                            print("Creating enhanced visualizations...")
+                        
+                        # Create the visualizations directory if it doesn't exist
+                        viz_dir = os.path.join(self.output_dir, 'visualizations')
+                        os.makedirs(viz_dir, exist_ok=True)
+                        
+                        # Import here to avoid circular imports
+                        from monte_carlo.visualizations import MonteCarloVisualizer
+                        
+                        # Add matplotlib import and configure for non-interactive backend
+                        import matplotlib
+                        matplotlib.use('Agg')
+                        
+                        # Get equity values and create simulated paths for visualizer
+                        # Extract equity curve from original backtest
+                        equity_curve_file = os.path.join(self.output_dir, "original", "equity_curve.csv")
+                        if os.path.exists(equity_curve_file):
+                            equity_data = pd.read_csv(equity_curve_file)
+                            if 'Value' in equity_data.columns:
+                                equity_values = equity_data['Value']
+                                
+                                # Create simulated paths from the Monte Carlo simulations
+                                simulated_paths = pd.DataFrame()
+                                for i, metrics in enumerate(simulated_metrics):
+                                    # Get the equity curve from simulation
+                                    sim_equity_file = os.path.join(self.output_dir, f"simulation_{i}", "equity_curve.csv")
+                                    if os.path.exists(sim_equity_file):
+                                        sim_data = pd.read_csv(sim_equity_file)
+                                        if 'Value' in sim_data.columns:
+                                            simulated_paths[f"sim_{i}"] = sim_data['Value']
+                                
+                                # Only proceed if we have equity values and simulated paths
+                                if not equity_values.empty and not simulated_paths.empty:
+                                    # Prepare simulation results for visualizer
+                                    simulation_results = {
+                                        'initial_equity': float(equity_values.iloc[0]) if len(equity_values) > 0 else self.initial_capital,
+                                        'final_equity_original': float(equity_values.iloc[-1]) if len(equity_values) > 0 else self.initial_capital,
+                                        'return_original': float((equity_values.iloc[-1] / equity_values.iloc[0]) - 1) if len(equity_values) > 0 else 0,
+                                        'mean_final_equity': np.mean([m.get('final_value', 0) for m in simulated_metrics]),
+                                        'median_final_equity': np.median([m.get('final_value', 0) for m in simulated_metrics]),
+                                        'mean_return': np.mean([m.get('total_return', 0) for m in simulated_metrics]),
+                                        'var_pct': np.percentile([m.get('total_return', 0) for m in simulated_metrics], 5),
+                                        'cvar_pct': np.mean([m.get('total_return', 0) for m in simulated_metrics if m.get('total_return', 0) <= np.percentile([m.get('total_return', 0) for m in simulated_metrics], 5)]),
+                                        'worst_return': min([m.get('total_return', 0) for m in simulated_metrics]),
+                                        'best_return': max([m.get('total_return', 0) for m in simulated_metrics]),
+                                        'probability_of_profit': np.mean([1 if m.get('total_return', 0) > 0 else 0 for m in simulated_metrics]),
+                                        'num_simulations': len(simulated_metrics)
+                                    }
+                                    
+                                    # Create visualizer
+                                    visualizer = MonteCarloVisualizer(
+                                        equity_values=equity_values,
+                                        simulated_paths=simulated_paths,
+                                        simulation_results=simulation_results,
+                                        output_dir=viz_dir,
+                                        strategy_name=self.strategy_name
+                                    )
+                                    
+                                    # Create all plots
+                                    plot_files = visualizer.create_all_plots(save=True)
+                                    
+                                    if self.verbose:
+                                        print(f"Enhanced visualization files created:")
+                                        for plot_type, file_path in plot_files.items():
+                                            if file_path:
+                                                print(f"  - {plot_type}: {os.path.basename(file_path)}")
+                    except Exception as enhanced_viz_err:
+                        print(f"Warning: Enhanced visualization creation failed: {enhanced_viz_err}")
+                        print("This does not affect the basic visualizations or analysis results.")
+                
                 if self.verbose:
                     print(f"Visualizations saved to {os.path.join(self.output_dir, 'visualizations')}")
             except Exception as viz_err:

@@ -8,11 +8,18 @@ This module provides enhanced visualization capabilities for Monte Carlo simulat
 import os
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Set non-interactive backend
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import FuncFormatter
 from typing import Dict, List, Any, Optional, Union, Tuple
-import seaborn as sns
+
+# Try to import seaborn, but continue if it's not available
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
 
 def format_currency(x, pos):
     """Format y-axis ticks as currency."""
@@ -57,7 +64,19 @@ class MonteCarloVisualizer:
         self.strategy_name = strategy_name
         
         # Set style
-        plt.style.use('seaborn-v0_8-whitegrid')
+        try:
+            # Try to set a style, but catch exceptions if styles aren't available
+            try:
+                plt.style.use('seaborn-v0_8-whitegrid')
+            except:
+                try:
+                    plt.style.use('seaborn-whitegrid')
+                except:
+                    # If all else fails, use default style
+                    pass
+        except:
+            # If plt.style is not available, continue without setting a style
+            pass
         
     def create_all_plots(self, save: bool = True) -> Dict[str, str]:
         """
@@ -148,14 +167,27 @@ class MonteCarloVisualizer:
         """
         # Calculate returns for all simulations
         initial_equity = self.simulation_results['initial_equity']
-        final_equity_values = self.simulated_paths.iloc[-1].values
+        final_equity_values = np.array(self.simulated_paths.iloc[-1].values)  # Convert to numpy array
         returns = (final_equity_values / initial_equity) - 1
         
         # Create figure
         fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Plot histogram of returns
-        sns.histplot(returns, bins=50, kde=True, ax=ax)
+        # Plot histogram of returns - avoid using seaborn due to multi-dimensional indexing issues
+        # Convert to numpy array first
+        returns_array = np.array(returns) if not isinstance(returns, np.ndarray) else returns
+        # Use matplotlib directly instead of seaborn to avoid multi-dimensional indexing issues
+        n, bins, patches = ax.hist(returns_array, bins=50, alpha=0.6, density=True)
+        
+        # Add a simple kde-like curve if we have numpy
+        try:
+            from scipy import stats
+            kde_x = np.linspace(min(returns_array), max(returns_array), 1000)
+            kde = stats.gaussian_kde(returns_array)
+            ax.plot(kde_x, kde(kde_x), 'r-')
+        except:
+            # If scipy is not available, skip the kde part
+            pass
         
         # Add vertical lines for key metrics
         original_return = self.simulation_results['return_original']
@@ -241,8 +273,21 @@ class MonteCarloVisualizer:
         # Create figure
         fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Plot histogram of max drawdowns
-        sns.histplot(all_max_drawdowns, bins=50, kde=True, ax=ax)
+        # Plot histogram of max drawdowns - avoid using seaborn due to multi-dimensional indexing issues
+        # Convert to numpy array first
+        max_drawdowns_array = np.array(all_max_drawdowns) if not isinstance(all_max_drawdowns, np.ndarray) else all_max_drawdowns
+        # Use matplotlib directly instead of seaborn to avoid multi-dimensional indexing issues
+        n, bins, patches = ax.hist(max_drawdowns_array, bins=50, alpha=0.6, density=True)
+        
+        # Add a simple kde-like curve if we have numpy
+        try:
+            from scipy import stats
+            kde_x = np.linspace(min(max_drawdowns_array), max(max_drawdowns_array), 1000)
+            kde = stats.gaussian_kde(max_drawdowns_array)
+            ax.plot(kde_x, kde(kde_x), 'r-')
+        except:
+            # If scipy is not available, skip the kde part
+            pass
         
         # Add vertical line for original max drawdown
         ax.axvline(original_max_drawdown, color='red', linestyle='--', linewidth=2, 
@@ -331,11 +376,24 @@ class MonteCarloVisualizer:
         
         # Calculate returns for all simulations
         initial_equity = self.simulation_results['initial_equity']
-        final_equity_values = self.simulated_paths.iloc[-1].values
+        final_equity_values = np.array(self.simulated_paths.iloc[-1].values)  # Convert to numpy array
         returns = (final_equity_values / initial_equity) - 1
         
-        # Plot histogram of returns
-        sns.histplot(returns, bins=30, kde=True, ax=ax2)
+        # Plot histogram of returns - avoid using seaborn due to multi-dimensional indexing issues
+        # Convert to numpy array first
+        returns_array = np.array(returns) if not isinstance(returns, np.ndarray) else returns
+        # Use matplotlib directly instead of seaborn to avoid multi-dimensional indexing issues
+        n, bins, patches = ax2.hist(returns_array, bins=30, alpha=0.6, density=True)
+        
+        # Add a simple kde-like curve if we have numpy
+        try:
+            from scipy import stats
+            kde_x = np.linspace(min(returns_array), max(returns_array), 1000)
+            kde = stats.gaussian_kde(returns_array)
+            ax2.plot(kde_x, kde(kde_x), 'r-')
+        except:
+            # If scipy is not available, skip the kde part
+            pass
         
         # Add vertical lines for key metrics
         original_return = self.simulation_results['return_original']
@@ -370,8 +428,21 @@ class MonteCarloVisualizer:
         original_drawdowns = self._calculate_drawdowns(pd.Series(self.equity_values))
         original_max_drawdown = original_drawdowns.min()
         
-        # Plot histogram of max drawdowns
-        sns.histplot(all_max_drawdowns, bins=30, kde=True, ax=ax3)
+        # Plot histogram of max drawdowns - avoid using seaborn due to multi-dimensional indexing issues
+        # Convert to numpy array first
+        max_drawdowns_array = np.array(all_max_drawdowns) if not isinstance(all_max_drawdowns, np.ndarray) else all_max_drawdowns
+        # Use matplotlib directly instead of seaborn to avoid multi-dimensional indexing issues
+        n, bins, patches = ax3.hist(max_drawdowns_array, bins=30, alpha=0.6, density=True)
+        
+        # Add a simple kde-like curve if we have numpy
+        try:
+            from scipy import stats
+            kde_x = np.linspace(min(max_drawdowns_array), max(max_drawdowns_array), 1000)
+            kde = stats.gaussian_kde(max_drawdowns_array)
+            ax3.plot(kde_x, kde(kde_x), 'r-')
+        except:
+            # If scipy is not available, skip the kde part
+            pass
         
         # Add vertical line for original max drawdown
         ax3.axvline(original_max_drawdown, color='red', linestyle='--', linewidth=2, 
@@ -411,27 +482,36 @@ class MonteCarloVisualizer:
         ]
         
         # Create a table
-        col_widths = [0.5, 0.5]  # Equal width columns
-        table_data = []
+        try:
+            col_widths = [0.5, 0.5]  # Equal width columns
+            table_data = []
+            
+            # Split stats into two columns
+            mid_point = len(stats) // 2
+            for i in range(mid_point):
+                if i < len(stats) - mid_point:
+                    table_data.append([stats[i], stats[i + mid_point]])
+                else:
+                    table_data.append([stats[i], ""])
+            
+            table = ax4.table(cellText=table_data, cellLoc='left', loc='center', 
+                            colWidths=col_widths, bbox=[0.0, 0.0, 1.0, 1.0])
+        except Exception as e:
+            # If table creation fails, add text instead
+            ax4.text(0.5, 0.5, "\n".join(stats), ha='center', va='center', fontsize=10)
         
-        # Split stats into two columns
-        mid_point = len(stats) // 2
-        for i in range(mid_point):
-            if i < len(stats) - mid_point:
-                table_data.append([stats[i], stats[i + mid_point]])
-            else:
-                table_data.append([stats[i], ""])
-        
-        table = ax4.table(cellText=table_data, cellLoc='left', loc='center', 
-                          colWidths=col_widths, bbox=[0.0, 0.0, 1.0, 1.0])
-        
-        # Style the table
-        table.auto_set_font_size(False)
-        table.set_fontsize(10)
-        for i in range(len(table_data)):
-            for j in range(len(col_widths)):
-                cell = table.get_celld()[i, j]
-                cell.set_height(0.1)
+        # Style the table (only if table creation succeeded)
+        try:
+            if 'table' in locals():
+                table.auto_set_font_size(False)
+                table.set_fontsize(10)
+                for i in range(len(table_data)):
+                    for j in range(len(col_widths)):
+                        cell = table.get_celld()[i, j]
+                        cell.set_height(0.1)
+        except Exception:
+            # Skip table styling if it fails
+            pass
                 
         # Add title for the statistics section
         ax4.text(0.5, 1.02, 'Monte Carlo Simulation Statistics', 
