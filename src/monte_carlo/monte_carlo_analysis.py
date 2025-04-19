@@ -173,25 +173,22 @@ class MonteCarloAnalysis:
     
     def _run_simulations(self, progress_file=None) -> pd.DataFrame:
         """
-        Run Monte Carlo simulations by bootstrapping returns.
+        Run Monte Carlo simulations using bootstrap of returns.
         
         Args:
-            progress_file: Optional path to a progress file for frontend updates
+            progress_file: Path to a file for tracking progress
             
         Returns:
-            DataFrame with simulated paths
+            DataFrame with simulated equity paths
         """
-        # Get the initial value
+        # Initialize containers
         initial_equity = self.equity_values.iloc[0]
-        
-        # Create an empty DataFrame to store simulated paths
-        simulated_paths = pd.DataFrame(index=range(len(self.returns) + 1))
-        
-        # Set the initial value for all simulations
-        simulated_paths.loc[0] = initial_equity
         
         # Calculate bootstrap sample size
         sample_size = int(len(self.returns) * self.bootstrap_pct)
+        
+        # Pre-allocate a list to store all paths - avoid DataFrame fragmentation
+        all_paths = []
         
         # Run simulations
         for i in range(self.num_simulations):
@@ -204,8 +201,8 @@ class MonteCarloAnalysis:
                 # Apply the return to the previous value
                 path.append(path[-1] * (1 + ret))
             
-            # Store the path
-            simulated_paths[f'sim_{i}'] = path
+            # Store the path (as a Series with appropriate index)
+            all_paths.append(pd.Series(path, name=f'sim_{i}'))
             
             # Update progress file if provided
             if progress_file and os.path.exists(progress_file) and i % max(1, self.num_simulations//20) == 0:
@@ -228,6 +225,9 @@ class MonteCarloAnalysis:
                         json.dump(progress_data, f, indent=4)
                 except Exception as e:
                     print(f"Error updating progress file: {e}")
+        
+        # Efficiently create the DataFrame at once using concat
+        simulated_paths = pd.concat(all_paths, axis=1)
         
         return simulated_paths
     
