@@ -503,6 +503,20 @@ def run_backtest(
     # Detailed trade analysis
     total_trades = trade_stats.get('total', {}).get('total', 0)
     
+    # Initialize trade statistics variables
+    won = 0
+    lost = 0
+    win_rate = 0
+    gross_won = 0
+    gross_lost = 0
+    avg_win = 0
+    avg_loss = 0
+    profit_factor = 0
+    avg_trade_pnl = 0
+    max_consecutive_wins = 0
+    max_consecutive_losses = 0
+    avg_trade_length = 0
+    
     # Also extract trades from the strategy's custom trade tracking if available
     if hasattr(strategy, 'trades') and strategy.trades:
         # Use the strategy's custom trade log if it has more information
@@ -618,6 +632,67 @@ def run_backtest(
                     avg_trade_length = trade_stats.get('len', {}).get('average', 0)
                 except (TypeError, AttributeError):
                     avg_trade_length = 0
+    else:
+        # Strategy doesn't have custom trades, use built-in analyzer
+        if total_trades > 0:
+            # Get win/loss counts
+            won = trade_stats.get('won', {}).get('total', 0)
+            lost = trade_stats.get('lost', {}).get('total', 0)
+            win_rate = won / total_trades if total_trades > 0 else 0
+            
+            # Get gross PnL for winning trades (won -> pnl -> total)
+            try:
+                gross_won = float(trade_stats.get('won', {}).get('pnl', {}).get('total', 0))
+            except (TypeError, ValueError, AttributeError):
+                gross_won = 0
+                
+            # Get gross PnL for losing trades (lost -> pnl -> total)
+            try:
+                # Lost trades PnL is negative, so we take the absolute value
+                gross_lost = abs(float(trade_stats.get('lost', {}).get('pnl', {}).get('total', 0)))
+            except (TypeError, ValueError, AttributeError):
+                gross_lost = 0
+            
+            # Get average win/loss values
+            try:
+                avg_win = float(trade_stats.get('won', {}).get('pnl', {}).get('average', 0))
+            except (TypeError, ValueError, AttributeError):
+                avg_win = 0
+                
+            try:
+                avg_loss = float(trade_stats.get('lost', {}).get('pnl', {}).get('average', 0))
+            except (TypeError, ValueError, AttributeError):
+                avg_loss = 0
+            
+            # Calculate profit factor with safety check for division by zero
+            profit_factor = gross_won / gross_lost if gross_lost > 0 else float('inf')
+            
+            # Get average trade PnL (pnl -> net -> average)
+            try:
+                avg_trade_pnl = float(trade_stats.get('pnl', {}).get('net', {}).get('average', 0))
+            except (TypeError, ValueError, AttributeError):
+                # Fallback to gross average if net is not available
+                try:
+                    avg_trade_pnl = float(trade_stats.get('pnl', {}).get('gross', {}).get('average', 0))
+                except (TypeError, ValueError, AttributeError):
+                    avg_trade_pnl = 0
+            
+            # Get max consecutive wins and losses
+            try:
+                max_consecutive_wins = trade_stats.get('streak', {}).get('won', {}).get('longest', 0)
+            except (TypeError, AttributeError):
+                max_consecutive_wins = 0
+                
+            try:
+                max_consecutive_losses = trade_stats.get('streak', {}).get('lost', {}).get('longest', 0)
+            except (TypeError, AttributeError):
+                max_consecutive_losses = 0
+            
+            # Get average trade duration
+            try:
+                avg_trade_length = trade_stats.get('len', {}).get('average', 0)
+            except (TypeError, AttributeError):
+                avg_trade_length = 0
     
     # Update metrics with trade statistics
     if total_trades > 0:
