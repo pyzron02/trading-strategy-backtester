@@ -27,12 +27,15 @@ from workflows.unified_workflow import run_unified_workflow, is_parameter_grid
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Unified workflow for trading strategy backtesting")
+
+    # Config file option
+    parser.add_argument("--config", type=str, help="Path to JSON config file for the workflow")
     
     # Common arguments
     parser.add_argument("--workflow", type=str, choices=[
         "simple", "optimization", "monte_carlo", "walkforward", "complete"
-    ], required=True, help="Type of workflow to run")
-    parser.add_argument("--strategy", type=str, required=True, help="Name of trading strategy")
+    ], help="Type of workflow to run")
+    parser.add_argument("--strategy", type=str, help="Name of trading strategy")
     parser.add_argument("--tickers", type=str, nargs='+', help="Ticker symbols (space or comma separated)")
     parser.add_argument("--start-date", type=str, default="2020-01-01", help="Start date in YYYY-MM-DD format")
     parser.add_argument("--end-date", type=str, default="2025-01-01", help="End date in YYYY-MM-DD format")
@@ -140,6 +143,46 @@ def check_workflow_param_file_compatibility(workflow_type, param_file):
 def run_cli():
     """Main function for the command-line interface."""
     args = parse_args()
+    
+    # Check if a config file is provided
+    if args.config:
+        # Import the config runner function here to avoid circular imports
+        from workflows.unified_workflow import run_unified_workflow_from_config
+        
+        # Run with config file
+        try:
+            logger.info(f"Running with config file: {args.config}")
+            result = run_unified_workflow_from_config(args.config)
+            
+            if result["status"] == "success":
+                logger.info("\n" + "=" * 80)
+                logger.info(f"Workflow completed successfully.")
+                
+                # Print summary of results from each strategy
+                for strategy_name, strategy_result in result.get("results", {}).items():
+                    status = strategy_result.get("status", "unknown")
+                    output_dir = strategy_result.get("output_dir", "N/A")
+                    logger.info(f"Strategy: {strategy_name} - Status: {status} - Output: {output_dir}")
+            else:
+                logger.error(f"\nError: {result.get('message', 'Unknown error')}")
+                sys.exit(1)
+                
+        except Exception as e:
+            logger.error(f"\nError during workflow execution with config file: {str(e)}")
+            if args.verbose:
+                logger.exception("Full traceback:")
+            sys.exit(1)
+        
+        return
+    
+    # If no config file is provided, ensure required args are present
+    if not args.workflow:
+        logger.error("Error: --workflow is required when not using a config file")
+        sys.exit(1)
+        
+    if not args.strategy:
+        logger.error("Error: --strategy is required when not using a config file")
+        sys.exit(1)
     
     # Process tickers (handles both comma and space separated formats)
     tickers = process_tickers(args.tickers)

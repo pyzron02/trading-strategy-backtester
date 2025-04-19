@@ -20,7 +20,7 @@ if project_root not in sys.path:
 # Import the utilities
 from workflows.workflow_utils import (
     print_header, print_section, time_execution,
-    logger, logging_system
+    logger, logging_system, adapt_strategy_parameters
 )
 
 # Import individual workflow modules
@@ -112,21 +112,78 @@ def run_complete_workflow(
                 "output_dir": output_dir
             }
         
+        # Find progress file if it exists in the workflow configuration
+        progress_file = None
+        workflow_config_path = os.path.join(output_dir, 'workflow_config.json')
+        if os.path.exists(workflow_config_path):
+            try:
+                with open(workflow_config_path, 'r') as f:
+                    workflow_config = json.load(f)
+                if 'frontend' in workflow_config and 'progress_file' in workflow_config['frontend']:
+                    progress_file = workflow_config['frontend']['progress_file']
+                    logger.info(f"Found progress file for frontend updates: {progress_file}")
+                    
+                    # Update initial progress
+                    if os.path.exists(progress_file):
+                        import json
+                        with open(progress_file, 'r') as f:
+                            progress_data = json.load(f)
+                        
+                        progress_data.update({
+                            'current_step': "Starting complete workflow",
+                            'progress': 5,
+                            'current_step_progress': 100,
+                            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                        
+                        with open(progress_file, 'w') as f:
+                            json.dump(progress_data, f, indent=4)
+            except Exception as e:
+                logger.warning(f"Error reading workflow config for progress updates: {e}")
+
         # Step 1: Run optimization to find the best parameters
         print_section("Step 1: Parameter Optimization")
         
+        # Update progress for optimization step
+        if progress_file and os.path.exists(progress_file):
+            try:
+                import json
+                with open(progress_file, 'r') as f:
+                    progress_data = json.load(f)
+                
+                progress_data.update({
+                    'current_step': "Step 1: Parameter Optimization",
+                    'progress': 10,
+                    'current_step_progress': 0,
+                    'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                
+                with open(progress_file, 'w') as f:
+                    json.dump(progress_data, f, indent=4)
+            except Exception as e:
+                logger.warning(f"Error updating progress file: {e}")
+                
         optimization_output_dir = os.path.join(output_dir, "1_optimization")
         if not os.path.exists(optimization_output_dir):
             os.makedirs(optimization_output_dir)
             
         # Prepare optimization kwargs
+        # Adapt strategy parameters if needed
+        adapted_parameters = adapt_strategy_parameters(strategy_name, parameters)
+        
+        # If parameters were adapted, log this
+        if adapted_parameters != parameters and adapted_parameters:
+            logger.info(f"Using adapted parameters for {strategy_name} optimization")
+            logger.debug(f"Original parameters: {parameters}")
+            logger.debug(f"Adapted parameters: {adapted_parameters}")
+        
         optimization_kwargs = {
             "strategy_name": strategy_name,
             "tickers": tickers,
             "start_date": start_date,
             "end_date": end_date,
             "output_dir": optimization_output_dir,
-            "parameters": parameters,
+            "parameters": adapted_parameters,
             "param_file": param_file,
             "n_trials": n_trials,
             "optimization_metric": optimization_metric,
@@ -162,6 +219,25 @@ def run_complete_workflow(
     # Step 2: Run backtest with optimized parameters
     print_section("Step 2: Backtesting with Optimized Parameters")
     
+    # Update progress for backtest step
+    if progress_file and os.path.exists(progress_file):
+        try:
+            import json
+            with open(progress_file, 'r') as f:
+                progress_data = json.load(f)
+            
+            progress_data.update({
+                'current_step': "Step 2: Backtesting with Optimized Parameters",
+                'progress': 40,
+                'current_step_progress': 0,
+                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+            
+            with open(progress_file, 'w') as f:
+                json.dump(progress_data, f, indent=4)
+        except Exception as e:
+            logger.warning(f"Error updating progress file: {e}")
+    
     backtest_output_dir = os.path.join(output_dir, "2_backtest")
     if not os.path.exists(backtest_output_dir):
         os.makedirs(backtest_output_dir)
@@ -177,6 +253,15 @@ def run_complete_workflow(
         logger.warning("Optimization failed or did not produce best parameters. Using original parameters.")
         best_params = parameters
     
+    # Adapt best parameters for the strategy
+    adapted_best_params = adapt_strategy_parameters(strategy_name, best_params)
+    
+    # If parameters were adapted, log this
+    if adapted_best_params != best_params and adapted_best_params:
+        logger.info(f"Using adapted optimized parameters for {strategy_name} backtest")
+        logger.debug(f"Original best parameters: {best_params}")
+        logger.debug(f"Adapted best parameters: {adapted_best_params}")
+    
     # Prepare backtest kwargs
     backtest_kwargs = {
         "strategy_name": strategy_name,
@@ -184,7 +269,7 @@ def run_complete_workflow(
         "start_date": start_date,
         "end_date": end_date,
         "output_dir": backtest_output_dir,
-        "parameters": best_params,
+        "parameters": adapted_best_params,
         "plot": plot,
         "verbose": verbose,
         "initial_capital": initial_capital,
@@ -227,9 +312,38 @@ def run_complete_workflow(
     # Step 3: Run Monte Carlo simulation
     print_section("Step 3: Monte Carlo Simulation")
     
+    # Update progress for Monte Carlo step
+    if progress_file and os.path.exists(progress_file):
+        try:
+            import json
+            with open(progress_file, 'r') as f:
+                progress_data = json.load(f)
+            
+            progress_data.update({
+                'current_step': "Step 3: Monte Carlo Simulation",
+                'progress': 60,
+                'current_step_progress': 0,
+                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+            
+            with open(progress_file, 'w') as f:
+                json.dump(progress_data, f, indent=4)
+        except Exception as e:
+            logger.warning(f"Error updating progress file: {e}")
+    
     monte_carlo_output_dir = os.path.join(output_dir, "3_monte_carlo")
     if not os.path.exists(monte_carlo_output_dir):
         os.makedirs(monte_carlo_output_dir)
+    
+    # We already adapted the best_params earlier, but to be safe
+    # ensure we have adapted parameters for the Monte Carlo step too
+    adapted_monte_carlo_params = adapt_strategy_parameters(strategy_name, best_params)
+    
+    # If parameters were adapted, log this
+    if adapted_monte_carlo_params != best_params and adapted_monte_carlo_params:
+        logger.info(f"Using adapted parameters for {strategy_name} Monte Carlo simulation")
+        logger.debug(f"Original parameters: {best_params}")
+        logger.debug(f"Adapted parameters: {adapted_monte_carlo_params}")
     
     # Prepare monte carlo kwargs
     monte_carlo_kwargs = {
@@ -238,7 +352,7 @@ def run_complete_workflow(
         "start_date": start_date,
         "end_date": end_date,
         "output_dir": monte_carlo_output_dir,
-        "parameters": best_params,
+        "parameters": adapted_monte_carlo_params,
         "n_simulations": n_simulations,
         "keep_permuted_data": keep_permuted_data,
         "verbose": verbose,
@@ -281,6 +395,25 @@ def run_complete_workflow(
         logger.warning(f"Monte Carlo failed: {monte_carlo_result.get('message', 'Unknown error')}")
         combined_results["monte_carlo"] = {"status": "error", "message": monte_carlo_result.get('message', 'Unknown error')}
         combined_results["status"] = "partial"
+    
+    # Update progress for completion
+    if progress_file and os.path.exists(progress_file):
+        try:
+            import json
+            with open(progress_file, 'r') as f:
+                progress_data = json.load(f)
+            
+            progress_data.update({
+                'current_step': "Workflow Completed - Saving Results",
+                'progress': 95,
+                'current_step_progress': 100,
+                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+            
+            with open(progress_file, 'w') as f:
+                json.dump(progress_data, f, indent=4)
+        except Exception as e:
+            logger.warning(f"Error updating progress file: {e}")
     
     # Save a comprehensive summary of all results
     summary_file = os.path.join(output_dir, "complete_workflow_summary.txt")

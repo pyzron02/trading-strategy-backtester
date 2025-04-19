@@ -325,7 +325,23 @@ class InSampleExcellence:
                     # Submit all jobs
                     future_to_idx = {executor.submit(_run_single_backtest, args): i for i, args in enumerate(args_list)}
                     
+                    # Check for a progress file for frontend updates
+                    progress_file = None
+                    if hasattr(self, 'output_dir') and self.output_dir:
+                        # Look in parent directory to find workflow_config.json which would contain progress_file
+                        workflow_config_path = os.path.join(os.path.dirname(self.output_dir), 'workflow_config.json')
+                        if os.path.exists(workflow_config_path):
+                            try:
+                                with open(workflow_config_path, 'r') as f:
+                                    workflow_config = json.load(f)
+                                if 'frontend' in workflow_config and 'progress_file' in workflow_config['frontend']:
+                                    progress_file = workflow_config['frontend']['progress_file']
+                                    print(f"Found progress file for frontend updates: {progress_file}")
+                            except Exception as e:
+                                print(f"Error reading workflow config for progress updates: {e}")
+                    
                     # Process results as they complete
+                    total_completed = 0
                     for future in as_completed(future_to_idx):
                         idx = future_to_idx[future]
                         try:
@@ -348,6 +364,28 @@ class InSampleExcellence:
                                     'max_drawdown': 0,
                                     'equity_curve': None
                                 })
+                            
+                            # Update frontend progress file if available
+                            total_completed += 1
+                            if progress_file and os.path.exists(progress_file):
+                                try:
+                                    progress_pct = int((total_completed / len(args_list)) * 100)
+                                    # Update the progress data in the file
+                                    with open(progress_file, 'r') as f:
+                                        progress_data = json.load(f)
+                                    
+                                    # Update with optimization progress (keeping existing progress for earlier steps)
+                                    progress_data.update({
+                                        'current_step': f"Optimization: Testing parameter set {total_completed}/{len(args_list)}",
+                                        'progress': max(progress_data.get('progress', 0), 10 + int(20 * total_completed / len(args_list))),
+                                        'current_step_progress': progress_pct,
+                                        'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                    })
+                                    
+                                    with open(progress_file, 'w') as f:
+                                        json.dump(progress_data, f, indent=4)
+                                except Exception as e:
+                                    print(f"Error updating progress file: {e}")
                         except Exception as e:
                             with open(self.log_file, 'a') as f:
                                 f.write(f"Error in backtest {idx}: {str(e)}\n")

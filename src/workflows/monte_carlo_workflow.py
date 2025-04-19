@@ -25,7 +25,7 @@ if project_root not in sys.path:
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     time_execution, find_strategy_param_file, logger, logging_system,
-    print_workflow_log
+    print_workflow_log, adapt_strategy_parameters
 )
 
 # Import engine components
@@ -224,10 +224,18 @@ def run_monte_carlo_workflow(
         # Run backtest to get equity curve data
         print_section("Running Initial Backtest for Monte Carlo Analysis")
         
+        # Adapt strategy parameters if needed
+        adapted_parameters = adapt_strategy_parameters(strategy_name, parameters)
+        
+        # Log the adaptation
+        if adapted_parameters != parameters:
+            logger.info(f"Using adapted parameters for {strategy_name}")
+            print_parameters(adapted_parameters)
+        
         # Run backtest
         backtest_result = run_backtest(
             strategy_name=strategy_name,
-            parameters=parameters,
+            parameters=adapted_parameters,
             tickers=tickers,
             start_date=start_date,
             end_date=end_date,
@@ -338,8 +346,21 @@ def run_monte_carlo_workflow(
                 bootstrap_pct=bootstrap_pct
             )
             
+            # Check for progress file in workflow_config.json
+            progress_file = None
+            workflow_config_path = os.path.join(os.path.dirname(output_dir), 'workflow_config.json')
+            if os.path.exists(workflow_config_path):
+                try:
+                    with open(workflow_config_path, 'r') as f:
+                        workflow_config = json.load(f)
+                    if 'frontend' in workflow_config and 'progress_file' in workflow_config['frontend']:
+                        progress_file = workflow_config['frontend']['progress_file']
+                        logger.info(f"Found progress file for frontend updates: {progress_file}")
+                except Exception as e:
+                    logger.warning(f"Error reading workflow config for progress updates: {e}")
+            
             # Run the analysis
-            mc_results = mc_analyzer.run()
+            mc_results = mc_analyzer.run(progress_file)
             
             if not mc_results:
                 error_msg = "Monte Carlo analysis failed to produce results"

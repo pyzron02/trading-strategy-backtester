@@ -134,25 +134,50 @@ class MonteCarloAnalysis:
         except Exception as e:
             raise ValueError(f"Could not preprocess equity curve: {e}")
     
-    def run(self) -> Dict[str, Any]:
+    def run(self, progress_file=None) -> Dict[str, Any]:
         """
         Run Monte Carlo simulations and analyze results.
         
+        Args:
+            progress_file: Optional path to a progress file for frontend updates
+            
         Returns:
             Dict containing simulation results
         """
         # Run simulations
-        self.simulated_paths = self._run_simulations()
+        self.simulated_paths = self._run_simulations(progress_file)
+        
+        # Update progress that we're analyzing results if progress file is provided
+        if progress_file and os.path.exists(progress_file):
+            try:
+                import json
+                with open(progress_file, 'r') as f:
+                    progress_data = json.load(f)
+                
+                progress_data.update({
+                    'current_step': "Monte Carlo: Analyzing results",
+                    'progress': 90,
+                    'current_step_progress': 100,
+                    'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                
+                with open(progress_file, 'w') as f:
+                    json.dump(progress_data, f, indent=4)
+            except Exception as e:
+                print(f"Error updating progress file: {e}")
         
         # Analyze results
         self.simulation_results = self._analyze_results()
         
         return self.simulation_results
     
-    def _run_simulations(self) -> pd.DataFrame:
+    def _run_simulations(self, progress_file=None) -> pd.DataFrame:
         """
         Run Monte Carlo simulations by bootstrapping returns.
         
+        Args:
+            progress_file: Optional path to a progress file for frontend updates
+            
         Returns:
             DataFrame with simulated paths
         """
@@ -181,6 +206,28 @@ class MonteCarloAnalysis:
             
             # Store the path
             simulated_paths[f'sim_{i}'] = path
+            
+            # Update progress file if provided
+            if progress_file and os.path.exists(progress_file) and i % max(1, self.num_simulations//20) == 0:
+                try:
+                    import json
+                    progress_pct = int((i + 1) / self.num_simulations * 100)
+                    with open(progress_file, 'r') as f:
+                        progress_data = json.load(f)
+                    
+                    # Update progress with Monte Carlo progress
+                    # We're assuming Monte Carlo is the last step (70-90% of overall progress)
+                    progress_data.update({
+                        'current_step': f"Monte Carlo: Running simulation {i+1}/{self.num_simulations}",
+                        'progress': max(progress_data.get('progress', 0), 70 + int(20 * (i+1) / self.num_simulations)),
+                        'current_step_progress': progress_pct,
+                        'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+                    
+                    with open(progress_file, 'w') as f:
+                        json.dump(progress_data, f, indent=4)
+                except Exception as e:
+                    print(f"Error updating progress file: {e}")
         
         return simulated_paths
     

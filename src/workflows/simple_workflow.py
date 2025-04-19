@@ -23,7 +23,7 @@ if project_root not in sys.path:
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
-    logger, logging_system, print_workflow_log
+    logger, logging_system, print_workflow_log, adapt_strategy_parameters
 )
 
 # Import engine components
@@ -249,6 +249,15 @@ def run_simple_workflow(
                 "output_dir": output_dir
             }
         
+        # Adapt parameters for this strategy if needed
+        adapted_parameters = adapt_strategy_parameters(strategy_name, parameters)
+        
+        # If parameters were adapted, log this
+        if adapted_parameters != parameters and adapted_parameters:
+            logger.info(f"Using adapted parameters for {strategy_name}")
+            print_section("Adapted Strategy Parameters")
+            print_parameters(adapted_parameters)
+        
         # Run backtest
         print_section("Running Backtest")
         logger.info(f"Strategy: {strategy_name}")
@@ -261,7 +270,7 @@ def run_simple_workflow(
             start_date=start_date,
             end_date=end_date,
             output_dir=output_dir,
-            parameters=parameters,
+            parameters=adapted_parameters,
             stock_csv=stock_csv,  # Pass the explicit stock_csv path
             plot=plot,
             initial_capital=initial_capital,
@@ -339,7 +348,8 @@ def run_simple_workflow(
             "start_date": start_date,
             "end_date": end_date
         },
-        "parameters": parameters,
+        "parameters": parameters,  # Original parameters
+        "adapted_parameters": adapted_parameters,  # Adapted parameters used in the backtest
         "metrics": metrics,
         "output_dir": output_dir
     }

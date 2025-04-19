@@ -2,6 +2,66 @@
 
 A robust framework for backtesting, optimizing, and evaluating trading strategies using historical market data, with a focus on Monte Carlo simulations for strategy validation.
 
+## System Architecture
+
+The trading strategy backtester is built with a modular architecture designed for flexibility, extensibility, and performance. Here's how the components work together:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CLI Interface                                   │
+│                                                                             │
+│  ┌─────────────┐        ┌─────────────┐       ┌──────────────┐             │
+│  │   Simple    │        │ Optimization │       │   Monte      │             │
+│  │  Workflow   │        │   Workflow   │       │   Carlo      │             │
+│  └─────────────┘        └─────────────┘       └──────────────┘             │
+│         │                      │                      │                     │
+│         └──────────────────────┼──────────────────────┘                     │
+│                                │                                            │
+│                   ┌────────────▼────────────┐                               │
+│                   │    Unified Workflow     │                               │
+│                   └────────────┬────────────┘                               │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                │
+┌───────────────────────────────▼─────────────────────────────────────────────┐
+│                            Core Engine                                      │
+│                                                                             │
+│  ┌────────────┐    ┌─────────────┐    ┌─────────────┐    ┌──────────────┐  │
+│  │   Data     │    │ Backtesting │    │ Performance │    │  Results     │  │
+│  │ Management ├───▶│   Engine    ├───▶│ Evaluation  ├───▶│ Management   │  │
+│  └────────────┘    └─────────────┘    └─────────────┘    └──────────────┘  │
+│                           │                                      ▲          │
+│                           ▼                                      │          │
+│                    ┌─────────────┐                      ┌────────┴─────┐   │
+│                    │  Strategy   │                      │              │   │
+│                    │  Execution  │                      │  Reporting   │   │
+│                    └─────────────┘                      │              │   │
+│                           │                             └──────────────┘   │
+└───────────────────────────┼─────────────────────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────────────────────┐
+│                        Strategy Components                                  │
+│                                                                             │
+│  ┌─────────────┐    ┌────────────┐    ┌───────────────┐    ┌──────────────┐ │
+│  │  Strategy   │    │ Built-in   │    │   Custom      │    │  Strategy    │ │
+│  │  Registry   ├───▶│ Strategies ├───▶│  Strategies   ├───▶│  Parameters  │ │
+│  └─────────────┘    └────────────┘    └───────────────┘    └──────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+1. **Input**: Historical market data → Data Management → Backtest Engine
+2. **Processing**: Strategy signals → Trade execution → Portfolio updates
+3. **Output**: Performance metrics → Results → Visualization
+
+### Components Interaction
+
+- **Workflows**: Orchestrate multiple steps and provide a high-level API
+- **Engine**: Handles core backtesting functionality
+- **Strategies**: Contain trading logic that generates signals
+- **Evaluators**: Calculate performance metrics and visualize results
+
 ## Features
 
 - **Monte Carlo Testing:** Validate strategy robustness through multiple simulations
@@ -38,15 +98,57 @@ A robust framework for backtesting, optimizing, and evaluating trading strategie
 .
 ├── src/
 │   ├── engine/             # Core backtesting engine components
+│   │   ├── run_backtest.py       # Main backtesting engine
+│   │   ├── evaluate_performance.py # Performance metric calculations
+│   │   ├── data_management.py    # Data loading and preprocessing
+│   │   ├── parameter_management.py # Strategy parameter handling
+│   │   ├── results_management.py # Output and results handling
+│   │   ├── parallel_testing.py   # Parallel execution support
+│   │   ├── smart_cache.py        # Caching system for performance
+│   │   └── logging_system.py     # Logging infrastructure
+│   │
 │   ├── data_preprocessing/ # Data preparation tools
+│   │   ├── data_setup.py         # Data acquisition and initial setup
+│   │   └── feature_engineering.py # Feature creation for strategies
+│   │
 │   ├── evaluators/         # Performance evaluation utilities
+│   │   ├── check_strategies.py   # Strategy validation
+│   │   ├── test_strategies.py    # Strategy testing
+│   │   └── generate_monte_carlo_plots.py # MC visualization
+│   │
 │   ├── monte_carlo/        # Monte Carlo simulation implementation
+│   │   ├── monte_carlo_analysis.py # Core MC analysis engine
+│   │   ├── trade_based_monte_carlo.py # Trade-based MC implementation
+│   │   ├── visualizations.py    # Enhanced visualization components
+│   │   ├── strategies.py        # MC-specific strategy handling
+│   │   └── utilities.py         # MC helper functions
+│   │
 │   ├── optimizers/         # Parameter optimization components
-│   ├── runners/            # Single-purpose script runners
+│   │   ├── run_parameter_optimization.py # Parameter optimization
+│   │   └── create_optimization_summary.py # Results documentation
+│   │
 │   ├── strategies/         # Trading strategy implementations
-│   ├── utils/              # Utility functions
+│   │   ├── strategy.py           # Base Strategy class
+│   │   ├── ma_crossover.py       # Moving Average Crossover strategy
+│   │   ├── auction_market_strategy.py # Auction Market strategy
+│   │   ├── multi_position_strategy.py # Multi-position strategy
+│   │   ├── simple_stock_strategy.py # Simple stock trading strategy
+│   │   └── registry.py          # Strategy registration system
+│   │
 │   └── workflows/          # High-level workflow orchestrators
+│       ├── simple_workflow.py    # Single backtest workflow
+│       ├── optimization_workflow.py # Parameter optimization workflow
+│       ├── monte_carlo_workflow.py # Monte Carlo simulation workflow
+│       ├── complete_workflow.py  # Combined workflow (opt + backtest + MC)
+│       ├── unified_workflow.py   # Entry point for all workflows
+│       └── cli.py               # Command line interface
+│
 ├── input/                  # Stock data input files
+│   ├── stock_data.csv          # Historical price data
+│   ├── parameters/             # Strategy parameter files
+│   ├── parameter_grids/        # Parameter optimization grid definitions
+│   └── workflow_configs/       # Workflow configuration files
+│
 ├── output/                 # Test results and visualizations
 ├── tests/                  # Automated tests
 ├── run_trade_monte_carlo.py # Monte Carlo workflow entry point
@@ -70,7 +172,41 @@ A robust framework for backtesting, optimizing, and evaluating trading strategie
    pip install -r requirements.txt
    ```
 
+3. **Set up data:**
+   ```bash
+   python src/data_preprocessing/data_setup.py --tickers AAPL,MSFT,GOOG,NVDA
+   ```
+
 ## Usage
+
+### Configuration Files
+
+The most flexible way to use the backtester is with configuration files:
+
+```bash
+python src/workflows/cli.py --config input/workflow_configs/simple_backtest_config.json
+```
+
+Or directly with the unified workflow runner:
+
+```bash
+python src/workflows/unified_workflow.py input/workflow_configs/multi_strategy_config.json
+```
+
+Example configuration files are available in the `input/workflow_configs/` directory.
+
+### CLI Interface
+
+You can also use the backtester through the CLI interface with command-line arguments:
+
+```bash
+python src/workflows/cli.py --workflow [simple|optimization|monte_carlo|complete] \
+    --strategy [StrategyName] \
+    --tickers [Ticker1,Ticker2,...] \
+    --start-date YYYY-MM-DD \
+    --end-date YYYY-MM-DD \
+    [--additional-options]
+```
 
 ### Simple Backtest
 
@@ -96,6 +232,7 @@ python run_trade_monte_carlo.py \
     --num-simulations 100 \
     --start-date 2020-01-01 \
     --end-date 2025-01-01 \
+    --enhanced-plots \
     --verbose
 ```
 
@@ -104,12 +241,28 @@ python run_trade_monte_carlo.py \
 To optimize strategy parameters:
 
 ```bash
-python src/workflows/optimization_workflow.py \
+python src/workflows/cli.py --workflow optimization \
     --strategy MACrossover \
     --tickers AAPL \
     --start-date 2020-01-01 \
     --end-date 2025-01-01 \
     --n-trials 50 \
+    --verbose
+```
+
+### Complete Workflow
+
+Run the entire workflow including optimization, backtesting, and Monte Carlo simulation:
+
+```bash
+python src/workflows/cli.py --workflow complete \
+    --strategy MACrossover \
+    --tickers AAPL \
+    --start-date 2020-01-01 \
+    --end-date 2025-01-01 \
+    --n-trials 20 \
+    --n-simulations 100 \
+    --enhanced-plots \
     --verbose
 ```
 
@@ -157,18 +310,44 @@ Example:
 
 ```python
 from strategies.strategy import Strategy
+from strategies.registry import register_strategy
 
 class MyCustomStrategy(Strategy):
     def setup(self, parameters=None):
         # Initialize parameters
         self.param1 = parameters.get('param1', default_value)
+        self.param2 = parameters.get('param2', default_value)
         
     def process_data(self, data):
         # Process market data
+        # Calculate indicators or features needed for signal generation
+        return processed_data
         
     def generate_signals(self, data):
-        # Generate buy/sell signals
+        # Generate buy/sell signals based on processed data
+        # Return a dictionary with signal information
         return signals
+
+# Register the strategy with version information
+register_strategy("MyCustomStrategy", MyCustomStrategy, "1.0.0")
+```
+
+## Parameter Optimization
+
+The system supports parameter optimization using grid search to find the optimal parameter set for a given strategy:
+
+1. Create a parameter grid file in `input/parameter_grids/` that defines the parameter space
+2. Run the optimization workflow to test different parameter combinations
+3. Analyze the results to identify the best-performing parameter set
+
+Example parameter grid file (`my_strategy_grid.json`):
+
+```json
+{
+  "param1": [10, 20, 30, 40, 50],
+  "param2": [0.01, 0.02, 0.03, 0.04, 0.05],
+  "param3": [true, false]
+}
 ```
 
 ## Performance Evaluation
@@ -181,6 +360,39 @@ The system generates comprehensive evaluation metrics and visualizations:
 - P-value calculations for strategy robustness
 - Comparison visualizations of original vs. permuted performance
 
+### Key Metrics
+
+- **Return Metrics**: Total return, annualized return, risk-adjusted return
+- **Risk Metrics**: Max drawdown, volatility, Sharpe ratio, Sortino ratio
+- **Trade Metrics**: Win rate, profit factor, average win/loss, max consecutive wins/losses
+- **Statistical Metrics**: P-values, confidence intervals, probability of profit
+
+## Advanced Features
+
+### Enhanced Visualizations
+
+The backtester includes advanced visualization capabilities that can be enabled with the `--enhanced-plots` flag:
+
+- Monte Carlo simulation paths with confidence intervals
+- Return distribution histograms with key statistics
+- Drawdown analysis visualizations
+- Comprehensive dashboard with combined metrics
+
+### Walk-Forward Testing
+
+The system supports walk-forward testing to validate strategy performance through time:
+
+```bash
+python src/workflows/cli.py --workflow walkforward \
+    --strategy MACrossover \
+    --tickers AAPL \
+    --start-date 2020-01-01 \
+    --end-date 2025-01-01 \
+    --window-size 180 \
+    --step-size 60 \
+    --verbose
+```
+
 ## Key Considerations
 
 1. **Data Quality**: Ensure your input data is clean and properly formatted
@@ -188,7 +400,16 @@ The system generates comprehensive evaluation metrics and visualizations:
 3. **Statistical Significance**: Focus on p-values to assess strategy robustness
 4. **Look-Ahead Bias**: Avoid using future data in strategy logic
 5. **Execution Costs**: Include realistic commission and slippage models in backtests
+6. **Sample Size**: Ensure sufficient data for statistically significant results
+7. **Out-of-Sample Testing**: Validate strategies on data not used during optimization
+
+## Common Troubleshooting
+
+- **Missing Data Error**: Ensure you've run `data_setup.py` first to create stock data files
+- **Parameter File Not Found**: Check that your strategy's parameter file exists in `input/parameters/`
+- **Visualization Issues**: Use the `--enhanced-plots` flag for improved visualizations
+- **Multi-dimensional Indexing Error**: May occur with some pandas/numpy operations, ensure data is converted to numpy arrays before advanced indexing
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.

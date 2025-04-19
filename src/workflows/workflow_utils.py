@@ -409,4 +409,54 @@ def progress_callback(current, total, description="Progress"):
         percentage = (current / total) * 100
         logger.info(f"{description}: {current}/{total} ({percentage:.1f}%)")
     else:
-        logger.info(f"{description}: {current}") 
+        logger.info(f"{description}: {current}")
+
+# ====== Strategy Parameter Mapping ======
+
+# Dictionary mapping strategy names to parameter adapters
+STRATEGY_PARAMETER_MAPS = {
+    'AuctionMarket': {
+        # Map workflow config parameters to strategy parameters
+        'param_preset': 'param_preset',  # Default, aggressive, conservative
+        'value_area': 'value_area',      # Value Area percentage (0.7 = 70%)
+        'use_vwap': 'use_vwap',          # Use VWAP in analysis
+        'use_volume_profile': 'use_volume_profile',  # Use volume profile
+        'position_size': 'position_size', # Default position size
+        'risk_percent': 'risk_percent',   # Risk percentage per trade
+        'use_atr_sizing': 'use_atr_sizing', # Use ATR for position sizing
+        'atr_period': 'atr_period',       # ATR calculation period
+    }
+}
+
+def adapt_strategy_parameters(strategy_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Adapt parameters based on strategy-specific requirements.
+    
+    Args:
+        strategy_name: Name of the strategy
+        parameters: Dictionary of parameters from workflow
+        
+    Returns:
+        Dictionary with adapted parameters suitable for the strategy
+    """
+    # If strategy doesn't need adaptation or isn't in our map, return as-is
+    if strategy_name not in STRATEGY_PARAMETER_MAPS or not parameters:
+        return parameters
+        
+    # Get parameter map for this strategy
+    param_map = STRATEGY_PARAMETER_MAPS[strategy_name]
+    
+    # Create new parameters dictionary with only valid parameters
+    adapted_params = {}
+    
+    # Use only parameters that are in the map
+    for config_param, strategy_param in param_map.items():
+        if config_param in parameters:
+            adapted_params[strategy_param] = parameters[config_param]
+    
+    # Log the adaptation
+    logger.info(f"Adapted parameters for {strategy_name} strategy")
+    logger.debug(f"Original parameters: {parameters}")
+    logger.debug(f"Adapted parameters: {adapted_params}")
+    
+    return adapted_params 
