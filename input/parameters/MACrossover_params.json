@@ -1,6 +1,6 @@
 {
-    "fast_period": 20,
-    "slow_period": 50,
+    "fast_period": 5,
+    "slow_period": 20,
     "position_size": 100,
     "entry_threshold": 0.01,
     "exit_threshold": 0.01

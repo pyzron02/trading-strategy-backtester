@@ -1,0 +1,23 @@
+{
+  "workflow_type": "simple",
+  "common_params": {
+    "start_date": "2020-10-02",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["SPY", "NVDA", "TSLA", "PLTR"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": false
+  },
+  "strategies": {
+    "MACrossover": {
+      "parameters": {
+        "fast_period": 10,
+        "slow_period": 50,
+        "position_size": 100,
+        "entry_threshold": 0.0,
+        "exit_threshold": 0.0
+      }
+    }
+  }
+}

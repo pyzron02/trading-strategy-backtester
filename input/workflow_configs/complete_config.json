@@ -1,0 +1,32 @@
+{
+  "workflow_type": "complete",
+  "common_params": {
+    "start_date": "2020-10-02",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["SPY", "NVDA", "TSLA", "PLTR"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": false,
+    "enhanced_plots": true,
+    "verbose": false
+  },
+  "strategies": {
+    "MACrossover": {
+      "parameter_grid": {
+        "fast_period": [5, 10, 15, 20],
+        "slow_period": [30, 50, 100, 200],
+        "position_size": [50, 100, 150],
+        "entry_threshold": [0.0, 0.01, 0.02],
+        "exit_threshold": [0.0, 0.01, 0.02]
+      },
+      "optimization": {
+        "n_trials": 50,
+        "optimization_metric": "sharpe_ratio"
+      },
+      "monte_carlo": {
+        "n_simulations": 200
+      }
+    }
+  }
+}

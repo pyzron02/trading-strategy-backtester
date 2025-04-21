@@ -1,0 +1,5 @@
+{
+    "sma_period": 20,
+    "position_size": 10,
+    "threshold_pct": 0.02
+} 

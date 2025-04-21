@@ -1,0 +1,51 @@
+{
+    "param_preset": "default",
+    "value_area": 0.7,
+    "use_vwap": true,
+    "use_volume_profile": true,
+    "position_size": 100,
+    "risk_percent": 0.01,
+    "use_atr_sizing": true,
+    "atr_period": 14,
+    "trading_hours_start": "09:30",
+    "trading_hours_end": "16:00",
+    "profile_period": "D",
+    "value_area_volume_percent": 0.70,
+    "poc_volume_threshold": 0.15,
+    "price_levels": {
+        "tick_size": 0.01,
+        "value_area_extension": 2,
+        "price_bucket_size": 0.25
+    },
+    "volume_profile": {
+        "lookback_period": 20,
+        "volume_threshold": 1000,
+        "bucket_size": 100
+    },
+    "position_size_config": {
+        "max_position": 100,
+        "initial_size": 20,
+        "scaling_size": 10
+    },
+    "risk_params": {
+        "max_loss_percent": 0.02,
+        "profit_target_ratio": 2.0,
+        "max_daily_loss": 0.05,
+        "position_heat": 0.01
+    },
+    "market_conditions": {
+        "min_daily_volume": 1000000,
+        "min_daily_range": 0.5,
+        "max_spread": 0.05
+    },
+    "auction_zones": {
+        "excess_threshold": 2.0,
+        "balance_threshold": 0.5,
+        "rotation_factor": 1.5
+    },
+    "indicators": {
+        "volume_ma_period": 20,
+        "price_ma_period": 50,
+        "volatility_period": 20
+    }
+} 

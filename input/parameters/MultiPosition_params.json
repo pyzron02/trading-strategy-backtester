@@ -1,0 +1,5 @@
+{
+    "sma_period": 20,
+    "position_size": 100,
+    "max_positions": 3
+} 
