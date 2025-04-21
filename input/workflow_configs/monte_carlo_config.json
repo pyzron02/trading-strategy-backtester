@@ -8,8 +8,7 @@
     "initial_capital": 100000.0,
     "commission": 0.001,
     "plot": false,
-    "enhanced_plots": true,
-    "standardized_output": true
+    "enhanced_plots": true
   },
   "strategies": {
     "MACrossover": {

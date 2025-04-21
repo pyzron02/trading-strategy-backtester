@@ -7,8 +7,7 @@
     "tickers": ["SPY", "NVDA", "TSLA", "PLTR"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false,
-    "standardized_output": true
+    "plot": false
   },
   "strategies": {
     "MACrossover": {

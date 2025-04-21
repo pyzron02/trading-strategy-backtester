@@ -90,7 +90,6 @@ The configuration file uses JSON format with the following structure:
 | `commission` | Commission rate | 0.001 |
 | `plot` | Generate plots | false |
 | `verbose` | Enable verbose logging | false |
-| `standardized_output` | Standardize output files (equity_curve.csv) | false |
 
 ### Workflow-Specific Parameters
 
@@ -122,3 +121,24 @@ The configuration file uses JSON format with the following structure:
 - `simple_backtest_config.json`: Basic backtest with a single strategy
 - `optimization_config.json`: Parameter optimization for multiple strategies
 - `multi_strategy_config.json`: Comprehensive analysis of multiple strategies
+
+## Standard Output Format
+
+### Equity Curve CSV Format
+
+All workflows produce a standardized `equity_curve.csv` file with the following columns:
+
+| Column | Description |
+|--------|-------------|
+| `date` | Trading date in YYYY-MM-DD format |
+| `equity` | Total equity value of the portfolio |
+| `pnl` | Daily profit and loss |
+| `cumulative_pnl` | Cumulative profit and loss from start date |
+| `returns` | Daily percentage returns |
+| `cumulative_returns` | Cumulative percentage returns from start date |
+| `drawdown` | Current drawdown as a percentage from peak |
+| `positions` | Number of open positions (if available) |
+| `cash` | Cash balance (if available) |
+| `market_value` | Market value of holdings (if available) |
+
+This standardized format is consistent across all workflow types, making it easier to compare results from different backtests.

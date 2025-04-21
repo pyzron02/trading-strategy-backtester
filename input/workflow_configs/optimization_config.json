@@ -6,8 +6,7 @@
     "data_dir": "input",
     "tickers": ["SPY", "NVDA", "TSLA", "PLTR"],
     "initial_capital": 100000.0,
-    "commission": 0.001,
-    "standardized_output": true
+    "commission": 0.001
   },
   "strategies": {
     "MultiPosition": {
