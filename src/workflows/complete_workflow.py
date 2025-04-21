@@ -148,15 +148,24 @@ def run_complete_workflow(
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Set up subdirectories for each part of the workflow
-    simple_dir = os.path.join(output_dir, "01_simple_backtest")
-    optimization_dir = os.path.join(output_dir, "02_optimization")
-    montecarlo_dir = os.path.join(output_dir, "03_monte_carlo")
+    # Set up standardized subdirectories for each part of the workflow
+    # These directory names will be used consistently throughout the workflow
+    _workflow_dirs = {
+        'simple_backtest': os.path.join(output_dir, "01_simple_backtest"),
+        'optimization': os.path.join(output_dir, "02_optimization"),
+        'monte_carlo': os.path.join(output_dir, "03_monte_carlo"),
+        'optimized_backtest': os.path.join(output_dir, "04_optimized_backtest")
+    }
     
-    # Create subdirectories
-    os.makedirs(simple_dir, exist_ok=True)
-    os.makedirs(optimization_dir, exist_ok=True)
-    os.makedirs(montecarlo_dir, exist_ok=True)
+    # Create all subdirectories
+    for dir_path in _workflow_dirs.values():
+        os.makedirs(dir_path, exist_ok=True)
+        
+    # Store in variables for easy reference
+    simple_dir = _workflow_dirs['simple_backtest']
+    optimization_dir = _workflow_dirs['optimization']
+    montecarlo_dir = _workflow_dirs['monte_carlo']
+    optimized_backtest_dir = _workflow_dirs['optimized_backtest']
     
     # Set logging level based on verbose flag
     if verbose:
@@ -216,10 +225,14 @@ def run_complete_workflow(
             except Exception as e:
                 logger.warning(f"Error reading workflow config for progress updates: {e}")
 
-        # Step 1: Run optimization to find the best parameters
-        print_section("Step 1: Parameter Optimization")
+        # Reorder workflow steps to run Simple Backtest first 
+        # Step 1: Run Simple Backtest as a baseline
+        print_section("Step 1: Simple Backtest (Baseline)")
         
-        # Update progress for optimization step
+        # Use the standardized directory for simple backtest
+        simple_output_dir = _workflow_dirs['simple_backtest']
+        
+        # Update progress for simple backtest step
         if progress_file and os.path.exists(progress_file):
             try:
                 import json
@@ -227,7 +240,7 @@ def run_complete_workflow(
                     progress_data = json.load(f)
                 
                 progress_data.update({
-                    'current_step': "Step 1: Parameter Optimization",
+                    'current_step': "Step 1: Simple Backtest (Baseline)",
                     'progress': 10,
                     'current_step_progress': 0,
                     'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -238,9 +251,82 @@ def run_complete_workflow(
             except Exception as e:
                 logger.warning(f"Error updating progress file: {e}")
                 
-        optimization_output_dir = os.path.join(output_dir, "1_optimization")
-        if not os.path.exists(optimization_output_dir):
-            os.makedirs(optimization_output_dir)
+        simple_output_dir = os.path.join(output_dir, "01_simple_backtest")
+        if not os.path.exists(simple_output_dir):
+            os.makedirs(simple_output_dir)
+        
+        # Prepare simple backtest kwargs
+        simple_backtest_kwargs = {
+            "strategy": strategy_name,
+            "tickers": tickers,
+            "start_date": start_date,
+            "end_date": end_date,
+            "output_dir": simple_output_dir,
+            "parameters": parameters,
+            "plot": plot,
+            "verbose": verbose,
+            "initial_capital": initial_capital,
+            "commission": commission,
+            "data_dir": data_dir
+        }
+        
+        simple_result = run_simple_workflow(**simple_backtest_kwargs)
+        
+        # Store simple backtest results in combined_results
+        if simple_result and simple_result.get("status") == "success":
+            # Debug the structure of simple_result
+            logger.debug(f"Simple backtest result keys: {simple_result.keys() if isinstance(simple_result, dict) else 'Not a dict'}")
+            
+            # Try to extract the metrics from the right location
+            simple_data = {}
+            
+            # First look for results key
+            if "results" in simple_result:
+                simple_data = simple_result["results"]
+                logger.debug(f"Found results key with sub-keys: {simple_data.keys() if isinstance(simple_data, dict) else 'Not a dict'}")
+            
+            # If no results found or results is empty, look for equity_curve or metrics directly
+            if not simple_data and "metrics" in simple_result:
+                simple_data = {"metrics": simple_result["metrics"]}
+                logger.debug("Found metrics directly in simple_result")
+                
+            if "equity_curve" in simple_result:
+                if not simple_data:
+                    simple_data = {}
+                simple_data["equity_curve"] = simple_result["equity_curve"]
+                logger.debug("Found equity_curve directly in simple_result")
+            
+            combined_results["simple_backtest"] = simple_data
+            logger.info("Simple backtest completed successfully")
+        else:
+            logger.warning(f"Simple backtest failed: {simple_result.get('message', 'Unknown error')}")
+            combined_results["simple_backtest"] = {"status": "error", "message": simple_result.get('message', 'Unknown error')}
+            combined_results["status"] = "partial"
+
+        # Step 2: Run optimization to find the best parameters
+        print_section("Step 2: Parameter Optimization")
+        
+        # Update progress for optimization step
+        if progress_file and os.path.exists(progress_file):
+            try:
+                import json
+                with open(progress_file, 'r') as f:
+                    progress_data = json.load(f)
+                
+                progress_data.update({
+                    'current_step': "Step 2: Parameter Optimization",
+                    'progress': 30,
+                    'current_step_progress': 0,
+                    'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                
+                with open(progress_file, 'w') as f:
+                    json.dump(progress_data, f, indent=4)
+            except Exception as e:
+                logger.warning(f"Error updating progress file: {e}")
+                
+        # Use the standardized directory path
+        optimization_output_dir = _workflow_dirs['optimization']
             
         # Prepare optimization kwargs
         # Adapt strategy parameters if needed
@@ -291,10 +377,10 @@ def run_complete_workflow(
         best_params = combined_results.get("simple_backtest", {}).get("parameters", {})
         combined_results["status"] = "partial"
     
-    # Step 2: Run backtest with optimized parameters
-    print_section("Step 2: Backtesting with Optimized Parameters")
+    # Step 3: Run optimized backtest with the best parameters from optimization
+    print_section("Step 3: Backtesting with Optimized Parameters")
     
-    # Update progress for backtest step
+    # Update progress for optimized backtest step
     if progress_file and os.path.exists(progress_file):
         try:
             import json
@@ -302,8 +388,8 @@ def run_complete_workflow(
                 progress_data = json.load(f)
             
             progress_data.update({
-                'current_step': "Step 2: Backtesting with Optimized Parameters",
-                'progress': 40,
+                'current_step': "Step 3: Backtesting with Optimized Parameters",
+                'progress': 60,
                 'current_step_progress': 0,
                 'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
@@ -313,9 +399,8 @@ def run_complete_workflow(
         except Exception as e:
             logger.warning(f"Error updating progress file: {e}")
     
-    backtest_output_dir = os.path.join(output_dir, "2_backtest")
-    if not os.path.exists(backtest_output_dir):
-        os.makedirs(backtest_output_dir)
+    # Use the standardized directory path
+    optimized_backtest_dir = _workflow_dirs['optimized_backtest']
     
     # Get the best parameters from optimization
     if (optimization_result and 
@@ -337,13 +422,13 @@ def run_complete_workflow(
         logger.debug(f"Original best parameters: {best_params}")
         logger.debug(f"Adapted best parameters: {adapted_best_params}")
     
-    # Prepare backtest kwargs
-    backtest_kwargs = {
+    # Prepare optimized backtest kwargs
+    optimized_backtest_kwargs = {
         "strategy": strategy_name,
         "tickers": tickers,
         "start_date": start_date,
         "end_date": end_date,
-        "output_dir": backtest_output_dir,
+        "output_dir": optimized_backtest_dir,
         "parameters": adapted_best_params,
         "plot": plot,
         "verbose": verbose,
@@ -352,40 +437,40 @@ def run_complete_workflow(
         "data_dir": data_dir
     }
     
-    backtest_result = run_simple_workflow(**backtest_kwargs)
+    optimized_backtest_result = run_simple_workflow(**optimized_backtest_kwargs)
     
-    # Store backtest results in combined_results
-    if backtest_result and backtest_result.get("status") == "success":
-        # Debug the structure of backtest_result
-        logger.debug(f"Backtest result keys: {backtest_result.keys() if isinstance(backtest_result, dict) else 'Not a dict'}")
+    # Store optimized backtest results in combined_results
+    if optimized_backtest_result and optimized_backtest_result.get("status") == "success":
+        # Debug the structure of optimized_backtest_result
+        logger.debug(f"Optimized backtest result keys: {optimized_backtest_result.keys() if isinstance(optimized_backtest_result, dict) else 'Not a dict'}")
         
         # Try to extract the metrics from the right location
-        backtest_data = {}
+        optimized_backtest_data = {}
         
         # First look for results key
-        if "results" in backtest_result:
-            backtest_data = backtest_result["results"]
-            logger.debug(f"Found results key with sub-keys: {backtest_data.keys() if isinstance(backtest_data, dict) else 'Not a dict'}")
+        if "results" in optimized_backtest_result:
+            optimized_backtest_data = optimized_backtest_result["results"]
+            logger.debug(f"Found results key with sub-keys: {optimized_backtest_data.keys() if isinstance(optimized_backtest_data, dict) else 'Not a dict'}")
         
         # If no results found or results is empty, look for equity_curve or metrics directly
-        if not backtest_data and "metrics" in backtest_result:
-            backtest_data = {"metrics": backtest_result["metrics"]}
-            logger.debug("Found metrics directly in backtest_result")
+        if not optimized_backtest_data and "metrics" in optimized_backtest_result:
+            optimized_backtest_data = {"metrics": optimized_backtest_result["metrics"]}
+            logger.debug("Found metrics directly in optimized_backtest_result")
             
-        if "equity_curve" in backtest_result:
-            if not backtest_data:
-                backtest_data = {}
-            backtest_data["equity_curve"] = backtest_result["equity_curve"]
-            logger.debug("Found equity_curve directly in backtest_result")
+        if "equity_curve" in optimized_backtest_result:
+            if not optimized_backtest_data:
+                optimized_backtest_data = {}
+            optimized_backtest_data["equity_curve"] = optimized_backtest_result["equity_curve"]
+            logger.debug("Found equity_curve directly in optimized_backtest_result")
         
-        combined_results["simple_backtest"] = backtest_data
-        logger.info("Simple backtest completed successfully")
+        combined_results["optimized_backtest"] = optimized_backtest_data
+        logger.info("Optimized backtest completed successfully")
     else:
-        logger.warning(f"Simple backtest failed: {backtest_result.get('message', 'Unknown error')}")
-        combined_results["simple_backtest"] = {"status": "error", "message": backtest_result.get('message', 'Unknown error')}
+        logger.warning(f"Optimized backtest failed: {optimized_backtest_result.get('message', 'Unknown error')}")
+        combined_results["optimized_backtest"] = {"status": "error", "message": optimized_backtest_result.get('message', 'Unknown error')}
     
-    # Step 3: Run Monte Carlo simulation
-    print_section("Step 3: Monte Carlo Simulation")
+    # Step 4: Run Monte Carlo simulation
+    print_section("Step 4: Monte Carlo Simulation")
     
     # Update progress for Monte Carlo step
     if progress_file and os.path.exists(progress_file):
@@ -395,8 +480,8 @@ def run_complete_workflow(
                 progress_data = json.load(f)
             
             progress_data.update({
-                'current_step': "Step 3: Monte Carlo Simulation",
-                'progress': 60,
+                'current_step': "Step 4: Monte Carlo Simulation",
+                'progress': 80,
                 'current_step_progress': 0,
                 'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
@@ -406,9 +491,8 @@ def run_complete_workflow(
         except Exception as e:
             logger.warning(f"Error updating progress file: {e}")
     
-    monte_carlo_output_dir = os.path.join(output_dir, "3_monte_carlo")
-    if not os.path.exists(monte_carlo_output_dir):
-        os.makedirs(monte_carlo_output_dir)
+    # Use the standardized directory path
+    monte_carlo_output_dir = _workflow_dirs['monte_carlo']
     
     # We already adapted the best_params earlier, but to be safe
     # ensure we have adapted parameters for the Monte Carlo step too
@@ -595,7 +679,16 @@ def run_complete_workflow(
                             f.write(f"Total Trades: {metrics.get('total_trades', 0)}\n")
                         
                         if 'max_drawdown' in metrics:
-                            f.write(f"Max Drawdown: {metrics.get('max_drawdown', 0):.2%}\n")
+                            # Use max_drawdown_pct if available, otherwise convert max_drawdown to percentage
+                            if 'max_drawdown_pct' in metrics:
+                                # Backtrader returns the drawdown as a percentage already
+                                # Just ensure it's not unrealistically high
+                                max_dd = min(metrics.get('max_drawdown_pct', 0), 100)
+                                f.write(f"Max Drawdown: {max_dd:.2f}%\n")
+                            else:
+                                # Convert from decimal to percentage display (max 100%)
+                                max_dd = min(metrics.get('max_drawdown', 0) * 100, 100)
+                                f.write(f"Max Drawdown: {max_dd:.2f}%\n")
                         
                         # Add advanced metrics if available
                         if 'annual_return' in metrics:

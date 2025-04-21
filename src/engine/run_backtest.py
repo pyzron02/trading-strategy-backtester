@@ -166,7 +166,12 @@ def run_backtest(
     initial_capital: float = 100000.0,
     commission: float = 0.001,
     data_dir: str = "input",
-    verbose: bool = False
+    verbose: bool = False,
+    slippage: float = 0.0,
+    enhanced_plots: bool = False,
+    optimize_sharpe: bool = False,
+    live_mode: bool = False,
+    additional_data: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Run a backtest for the given strategy and parameters.
@@ -184,6 +189,11 @@ def run_backtest(
         commission: Commission rate for trades
         data_dir: Directory containing input data
         verbose: Enable verbose output
+        slippage: Slippage per trade as a decimal (e.g., 0.01 for 1%)
+        enhanced_plots: Whether to generate enhanced plots
+        optimize_sharpe: Whether to optimize for Sharpe ratio
+        live_mode: Whether to run in live mode
+        additional_data: Additional data for the strategy
         
     Returns:
         Dict containing backtest results
@@ -427,7 +437,13 @@ def run_backtest(
     
     # Returns, drawdown, and Sharpe ratio
     total_return = (final_value / initial_value) - 1
-    max_drawdown = strategy.analyzers.drawdown.get_analysis().get('max', {}).get('drawdown', 0)
+    
+    # Get max drawdown from backtrader's analyzer
+    # Backtrader returns drawdown as a percentage value (e.g., 38.93 for 38.93%)
+    raw_drawdown = strategy.analyzers.drawdown.get_analysis().get('max', {}).get('drawdown', 0)
+    
+    # Convert to decimal form for consistent storage
+    max_drawdown = raw_drawdown / 100 if raw_drawdown else 0
     max_drawdown_money = strategy.analyzers.drawdown.get_analysis().get('max', {}).get('moneydown', 0)
     
     # Get sharpe ratio - properly handle the case where it's not available
@@ -444,8 +460,8 @@ def run_backtest(
         'final_value': final_value,
         'total_return': total_return,
         'total_return_pct': total_return * 100,  # Percentage format
-        'max_drawdown': max_drawdown,
-        'max_drawdown_pct': max_drawdown * 100 if max_drawdown else 0,  # Percentage format
+        'max_drawdown': max_drawdown,  # Store as decimal (e.g., 0.3893 for 38.93%)
+        'max_drawdown_pct': raw_drawdown,  # Store the original percentage (e.g., 38.93%)
         'max_drawdown_money': max_drawdown_money,
         'sharpe_ratio': sharpe_ratio
     })
@@ -797,7 +813,10 @@ def run_backtest(
         f.write(f"Maximum Drawdown: {metrics.get('max_drawdown_pct', 0):.2f}%\n")
         f.write(f"Maximum Drawdown (Money): ${metrics.get('max_drawdown_money', 0):.2f}\n")
         if metrics.get('sharpe_ratio', 0) > 0:
-            f.write(f"Calmar Ratio: {metrics.get('annual_return', 0) / (metrics.get('max_drawdown', 0.01)):.4f}\n")
+            # Use max_drawdown in decimal form (0.15 for 15%) for Calmar ratio calculation
+            # Ensure we don't divide by zero by using max(drawdown, 0.01)
+            calmar_ratio = metrics.get('annual_return', 0) / max(metrics.get('max_drawdown', 0.01), 0.01)
+            f.write(f"Calmar Ratio: {calmar_ratio:.4f}\n")
             f.write(f"Sortino Ratio: {metrics.get('sortino_ratio', 0):.4f}\n")
         f.write(f"Volatility (Annualized): {metrics.get('annualized_volatility', 0):.2%}\n\n")
         
