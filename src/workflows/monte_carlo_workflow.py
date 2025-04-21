@@ -11,6 +11,7 @@ import numpy as np
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
+import uuid
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -66,81 +67,80 @@ def calculate_trading_days(start_date_str: str, end_date_str: str) -> int:
 
 @time_execution("monte carlo workflow")
 def run_monte_carlo_workflow(
-    strategy_name: str,
-    tickers: List[str],
-    start_date: str,
-    end_date: str,
-    output_dir: str,
-    n_simulations: int = 100,
-    parameters: Optional[Dict[str, Any]] = None,
-    param_file: Optional[str] = None,
-    keep_permuted_data: bool = False,
-    verbose: bool = False,
-    initial_capital: float = 100000.0,
-    commission: float = 0.001,
-    data_dir: str = "input",
-    analyze_only: bool = False,
-    backtest_result: Optional[Dict] = None,
-    confidence_level: float = 0.95,
-    bootstrap_pct: float = 0.5,
-    random_seed: Optional[int] = None,
-    plot: bool = False,
-    enhanced_plots: bool = False
+    strategy=None,  # New parameter to support unified_workflow
+    strategy_name=None,  # Original parameter
+    tickers=None,
+    start_date=None,
+    end_date=None,
+    output_dir=None,
+    n_simulations=100,
+    parameters=None,
+    param_file=None,
+    keep_permuted_data=False,
+    verbose=False,
+    initial_capital=100000.0,
+    commission=0.001,
+    data_dir="input",
+    analyze_only=False,
+    backtest_result=None,
+    confidence_level=0.95,
+    bootstrap_pct=0.5,
+    random_seed=None,
+    plot=False,
+    enhanced_plots=False,
+    _temp_files_to_cleanup=None,
+    **kwargs
 ) -> Dict[str, Any]:
     """
-    Run a Monte Carlo workflow for the given strategy.
+    Run a Monte Carlo simulation workflow for the given strategy.
     
     Args:
-        strategy_name: Name of the strategy to run
+        strategy: Name of the strategy to use (alternative to strategy_name)
+        strategy_name: Name of the strategy to use
         tickers: List of ticker symbols
-        start_date: Start date for backtest in YYYY-MM-DD format
-        end_date: End date for backtest in YYYY-MM-DD format
-        output_dir: Directory to save results
+        start_date: Start date for backtest
+        end_date: End date for backtest
+        output_dir: Directory for output files
         n_simulations: Number of Monte Carlo simulations to run
         parameters: Dictionary of strategy parameters (overrides param_file)
         param_file: File with parameter definitions
-        keep_permuted_data: Whether to keep the permuted data files
-        verbose: Whether to print detailed output
-        plot: Whether to generate plots (default: False)
-        enhanced_plots: Whether to generate enhanced visualization with multiple plots (default: False)
+        keep_permuted_data: Whether to keep permuted data files
+        verbose: Whether to print detailed logs
         initial_capital: Initial capital for backtest
-        commission: Commission rate for trades
-        data_dir: Directory containing input data
-    
-    Returns:
-        Dict containing the workflow results
-    """
-    # Convert string dates to datetime objects for calculations
-    start_date_dt = None
-    end_date_dt = None
-    try:
-        if start_date:
-            start_date_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
-        if end_date:
-            end_date_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
-    except Exception as e:
-        logger.warning(f"Could not parse dates as datetime objects: {e}")
-    
-    # Log workflow start
-    additional_info = {
-        "n_simulations": n_simulations,
-        "output_dir": output_dir,
-        "initial_capital": initial_capital,
-        "commission": commission,
-        "data_dir": data_dir
-    }
+        commission: Commission per trade
+        data_dir: Directory with data files
+        analyze_only: Whether to only run analysis on existing backtest
+        backtest_result: Existing backtest result to analyze
+        confidence_level: Confidence level for Monte Carlo analysis
+        bootstrap_pct: Percentage of data to bootstrap
+        random_seed: Random seed for reproducibility
+        plot: Whether to plot results
+        enhanced_plots: Whether to create enhanced plots
+        _temp_files_to_cleanup: List of temporary files to clean up
+        **kwargs: Additional arguments
         
-    print_workflow_log(
-        workflow_name="Monte Carlo Workflow",
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        status="STARTED",
-        additional_info=additional_info
-    )
+    Returns:
+        Dictionary with Monte Carlo simulation results
+    """
+    # Use strategy if provided, otherwise use strategy_name
+    if strategy is not None and strategy_name is None:
+        strategy_name = strategy
+    elif strategy is None and strategy_name is None:
+        return {
+            "status": "error",
+            "message": "Either strategy or strategy_name must be provided"
+        }
     
-    print_header(f"Monte Carlo Workflow: {strategy_name}")
+    # Track temporary files if not already tracking
+    if _temp_files_to_cleanup is None:
+        _temp_files_to_cleanup = []
+    
+    # Create a unique output directory if none is provided
+    if not output_dir:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = str(uuid.uuid4())[:8]  # For uniqueness
+        output_dir = os.path.join(project_root, "output", f"{strategy_name}_monte_carlo_{timestamp}_{run_id}")
+        logger.info(f"Creating unique output directory: {output_dir}")
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -539,5 +539,13 @@ def run_monte_carlo_workflow(
         status="COMPLETED",
         additional_info=completion_info
     )
+    
+    # Clean up temporary files
+    for temp_file in _temp_files_to_cleanup:
+        try:
+            os.remove(temp_file)
+            logger.info(f"Cleaned up temporary file: {temp_file}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary file: {str(e)}")
     
     return workflow_result 

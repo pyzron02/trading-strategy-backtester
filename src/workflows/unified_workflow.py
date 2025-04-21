@@ -10,6 +10,7 @@ import json
 import datetime
 import argparse
 from typing import Dict, Any, Optional, List, Union
+import uuid
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -88,76 +89,66 @@ def cleanup_duplicate_logs(output_dir: str, strategy_name: str, workflow_type: s
 
 def run_unified_workflow(workflow_type, **kwargs):
     """
-    Run a specific workflow with the provided parameters.
+    Run a workflow based on the workflow type.
     
     Args:
-        workflow_type: Type of workflow to run (simple, optimization, monte_carlo, walkforward, complete)
-        **kwargs: Workflow-specific parameters
-        
+        workflow_type: Type of workflow to run (simple, optimization, monte_carlo, complete)
+        **kwargs: Additional arguments for the workflow
+    
     Returns:
         Dictionary with workflow results
     """
-    # Initialize parameters
-    result = None
+    # Initialize temporary files tracking
+    temp_files_to_cleanup = kwargs.pop('_temp_files_to_cleanup', [])
     
-    # Get key parameters
-    tickers = kwargs.get('tickers')
-    start_date = kwargs.get('start_date')
-    end_date = kwargs.get('end_date')
-    data_dir = kwargs.get('data_dir', 'input')
+    # Handle simple values that may have been passed as strings
+    for k, v in kwargs.items():
+        if isinstance(v, str):
+            if v.lower() == 'true':
+                kwargs[k] = True
+            elif v.lower() == 'false':
+                kwargs[k] = False
+            elif v.isdigit():
+                kwargs[k] = int(v)
+            elif v.replace('.', '', 1).isdigit() and v.count('.') < 2:
+                kwargs[k] = float(v)
+    
     param_file = kwargs.get('param_file')
+    if param_file and is_parameter_grid(param_file):
+        if workflow_type == "simple" and param_file and is_parameter_grid(param_file):
+            logger.warning(
+                f"Parameter file '{param_file}' contains grid values, which are better suited for optimization. "
+                f"Continuing, but only the first value in each grid will be used."
+            )
     
-    # Log that we're using stock_data.csv as the default input
-    logger.info("All workflows will prioritize using stock_data.csv as the data source")
+    # Check if this is a nested workflow call from a complete workflow
+    is_nested = kwargs.pop('_is_nested_workflow', False)
+    # Log nested status for debugging
+    logger.debug(f"Running {workflow_type} workflow, nested={is_nested}")
     
-    # Check if stock_data.csv exists but do not regenerate it
-    stock_csv = None
     try:
-        stock_data_path = os.path.join(data_dir, "stock_data.csv")
-        if os.path.exists(stock_data_path):
-            stock_csv = stock_data_path
-            logger.info(f"Using existing stock data at: {stock_csv}")
+        if workflow_type == "simple":
+            from workflows.simple_workflow import run_simple_workflow
+            return run_simple_workflow(**kwargs)
+        elif workflow_type == "optimization":
+            from workflows.optimization_workflow import run_optimization_workflow
+            return run_optimization_workflow(**kwargs)
+        elif workflow_type == "monte_carlo":
+            from workflows.monte_carlo_workflow import run_monte_carlo_workflow
+            return run_monte_carlo_workflow(**kwargs)
+        elif workflow_type == "complete":
+            from workflows.complete_workflow import run_complete_workflow
+            return run_complete_workflow(**kwargs)
+        elif workflow_type == "walkforward":
+            from workflows.walkforward_workflow import run_walkforward_workflow
+            return run_walkforward_workflow(**kwargs)
         else:
-            logger.warning(f"Stock data file not found at: {stock_data_path}. Please run data_setup.py first.")
+            logger.error(f"Unknown workflow type: {workflow_type}")
+            return {"status": "error", "message": f"Unknown workflow type: {workflow_type}"}
     except Exception as e:
-        logger.warning(f"Error accessing stock_data.csv: {e}")
-    
-    # Check if the workflow type should be auto-selected based on parameter file
-    if workflow_type == "simple" and param_file and is_parameter_grid(param_file):
-        logger.warning(
-            f"Parameter file '{param_file}' contains grid values, which are better suited for optimization. "
-            f"The simple workflow will use only the first value from each parameter grid."
-        )
-    
-    # Create a copy of kwargs to avoid modifying the original
-    workflow_kwargs = kwargs.copy()
-    
-    # Remove stock_csv from kwargs to avoid errors with functions that don't accept it
-    if 'stock_csv' in workflow_kwargs:
-        del workflow_kwargs['stock_csv']
-    
-    # Run the selected workflow
-    if workflow_type == "simple":
-        result = run_simple_workflow(**workflow_kwargs)
-    elif workflow_type == "optimization":
-        result = run_optimization_workflow(**workflow_kwargs)
-    elif workflow_type == "monte_carlo":
-        result = run_monte_carlo_workflow(**workflow_kwargs)
-    elif workflow_type == "walkforward":
-        result = run_walkforward_workflow(**workflow_kwargs)
-    elif workflow_type == "complete":
-        result = run_complete_workflow(**workflow_kwargs)
-    else:
-        logger.error(f"Unknown workflow type: {workflow_type}")
-        result = {"status": "error", "message": f"Unknown workflow type: {workflow_type}"}
-    
-    # Clean up duplicate log files
-    output_dir = kwargs.get('output_dir')
-    strategy_name = kwargs.get('strategy_name')
-    if output_dir and strategy_name and result and result.get('status') == 'success':
-        cleanup_duplicate_logs(output_dir, strategy_name, workflow_type)
-    
-    return result
+        logger.error(f"Error in {workflow_type} workflow: {str(e)}")
+        logger.exception(e)
+        return {"status": "error", "message": f"Error in {workflow_type} workflow: {str(e)}"}
 
 def load_config_file(config_file_path: str) -> Dict[str, Any]:
     """
@@ -185,47 +176,47 @@ def load_config_file(config_file_path: str) -> Dict[str, Any]:
 
 def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """
-    Process configuration dictionary to extract workflow parameters.
+    Process the configuration to extract workflow parameters.
     
     Args:
-        config: Configuration dictionary
+        config: Dictionary with the configuration
         
     Returns:
-        Dictionary with processed workflow parameters
+        Dictionary with workflow parameters for each strategy
     """
-    if not config:
+    if not config or 'strategies' not in config:
+        logger.error("Invalid config: 'strategies' section not found")
         return {}
+    
+    workflow_type = config.get('workflow_type', 'simple')
+    common_params = config.get('common_params', {})
+    
+    # Base output directory - will be used as parent for strategy-specific dirs
+    base_output_dir = common_params.get('output_dir')
+    if not base_output_dir:
+        base_output_dir = os.path.join(project_root, "output")
+        os.makedirs(base_output_dir, exist_ok=True)
+    
+    # Initialize temporary files list to track files that need cleanup
+    temp_files_to_cleanup = []
     
     workflow_params = {}
     
-    # Get workflow type
-    workflow_type = config.get('workflow_type', 'simple')
-    
-    # Get common parameters
-    common_params = config.get('common_params', {})
-    
-    # Get strategy-specific parameters
-    strategies = config.get('strategies', {})
-    
-    # For each strategy in the config
-    for strategy_name, strategy_config in strategies.items():
-        # Create a new set of parameters for this strategy
+    for strategy_name, strategy_config in config['strategies'].items():
         params = common_params.copy()
+        params['strategy'] = strategy_name
         
-        # Update with strategy-specific parameters
-        params.update({
-            'strategy_name': strategy_name
-        })
+        # Create a unique output directory for each strategy
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = str(uuid.uuid4())[:8]  # First 8 chars of a UUID for uniqueness
         
-        # Set output directory if not specified
-        if 'output_dir' not in params:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_dir = os.path.join(project_root, "output", f"{strategy_name}_{workflow_type}_{timestamp}")
-            params['output_dir'] = output_dir
-            logger.info(f"No output directory specified. Using: {output_dir}")
+        # Create strategy-specific output directory under the base output dir
+        strategy_output_dir = os.path.join(base_output_dir, f"{strategy_name}_{workflow_type}_{timestamp}_{run_id}")
+        params['output_dir'] = strategy_output_dir
         
         # Ensure the output directory exists
-        os.makedirs(params['output_dir'], exist_ok=True)
+        os.makedirs(strategy_output_dir, exist_ok=True)
+        logger.info(f"Created output directory for {strategy_name}: {strategy_output_dir}")
         
         # Handle strategy parameter file
         param_file = strategy_config.get('param_file')
@@ -240,6 +231,8 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 with open(param_file, 'w') as f:
                     json.dump(strategy_config['parameters'], f, indent=2)
                 logger.info(f"Created temporary parameter file: {param_file}")
+                # Track temporary file for cleanup
+                temp_files_to_cleanup.append(param_file)
             except Exception as e:
                 logger.error(f"Error creating parameter file: {str(e)}")
                 param_file = None
@@ -260,6 +253,8 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                 with open(grid_file, 'w') as f:
                     json.dump(strategy_config['parameter_grid'], f, indent=2)
                 logger.info(f"Created temporary grid file: {grid_file}")
+                # Track temporary file for cleanup
+                temp_files_to_cleanup.append(grid_file)
                 
                 # For optimization workflows, use the grid file as the param file
                 if workflow_type in ['optimization', 'complete', 'walkforward']:
@@ -271,6 +266,14 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         if workflow_type in strategy_config:
             params.update(strategy_config[workflow_type])
             
+        # For complete workflow, pass monte_carlo config if available
+        if workflow_type == 'complete' and 'monte_carlo' in strategy_config:
+            params['monte_carlo_config'] = strategy_config['monte_carlo']
+            logger.info(f"Passing Monte Carlo configuration to complete workflow: {strategy_config['monte_carlo']}")
+        
+        # Add temp files list to parameters for cleanup
+        params['_temp_files_to_cleanup'] = temp_files_to_cleanup
+        
         # Store the parameters for this strategy
         workflow_params[strategy_name] = {
             'workflow_type': workflow_type,
@@ -314,6 +317,25 @@ def update_progress_file(progress_file: str, progress: int, status: str = None, 
     except Exception as e:
         logger.error(f"Error updating progress file: {e}")
 
+def cleanup_temporary_files(temp_files):
+    """
+    Clean up temporary parameter files and grid files created during workflow execution.
+    
+    Args:
+        temp_files: List of temporary file paths to delete
+    """
+    if not temp_files:
+        return
+    
+    logger.info(f"Cleaning up {len(temp_files)} temporary parameter/grid files")
+    for file_path in temp_files:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.debug(f"Deleted temporary file: {file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
+
 def run_unified_workflow_from_config(config_file: str) -> Dict[str, Any]:
     """
     Run unified workflow using parameters from a config file.
@@ -342,11 +364,19 @@ def run_unified_workflow_from_config(config_file: str) -> Dict[str, Any]:
     total_strategies = len(workflow_params)
     current_strategy = 0
     
+    # Keep track of all temporary files
+    all_temp_files = []
+    
     # Run workflows for each strategy
     for strategy_name, workflow_config in workflow_params.items():
         current_strategy += 1
         workflow_type = workflow_config['workflow_type']
         params = workflow_config['params']
+        
+        # Extract temp files from params for cleanup
+        temp_files = params.get('_temp_files_to_cleanup', [])
+        if temp_files:
+            all_temp_files.extend(temp_files)
         
         # Update progress with strategy info
         if progress_file:
@@ -376,6 +406,9 @@ def run_unified_workflow_from_config(config_file: str) -> Dict[str, Any]:
     # Final progress update
     if progress_file:
         update_progress_file(progress_file, 95, "Finalizing", "Generating final results")
+    
+    # Clean up temporary parameter files
+    cleanup_temporary_files(all_temp_files)
     
     # Return combined results
     return {

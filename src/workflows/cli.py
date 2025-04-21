@@ -8,6 +8,7 @@ import sys
 import json
 import argparse
 from datetime import datetime
+import uuid
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -190,9 +191,11 @@ def run_cli():
     # Set output directory if not specified
     output_dir = args.output_dir
     if output_dir is None:
+        # Always create a unique output directory with timestamp and unique identifier
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join(project_root, "output", f"{args.strategy}_{args.workflow}_{timestamp}")
-        logger.info(f"No output directory specified. Using: {output_dir}")
+        run_id = str(uuid.uuid4())[:8]  # First 8 chars of a UUID for uniqueness
+        output_dir = os.path.join(project_root, "output", f"{args.strategy}_{args.workflow}_{timestamp}_{run_id}")
+        logger.info(f"Using output directory: {output_dir}")
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)

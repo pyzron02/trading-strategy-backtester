@@ -9,6 +9,8 @@ import json
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Optional, Union
+import datetime
+import uuid
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,7 +25,8 @@ if project_root not in sys.path:
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
-    logger, logging_system, print_workflow_log, adapt_strategy_parameters
+    logger, logging_system, print_workflow_log, adapt_strategy_parameters,
+    setup_output_dir_logging, remove_output_dir_logging
 )
 
 # Import engine components
@@ -106,23 +109,35 @@ def ensure_data_available(tickers: List[str], start_date: str, end_date: str, da
 
 @time_execution("simple workflow")
 def run_simple_workflow(
-    strategy_name: str,
-    tickers: List[str],
-    start_date: str,
-    end_date: str,
-    output_dir: str,
-    parameters: Optional[Dict[str, Any]] = None,
-    param_file: Optional[str] = None,
-    plot: bool = True,
-    verbose: bool = False,
-    initial_capital: float = 100000.0,
-    commission: float = 0.001,
-    data_dir: str = "input"
+    strategy=None,  # New parameter to support unified_workflow
+    strategy_name=None,  # Original parameter
+    tickers=None,
+    start_date=None,
+    end_date=None,
+    output_dir=None,
+    parameters=None,
+    param_file=None,
+    plot=True,
+    verbose=False,
+    initial_capital=100000.0,
+    commission=0.001,
+    data_dir="input",
+    slippage=0.0,
+    enhanced_plots=False,
+    optimize_sharpe=False,
+    live_mode=False,
+    additional_data=None,
+    progress_callback=None,
+    progress_file=None,
+    stock_csv=None,
+    _temp_files_to_cleanup=None,
+    **kwargs
 ) -> Dict[str, Any]:
     """
-    Run a simple workflow for the given strategy.
+    Run a simple backtest for a single strategy with fixed parameters.
     
     Args:
+        strategy: Name of the strategy to run (alternative to strategy_name)
         strategy_name: Name of the strategy to run
         tickers: List of ticker symbols
         start_date: Start date for backtest in YYYY-MM-DD format
@@ -135,92 +150,136 @@ def run_simple_workflow(
         initial_capital: Initial capital for backtest
         commission: Commission rate for trades
         data_dir: Directory containing input data
+        slippage: Slippage per trade
+        enhanced_plots: Whether to create enhanced plots
+        optimize_sharpe: Whether to optimize for Sharpe ratio
+        live_mode: Whether to run in live mode
+        additional_data: Additional data for the strategy
+        progress_callback: Callback for progress updates
+        progress_file: File to write progress updates
+        stock_csv: CSV file with stock data
+        _temp_files_to_cleanup: List of temporary files to clean up
+        **kwargs: Additional arguments
     
     Returns:
         Dict containing the workflow results
     """
-    # Log workflow start
-    additional_info = {
-        "output_dir": output_dir,
-        "plot": plot,
-        "initial_capital": initial_capital,
-        "commission": commission,
-        "data_dir": data_dir
-    }
-    if param_file:
-        additional_info["param_file"] = param_file
-        
-    print_workflow_log(
-        workflow_name="Simple Workflow",
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        status="STARTED",
-        additional_info=additional_info
-    )
+    # Use strategy if provided, otherwise use strategy_name
+    if strategy is not None and strategy_name is None:
+        strategy_name = strategy
+    elif strategy is None and strategy_name is None:
+        return {
+            "status": "error",
+            "message": "Either strategy or strategy_name must be provided"
+        }
     
-    print_header(f"Simple Workflow: {strategy_name}")
+    # Track new temporary files if not already tracking
+    if _temp_files_to_cleanup is None:
+        _temp_files_to_cleanup = []
+    
+    # Create a unique output directory if none is provided
+    if not output_dir:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = str(uuid.uuid4())[:8]  # For uniqueness
+        output_dir = os.path.join(project_root, "output", f"{strategy_name}_simple_{timestamp}_{run_id}")
+        logger.info(f"Creating unique output directory: {output_dir}")
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Set logging level based on verbose flag
-    if verbose:
-        logging_system.set_level('DEBUG', 'workflows')
+    # Setup logging for this run
+    setup_output_dir_logging(output_dir, strategy_name, "simple")
     
-    # If parameters not provided, load from file
-    if not parameters:
+    # Log the start of the workflow
+    print_header("SIMPLE WORKFLOW")
+    print_workflow_log("Simple", strategy_name, tickers, start_date, end_date)
+    
+    # Add parameters to additional info if provided
+    additional_info = {}
+    if param_file:
+        additional_info["param_file"] = param_file
+    if parameters:
+        additional_info["parameters"] = parameters
+    
+    # Create progress tracking file if specified
+    if progress_file:
+        # Initialize progress tracking
+        with open(progress_file, 'w') as f:
+            json.dump({
+                "progress": 0,
+                "status": "Starting",
+                "current_step": "Initializing",
+                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, f, indent=4)
+    
+    if not param_file:
+        param_file = find_strategy_param_file(strategy_name)
         if not param_file:
-            param_file = find_strategy_param_file(strategy_name)
-            if not param_file:
-                error_msg = f"No parameter file found for strategy: {strategy_name}"
-                logger.error(error_msg)
+            # Check if we have parameters directly specified
+            if parameters:
+                # Create a temporary parameter file
+                temp_param_file = os.path.join(project_root, "input", "parameters", 
+                                             f"{strategy_name.lower()}_params_temp.json")
                 
-                # Log workflow failure
-                print_workflow_log(
-                    workflow_name="Simple Workflow",
-                    strategy_name=strategy_name,
-                    tickers=tickers,
-                    start_date=start_date,
-                    end_date=end_date,
-                    status="FAILED",
-                    additional_info={"error": error_msg}
-                )
-                
-                return {"status": "error", "message": error_msg}
-        
+                try:
+                    with open(temp_param_file, 'w') as f:
+                        json.dump(parameters, f, indent=4)
+                    logger.info(f"Created temporary parameter file from provided parameters: {temp_param_file}")
+                    param_file = temp_param_file
+                    # Track for cleanup
+                    _temp_files_to_cleanup.append(temp_param_file)
+                except Exception as e:
+                    logger.error(f"Error creating temporary parameter file: {str(e)}")
+            else:
+                logger.warning(f"No parameter file found for strategy {strategy_name}. Using default parameters.")
+        else:
+            logger.info(f"Found parameter file: {param_file}")
+    
+    # Update progress if callback or file is provided
+    if progress_callback:
+        progress_callback(10, 100, "Loading data")
+    
+    if progress_file:
+        with open(progress_file, 'w') as f:
+            json.dump({
+                "progress": 10,
+                "status": "Loading data",
+                "current_step": "Data preparation",
+                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, f, indent=4)
+    
+    # Load parameters from file if available
+    strategy_params = {}
+    if param_file:
         try:
             with open(param_file, 'r') as f:
-                parameters = json.load(f)
+                strategy_params = json.load(f)
+            logger.info(f"Loaded parameters from {param_file}")
+            logger.debug(f"Parameters: {strategy_params}")
         except Exception as e:
-            error_msg = f"Error loading parameter file: {str(e)}"
-            logger.error(error_msg)
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Simple Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": error_msg}
-            )
-            
-            return {"status": "error", "message": error_msg}
+            logger.error(f"Error loading parameters from {param_file}: {str(e)}")
+            return {"status": "error", "message": f"Error loading parameters: {str(e)}"}
+    
+    # Override with any directly provided parameters
+    if parameters:
+        # Only use valid parameters according to strategy adapter
+        param_manager = ParameterManager()
+        adapted_params = param_manager.adapt_strategy_parameters(strategy_name, parameters)
+        strategy_params.update(adapted_params)
+        logger.info("Updated parameters with provided values")
+        logger.debug(f"Updated parameters: {strategy_params}")
     
     # Check for parameter grids and convert to single values if needed
-    has_grid = any(isinstance(v, list) for v in parameters.values())
+    has_grid = any(isinstance(v, list) for v in strategy_params.values())
     if has_grid:
         logger.info("Parameter grid detected in simple workflow. Converting to single values.")
-        original_params = parameters.copy()
-        parameters = convert_grid_to_single_values(parameters)
+        original_params = strategy_params.copy()
+        strategy_params = convert_grid_to_single_values(strategy_params)
         logger.info("Converted parameters from grid to single values.")
     
     # Print parameters
     print_section("Strategy Parameters")
-    print_parameters(parameters)
+    print_parameters(strategy_params)
     
     try:
         # Check if stock_data.csv exists but don't regenerate it
@@ -249,15 +308,6 @@ def run_simple_workflow(
                 "output_dir": output_dir
             }
         
-        # Adapt parameters for this strategy if needed
-        adapted_parameters = adapt_strategy_parameters(strategy_name, parameters)
-        
-        # If parameters were adapted, log this
-        if adapted_parameters != parameters and adapted_parameters:
-            logger.info(f"Using adapted parameters for {strategy_name}")
-            print_section("Adapted Strategy Parameters")
-            print_parameters(adapted_parameters)
-        
         # Run backtest
         print_section("Running Backtest")
         logger.info(f"Strategy: {strategy_name}")
@@ -270,13 +320,18 @@ def run_simple_workflow(
             start_date=start_date,
             end_date=end_date,
             output_dir=output_dir,
-            parameters=adapted_parameters,
+            parameters=strategy_params,
             stock_csv=stock_csv,  # Pass the explicit stock_csv path
             plot=plot,
             initial_capital=initial_capital,
             commission=commission,
             data_dir=data_dir,
-            verbose=verbose
+            verbose=verbose,
+            slippage=slippage,
+            enhanced_plots=enhanced_plots,
+            optimize_sharpe=optimize_sharpe,
+            live_mode=live_mode,
+            additional_data=additional_data
         )
         
         if not backtest_result:
@@ -348,8 +403,7 @@ def run_simple_workflow(
             "start_date": start_date,
             "end_date": end_date
         },
-        "parameters": parameters,  # Original parameters
-        "adapted_parameters": adapted_parameters,  # Adapted parameters used in the backtest
+        "parameters": strategy_params,  # Original parameters
         "metrics": metrics,
         "output_dir": output_dir
     }
@@ -369,5 +423,13 @@ def run_simple_workflow(
         status="COMPLETED",
         additional_info=completion_info
     )
+    
+    # Clean up temporary files
+    for temp_file in _temp_files_to_cleanup:
+        try:
+            os.remove(temp_file)
+            logger.info(f"Cleaned up temporary file: {temp_file}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary file: {str(e)}")
     
     return workflow_result 

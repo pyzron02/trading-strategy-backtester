@@ -6,6 +6,9 @@ Complete workflow module that combines multiple workflow types.
 import os
 import sys
 import json
+import datetime
+import uuid
+import time
 from typing import Dict, List, Any, Optional
 
 # Add the parent directory to the path
@@ -20,7 +23,8 @@ if project_root not in sys.path:
 # Import the utilities
 from workflows.workflow_utils import (
     print_header, print_section, time_execution,
-    logger, logging_system, adapt_strategy_parameters
+    logger, logging_system, adapt_strategy_parameters,
+    setup_output_dir_logging, print_workflow_log
 )
 
 # Import individual workflow modules
@@ -30,28 +34,32 @@ from workflows.monte_carlo_workflow import run_monte_carlo_workflow
 
 @time_execution("complete workflow")
 def run_complete_workflow(
-    strategy_name: str,
-    tickers: List[str],
-    start_date: str,
-    end_date: str,
-    output_dir: str,
-    parameters: Optional[Dict[str, Any]] = None,
-    param_file: Optional[str] = None,
-    plot: bool = True,
-    n_trials: int = 50,
-    n_simulations: int = 100,
-    optimization_metric: str = "sharpe_ratio",
-    keep_permuted_data: bool = False,
-    verbose: bool = False,
-    initial_capital: float = 100000.0,
-    commission: float = 0.001,
-    data_dir: str = "input",
-    enhanced_plots: bool = False
+    strategy=None,  # New parameter to support unified_workflow
+    strategy_name=None,  # Original parameter
+    tickers=None,
+    start_date=None,
+    end_date=None,
+    output_dir=None,
+    parameters=None,
+    param_file=None,
+    plot=True,
+    n_trials=50,
+    n_simulations=100,
+    optimization_metric="sharpe_ratio",
+    keep_permuted_data=False,
+    verbose=False,
+    initial_capital=100000.0,
+    commission=0.001,
+    data_dir="input",
+    enhanced_plots=False,
+    _temp_files_to_cleanup=None,
+    **kwargs
 ) -> Dict[str, Any]:
     """
     Run a complete workflow including backtest, optimization, and Monte Carlo simulation.
     
     Args:
+        strategy: Name of the strategy to run (alternative to strategy_name)
         strategy_name: Name of the strategy to run
         tickers: List of ticker symbols
         start_date: Start date for backtest in YYYY-MM-DD format
@@ -69,12 +77,74 @@ def run_complete_workflow(
         commission: Commission rate for trades
         data_dir: Directory containing input data
         enhanced_plots: Whether to generate enhanced visualization dashboard for Monte Carlo
+        _temp_files_to_cleanup: List of temporary files to clean up
+        **kwargs: Additional arguments
     
     Returns:
         Dict containing the results from all workflow steps
     """
-    print_header(f"Complete Workflow: {strategy_name}")
+    # Use strategy if provided, otherwise use strategy_name
+    if strategy is not None and strategy_name is None:
+        strategy_name = strategy
+    elif strategy is None and strategy_name is None:
+        return {
+            "status": "error",
+            "message": "Either strategy or strategy_name must be provided"
+        }
     
+    # Track temporary files if not already tracking
+    if _temp_files_to_cleanup is None:
+        _temp_files_to_cleanup = []
+    
+    # Create a unique output directory for this run
+    if not output_dir:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = str(uuid.uuid4())[:8]  # For uniqueness
+        output_dir = os.path.join(project_root, "output", f"{strategy_name}_complete_{timestamp}_{run_id}")
+        logger.info(f"Creating unique output directory: {output_dir}")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Setup logging for this run
+    setup_output_dir_logging(output_dir, strategy_name, "complete")
+    
+    # Log the start of the workflow
+    print_header("COMPLETE WORKFLOW")
+    print_workflow_log("Complete", strategy_name, tickers, start_date, end_date, 
+                      additional_info={"output_dir": output_dir})
+    
+    logger.info(f"Complete workflow started for strategy: {strategy_name}")
+    logger.info(f"Output directory: {output_dir}")
+    
+    # Set up progress file if provided
+    progress_file = None
+    if kwargs.get('progress_file'):
+        progress_file = kwargs['progress_file']
+        with open(progress_file, 'w') as f:
+            json.dump({
+                "progress": 0,
+                "status": "Starting complete workflow",
+                "current_step": "Initializing",
+                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, f, indent=4)
+
+    # Create parameter file from parameters if provided
+    if parameters and not param_file:
+        # Create a temporary parameter file
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        param_dir = os.path.join(project_root, "input", "parameters")
+        os.makedirs(param_dir, exist_ok=True)
+        param_file = os.path.join(param_dir, f"{strategy_name.lower()}_params_{timestamp}.json")
+        
+        try:
+            with open(param_file, 'w') as f:
+                json.dump(parameters, f, indent=2)
+            logger.info(f"Created temporary parameter file from provided parameters: {param_file}")
+            # Track for cleanup
+            _temp_files_to_cleanup.append(param_file)
+        except Exception as e:
+            logger.error(f"Error creating temporary parameter file: {str(e)}")
+
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
@@ -82,6 +152,11 @@ def run_complete_workflow(
     simple_dir = os.path.join(output_dir, "01_simple_backtest")
     optimization_dir = os.path.join(output_dir, "02_optimization")
     montecarlo_dir = os.path.join(output_dir, "03_monte_carlo")
+    
+    # Create subdirectories
+    os.makedirs(simple_dir, exist_ok=True)
+    os.makedirs(optimization_dir, exist_ok=True)
+    os.makedirs(montecarlo_dir, exist_ok=True)
     
     # Set logging level based on verbose flag
     if verbose:
@@ -133,7 +208,7 @@ def run_complete_workflow(
                             'current_step': "Starting complete workflow",
                             'progress': 5,
                             'current_step_progress': 100,
-                            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         })
                         
                         with open(progress_file, 'w') as f:
@@ -155,7 +230,7 @@ def run_complete_workflow(
                     'current_step': "Step 1: Parameter Optimization",
                     'progress': 10,
                     'current_step_progress': 0,
-                    'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 })
                 
                 with open(progress_file, 'w') as f:
@@ -178,7 +253,7 @@ def run_complete_workflow(
             logger.debug(f"Adapted parameters: {adapted_parameters}")
         
         optimization_kwargs = {
-            "strategy_name": strategy_name,
+            "strategy": strategy_name,
             "tickers": tickers,
             "start_date": start_date,
             "end_date": end_date,
@@ -230,7 +305,7 @@ def run_complete_workflow(
                 'current_step': "Step 2: Backtesting with Optimized Parameters",
                 'progress': 40,
                 'current_step_progress': 0,
-                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
             
             with open(progress_file, 'w') as f:
@@ -264,7 +339,7 @@ def run_complete_workflow(
     
     # Prepare backtest kwargs
     backtest_kwargs = {
-        "strategy_name": strategy_name,
+        "strategy": strategy_name,
         "tickers": tickers,
         "start_date": start_date,
         "end_date": end_date,
@@ -323,7 +398,7 @@ def run_complete_workflow(
                 'current_step': "Step 3: Monte Carlo Simulation",
                 'progress': 60,
                 'current_step_progress': 0,
-                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
             
             with open(progress_file, 'w') as f:
@@ -347,7 +422,7 @@ def run_complete_workflow(
     
     # Prepare monte carlo kwargs
     monte_carlo_kwargs = {
-        "strategy_name": strategy_name,
+        "strategy": strategy_name,
         "tickers": tickers,
         "start_date": start_date,
         "end_date": end_date,
@@ -407,7 +482,7 @@ def run_complete_workflow(
                 'current_step': "Workflow Completed - Saving Results",
                 'progress': 95,
                 'current_step_progress': 100,
-                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'last_update': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
             
             with open(progress_file, 'w') as f:
@@ -613,6 +688,14 @@ def run_complete_workflow(
     # Reset logging level if it was changed
     if verbose:
         logging_system.set_level('INFO', 'workflows')
+    
+    # Clean up temporary files
+    for temp_file in _temp_files_to_cleanup:
+        try:
+            os.remove(temp_file)
+            logger.info(f"Cleaned up temporary file: {temp_file}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary file: {str(e)}")
     
     # Make sure to return in the format the cli.py expects
     return {

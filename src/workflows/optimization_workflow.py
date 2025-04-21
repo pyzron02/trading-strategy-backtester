@@ -9,6 +9,8 @@ import json
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional
+import datetime
+import uuid
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,73 +35,76 @@ from workflows.simple_workflow import ensure_data_available
 
 @time_execution("optimization workflow")
 def run_optimization_workflow(
-    strategy_name: str,
-    tickers: List[str],
-    start_date: str,
-    end_date: str,
-    output_dir: str,
-    parameters: Optional[Dict[str, Any]] = None,
-    param_file: Optional[str] = None,
-    n_trials: int = 50,
-    optimization_metric: str = "sharpe_ratio",
-    max_combinations: Optional[int] = None,
-    verbose: bool = False,
-    initial_capital: float = 100000.0,
-    commission: float = 0.001,
-    data_dir: str = "input",
-    plot: bool = False
+    strategy=None,  # New parameter to support unified_workflow
+    strategy_name=None,  # Original parameter
+    tickers=None,
+    start_date=None,
+    end_date=None,
+    output_dir=None,
+    parameters=None,
+    param_file=None,
+    n_trials=50,
+    optimization_metric="sharpe_ratio",
+    max_combinations=None,
+    verbose=False,
+    initial_capital=100000.0,
+    commission=0.001,
+    data_dir="input",
+    plot=False,
+    progress_callback=None,
+    progress_file=None,
+    stock_csv=None,
+    _temp_files_to_cleanup=None,
+    **kwargs
 ) -> Dict[str, Any]:
     """
-    Run an optimization workflow for the given strategy.
+    Run an optimization workflow for a trading strategy.
     
     Args:
-        strategy_name: Name of the strategy to run
+        strategy: Name of the strategy to optimize (alternative to strategy_name)
+        strategy_name: Name of the strategy to optimize
         tickers: List of ticker symbols
-        start_date: Start date for backtest in YYYY-MM-DD format
-        end_date: End date for backtest in YYYY-MM-DD format
-        output_dir: Directory to save results
+        start_date: Start date for backtest
+        end_date: End date for backtest
+        output_dir: Directory for output files
         parameters: Dictionary of strategy parameters (overrides param_file)
-        param_file: File with parameter definitions
-        n_trials: Number of optimization trials
+        param_file: File with parameter grid definitions
+        n_trials: Number of trials to run
         optimization_metric: Metric to optimize for
-        max_combinations: Maximum number of parameter combinations to test (grid search)
-        verbose: Whether to print detailed output
+        max_combinations: Maximum parameter combinations to try
+        verbose: Whether to print detailed logs
         initial_capital: Initial capital for backtest
-        commission: Commission rate for trades
-        data_dir: Directory containing input data
-    
+        commission: Commission per trade
+        data_dir: Directory with data files
+        plot: Whether to plot results
+        progress_callback: Callback for progress updates
+        progress_file: File to write progress updates
+        stock_csv: CSV file with stock data
+        _temp_files_to_cleanup: List of temporary files to clean up
+        **kwargs: Additional arguments
+        
     Returns:
-        Dict containing the workflow results
+        Dictionary with optimization results
     """
-    # For backward compatibility
-    param_grid_file = param_file
+    # Use strategy if provided, otherwise use strategy_name
+    if strategy is not None and strategy_name is None:
+        strategy_name = strategy
+    elif strategy is None and strategy_name is None:
+        return {
+            "status": "error",
+            "message": "Either strategy or strategy_name must be provided"
+        }
     
-    # Log workflow start
-    additional_info = {
-        "n_trials": n_trials,
-        "optimization_metric": optimization_metric,
-        "output_dir": output_dir,
-        "initial_capital": initial_capital,
-        "commission": commission,
-        "data_dir": data_dir,
-        "plot": plot
-    }
-    if param_grid_file:
-        additional_info["param_file"] = param_grid_file
-    if max_combinations:
-        additional_info["max_combinations"] = max_combinations
+    # Track temporary files if not already tracking
+    if _temp_files_to_cleanup is None:
+        _temp_files_to_cleanup = []
     
-    print_workflow_log(
-        workflow_name="Optimization Workflow",
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        status="STARTED",
-        additional_info=additional_info
-    )
-    
-    print_header(f"Optimization Workflow: {strategy_name}")
+    # Create a unique output directory if none is provided
+    if not output_dir:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = str(uuid.uuid4())[:8]  # For uniqueness
+        output_dir = os.path.join(project_root, "output", f"{strategy_name}_optimization_{timestamp}_{run_id}")
+        logger.info(f"Creating unique output directory: {output_dir}")
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -108,8 +113,18 @@ def run_optimization_workflow(
     if verbose:
         logging_system.set_level('DEBUG', 'workflows')
     
+    # Set up progress file if provided
+    if progress_file:
+        with open(progress_file, 'w') as f:
+            json.dump({
+                "progress": 0,
+                "status": "Starting optimization",
+                "current_step": "Initializing",
+                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, f, indent=4)
+    
     # Find parameter grid file if not provided
-    if not param_grid_file:
+    if not param_file:
         # Look in several possible locations for parameter grid files
         # Also search for lowercase strategy name and snake_case variation
         strategy_snake_case = ''.join(['_'+c.lower() if c.isupper() else c.lower() for c in strategy_name]).lstrip('_')
@@ -127,11 +142,11 @@ def run_optimization_workflow(
         for location in possible_locations:
             logger.info(f"  Checking: {location} (exists: {os.path.exists(location)})")
             if os.path.exists(location):
-                param_grid_file = location
+                param_file = location
                 logger.info(f"  Found parameter grid file: {location}")
                 break
         
-        if not param_grid_file:
+        if not param_file:
             # If no grid file is found, create a basic one from the strategy parameters
             logger.warning(f"No parameter grid file found for {strategy_name}. Creating a basic grid.")
             
@@ -159,11 +174,14 @@ def run_optimization_workflow(
                                 ]
                     
                     # Save the grid to a temporary file
-                    param_grid_file = os.path.join(output_dir, f"{strategy_name}_grid.json")
-                    with open(param_grid_file, 'w') as f:
+                    param_file = os.path.join(output_dir, f"{strategy_name}_grid.json")
+                    with open(param_file, 'w') as f:
                         json.dump(param_grid, f, indent=4)
                     
-                    logger.info(f"Created parameter grid file: {param_grid_file}")
+                    logger.info(f"Created parameter grid file: {param_file}")
+                    
+                    # Track for cleanup
+                    _temp_files_to_cleanup.append(param_file)
                 except Exception as e:
                     logger.error(f"Error creating parameter grid: {e}")
                     
@@ -195,8 +213,8 @@ def run_optimization_workflow(
                 
                 return {"status": "error", "message": "Parameter grid file not found and no default parameters available"}
     
-    if not os.path.exists(param_grid_file):
-        logger.error(f"Error: Parameter grid file does not exist: {param_grid_file}")
+    if not os.path.exists(param_file):
+        logger.error(f"Error: Parameter grid file does not exist: {param_file}")
         
         # Log workflow failure
         print_workflow_log(
@@ -206,10 +224,10 @@ def run_optimization_workflow(
             start_date=start_date,
             end_date=end_date,
             status="FAILED",
-            additional_info={"error": f"Parameter grid file does not exist: {param_grid_file}"}
+            additional_info={"error": f"Parameter grid file does not exist: {param_file}"}
         )
         
-        return {"status": "error", "message": f"Parameter grid file does not exist: {param_grid_file}"}
+        return {"status": "error", "message": f"Parameter grid file does not exist: {param_file}"}
     
     print_section("Running Optimization")
     logger.info(f"Strategy: {strategy_name}")
@@ -217,7 +235,7 @@ def run_optimization_workflow(
     logger.info(f"Period: {start_date} to {end_date}")
     logger.info(f"Optimization metric: {optimization_metric}")
     logger.info(f"Number of trials: {n_trials}")
-    logger.info(f"Parameter grid file: {param_grid_file}")
+    logger.info(f"Parameter grid file: {param_file}")
     
     try:
         # Initialize optimizer
@@ -226,7 +244,7 @@ def run_optimization_workflow(
             tickers=tickers,
             start_date=start_date,
             end_date=end_date,
-            param_grid_file=param_grid_file,
+            param_grid_file=param_file,
             n_trials=n_trials,
             optimization_metric=optimization_metric,
             output_dir=output_dir,
@@ -440,6 +458,14 @@ def run_optimization_workflow(
         status="COMPLETED",
         additional_info=completion_info
     )
+    
+    # Clean up temporary files
+    for temp_file in _temp_files_to_cleanup:
+        try:
+            os.remove(temp_file)
+            logger.info(f"Cleaned up temporary file: {temp_file}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary file: {str(e)}")
     
     return {
         "status": "success",
