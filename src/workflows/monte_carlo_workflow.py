@@ -260,6 +260,36 @@ def run_monte_carlo_workflow(
             error_msg = f"Backtest failed: {backtest_result.get('message', 'Unknown error') if isinstance(backtest_result, dict) else 'No results'}"
             logger.error(error_msg)
             
+            # Create error summary file
+            try:
+                summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+                with open(summary_file, 'w') as f:
+                    f.write("=" * 80 + "\n")
+                    f.write("MONTE CARLO SIMULATION RESULTS\n")
+                    f.write("=" * 80 + "\n\n")
+                    
+                    # Basic test information
+                    f.write(f"Strategy: {strategy_name}\n")
+                    f.write(f"Period: {start_date} to {end_date}\n")
+                    f.write(f"Tickers: {', '.join(tickers)}\n")
+                    f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                    f.write(f"Commission Rate: {commission:.4f}\n\n")
+                    
+                    # Error information
+                    f.write("-" * 80 + "\n")
+                    f.write("Error Information:\n")
+                    f.write("-" * 80 + "\n")
+                    f.write(f"Error: {error_msg}\n\n")
+                    
+                    # End of summary
+                    f.write("\n" + "=" * 80 + "\n")
+                    f.write("WORKFLOW STATUS: ERROR\n")
+                    f.write("=" * 80 + "\n")
+                
+                logger.info(f"Monte Carlo error summary saved to: {summary_file}")
+            except Exception as summary_err:
+                logger.error(f"Failed to create error summary file: {str(summary_err)}")
+            
             # Log workflow failure
             print_workflow_log(
                 workflow_name="Monte Carlo Workflow",
@@ -298,6 +328,36 @@ def run_monte_carlo_workflow(
                         error_msg = "No equity curve data found in backtest result or file"
                         logger.error(error_msg)
                         
+                        # Create error summary file
+                        try:
+                            summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+                            with open(summary_file, 'w') as f:
+                                f.write("=" * 80 + "\n")
+                                f.write("MONTE CARLO SIMULATION RESULTS\n")
+                                f.write("=" * 80 + "\n\n")
+                                
+                                # Basic test information
+                                f.write(f"Strategy: {strategy_name}\n")
+                                f.write(f"Period: {start_date} to {end_date}\n")
+                                f.write(f"Tickers: {', '.join(tickers)}\n")
+                                f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                                f.write(f"Commission Rate: {commission:.4f}\n\n")
+                                
+                                # Error information
+                                f.write("-" * 80 + "\n")
+                                f.write("Error Information:\n")
+                                f.write("-" * 80 + "\n")
+                                f.write(f"Error: {error_msg}\n\n")
+                                
+                                # End of summary
+                                f.write("\n" + "=" * 80 + "\n")
+                                f.write("WORKFLOW STATUS: ERROR\n")
+                                f.write("=" * 80 + "\n")
+                            
+                            logger.info(f"Monte Carlo error summary saved to: {summary_file}")
+                        except Exception as summary_err:
+                            logger.error(f"Failed to create error summary file: {str(summary_err)}")
+                        
                         # Log workflow failure
                         print_workflow_log(
                             workflow_name="Monte Carlo Workflow",
@@ -317,6 +377,36 @@ def run_monte_carlo_workflow(
             else:
                 error_msg = "No backtest result available for Monte Carlo analysis"
                 logger.error(error_msg)
+                
+                # Create error summary file
+                try:
+                    summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+                    with open(summary_file, 'w') as f:
+                        f.write("=" * 80 + "\n")
+                        f.write("MONTE CARLO SIMULATION RESULTS\n")
+                        f.write("=" * 80 + "\n\n")
+                        
+                        # Basic test information
+                        f.write(f"Strategy: {strategy_name}\n")
+                        f.write(f"Period: {start_date} to {end_date}\n")
+                        f.write(f"Tickers: {', '.join(tickers)}\n")
+                        f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                        f.write(f"Commission Rate: {commission:.4f}\n\n")
+                        
+                        # Error information
+                        f.write("-" * 80 + "\n")
+                        f.write("Error Information:\n")
+                        f.write("-" * 80 + "\n")
+                        f.write(f"Error: {error_msg}\n\n")
+                        
+                        # End of summary
+                        f.write("\n" + "=" * 80 + "\n")
+                        f.write("WORKFLOW STATUS: ERROR\n")
+                        f.write("=" * 80 + "\n")
+                    
+                    logger.info(f"Monte Carlo error summary saved to: {summary_file}")
+                except Exception as summary_err:
+                    logger.error(f"Failed to create error summary file: {str(summary_err)}")
                 
                 # Log workflow failure
                 print_workflow_log(
@@ -374,6 +464,36 @@ def run_monte_carlo_workflow(
             if not mc_results:
                 error_msg = "Monte Carlo analysis failed to produce results"
                 logger.error(error_msg)
+                
+                # Create error summary file
+                try:
+                    summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+                    with open(summary_file, 'w') as f:
+                        f.write("=" * 80 + "\n")
+                        f.write("MONTE CARLO SIMULATION RESULTS\n")
+                        f.write("=" * 80 + "\n\n")
+                        
+                        # Basic test information
+                        f.write(f"Strategy: {strategy_name}\n")
+                        f.write(f"Period: {start_date} to {end_date}\n")
+                        f.write(f"Tickers: {', '.join(tickers)}\n")
+                        f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                        f.write(f"Commission Rate: {commission:.4f}\n\n")
+                        
+                        # Error information
+                        f.write("-" * 80 + "\n")
+                        f.write("Error Information:\n")
+                        f.write("-" * 80 + "\n")
+                        f.write(f"Error: {error_msg}\n\n")
+                        
+                        # End of summary
+                        f.write("\n" + "=" * 80 + "\n")
+                        f.write("WORKFLOW STATUS: ERROR\n")
+                        f.write("=" * 80 + "\n")
+                    
+                    logger.info(f"Monte Carlo error summary saved to: {summary_file}")
+                except Exception as summary_err:
+                    logger.error(f"Failed to create error summary file: {str(summary_err)}")
                 
                 # Log workflow failure
                 print_workflow_log(
@@ -466,6 +586,85 @@ def run_monte_carlo_workflow(
             
             logger.info(f"\nDetailed results saved to: {results_file}")
             
+            # Generate summary file in the same format as complete_workflow_summary.txt
+            summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+            with open(summary_file, 'w') as f:
+                f.write("=" * 80 + "\n")
+                f.write("MONTE CARLO SIMULATION RESULTS\n")
+                f.write("=" * 80 + "\n\n")
+                
+                # Basic test information
+                f.write(f"Strategy: {strategy_name}\n")
+                f.write(f"Period: {start_date} to {end_date}\n")
+                f.write(f"Tickers: {', '.join(tickers)}\n")
+                f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                f.write(f"Commission Rate: {commission:.4f}\n\n")
+                
+                # Monte Carlo Results
+                f.write("=" * 80 + "\n")
+                f.write("SIMULATION PARAMETERS\n")
+                f.write("=" * 80 + "\n\n")
+                
+                # Monte Carlo parameters
+                f.write(f"Number of Simulations: {n_simulations}\n")
+                f.write(f"Confidence Level: {int(confidence_level * 100)}%\n\n")
+                
+                # Portfolio Statistics section
+                f.write("-" * 80 + "\n")
+                f.write("Portfolio Statistics:\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"initial_value: {initial_capital:.4f}\n")
+                f.write(f"final_value_original: {mc_results['final_equity_original']:.4f}\n")
+                f.write(f"original_return: {mc_results['return_original']:.4f}\n")
+                f.write(f"original_return_pct: {mc_results['return_original'] * 100:.4f}\n")
+                
+                # Simulation Results section
+                f.write("\n" + "-" * 80 + "\n")
+                f.write("Simulation Results:\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"mean_final_value: {mc_results['mean_final_equity']:.4f}\n")
+                f.write(f"median_final_value: {mc_results['median_final_equity']:.4f}\n")
+                f.write(f"mean_return: {mc_results['mean_return']:.4f}\n")
+                f.write(f"mean_return_pct: {mc_results['mean_return'] * 100:.4f}\n")
+                
+                # Confidence Intervals section
+                f.write("\n" + "-" * 80 + "\n")
+                f.write(f"Confidence Intervals ({int(confidence_level * 100)}%):\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"final_equity_min: {mc_results['ci_lower_final_equity']:.4f}\n")
+                f.write(f"final_equity_max: {mc_results['ci_upper_final_equity']:.4f}\n")
+                f.write(f"return_min: {mc_results['ci_lower_return']:.4f}\n")
+                f.write(f"return_min_pct: {mc_results['ci_lower_return'] * 100:.4f}\n")
+                f.write(f"return_max: {mc_results['ci_upper_return']:.4f}\n")
+                f.write(f"return_max_pct: {mc_results['ci_upper_return'] * 100:.4f}\n")
+                
+                # Risk Metrics section
+                f.write("\n" + "-" * 80 + "\n")
+                f.write("Risk Metrics:\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"var_95: {mc_results['var_pct']:.4f}\n")
+                f.write(f"var_95_pct: {mc_results['var_pct'] * 100:.4f}\n")
+                f.write(f"cvar_95: {mc_results['cvar_pct']:.4f}\n")
+                f.write(f"cvar_95_pct: {mc_results['cvar_pct'] * 100:.4f}\n")
+                f.write(f"worst_return: {mc_results['worst_return']:.4f}\n")
+                f.write(f"worst_return_pct: {mc_results['worst_return'] * 100:.4f}\n")
+                f.write(f"best_return: {mc_results['best_return']:.4f}\n")
+                f.write(f"best_return_pct: {mc_results['best_return'] * 100:.4f}\n")
+                
+                # Probability Metrics section
+                f.write("\n" + "-" * 80 + "\n")
+                f.write("Probability Metrics:\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"profit_probability: {mc_results['probability_of_profit']:.4f}\n")
+                f.write(f"profit_probability_pct: {mc_results['probability_of_profit'] * 100:.4f}\n")
+                
+                # End of summary
+                f.write("\n" + "=" * 80 + "\n")
+                f.write("WORKFLOW STATUS: SUCCESS\n")
+                f.write("=" * 80 + "\n")
+            
+            logger.info(f"Monte Carlo summary saved to: {summary_file}")
+            
             # Create a combined result
             workflow_result = {
                 "status": "success",
@@ -487,6 +686,36 @@ def run_monte_carlo_workflow(
             logger.error(error_msg)
             if verbose:
                 logger.exception("Full error traceback:")
+            
+            # Create error summary file
+            try:
+                summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+                with open(summary_file, 'w') as f:
+                    f.write("=" * 80 + "\n")
+                    f.write("MONTE CARLO SIMULATION RESULTS\n")
+                    f.write("=" * 80 + "\n\n")
+                    
+                    # Basic test information
+                    f.write(f"Strategy: {strategy_name}\n")
+                    f.write(f"Period: {start_date} to {end_date}\n")
+                    f.write(f"Tickers: {', '.join(tickers)}\n")
+                    f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                    f.write(f"Commission Rate: {commission:.4f}\n\n")
+                    
+                    # Error information
+                    f.write("-" * 80 + "\n")
+                    f.write("Error Information:\n")
+                    f.write("-" * 80 + "\n")
+                    f.write(f"Error: {error_msg}\n\n")
+                    
+                    # End of summary
+                    f.write("\n" + "=" * 80 + "\n")
+                    f.write("WORKFLOW STATUS: ERROR\n")
+                    f.write("=" * 80 + "\n")
+                
+                logger.info(f"Monte Carlo error summary saved to: {summary_file}")
+            except Exception as summary_err:
+                logger.error(f"Failed to create error summary file: {str(summary_err)}")
             
             # Log workflow failure
             print_workflow_log(
@@ -510,6 +739,36 @@ def run_monte_carlo_workflow(
         logger.error(error_msg)
         if verbose:
             logger.exception("Full error traceback:")
+        
+        # Create error summary file
+        try:
+            summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+            with open(summary_file, 'w') as f:
+                f.write("=" * 80 + "\n")
+                f.write("MONTE CARLO SIMULATION RESULTS\n")
+                f.write("=" * 80 + "\n\n")
+                
+                # Basic test information
+                f.write(f"Strategy: {strategy_name}\n")
+                f.write(f"Period: {start_date} to {end_date}\n")
+                f.write(f"Tickers: {', '.join(tickers)}\n")
+                f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                f.write(f"Commission Rate: {commission:.4f}\n\n")
+                
+                # Error information
+                f.write("-" * 80 + "\n")
+                f.write("Error Information:\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"Error: {error_msg}\n\n")
+                
+                # End of summary
+                f.write("\n" + "=" * 80 + "\n")
+                f.write("WORKFLOW STATUS: ERROR\n")
+                f.write("=" * 80 + "\n")
+            
+            logger.info(f"Monte Carlo error summary saved to: {summary_file}")
+        except Exception as summary_err:
+            logger.error(f"Failed to create error summary file: {str(summary_err)}")
         
         # Log workflow failure
         print_workflow_log(
