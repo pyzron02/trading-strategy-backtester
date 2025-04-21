@@ -13,7 +13,8 @@
         "commission": 0.001,
         "plot": false,
         "enhanced_plots": true,
-        "verbose": false
+        "verbose": false,
+        "standardized_output": true
     },
     "strategies": {
         "AuctionMarket": {

@@ -90,6 +90,7 @@ The configuration file uses JSON format with the following structure:
 | `commission` | Commission rate | 0.001 |
 | `plot` | Generate plots | false |
 | `verbose` | Enable verbose logging | false |
+| `standardized_output` | Standardize output files (equity_curve.csv) | false |
 
 ### Workflow-Specific Parameters
 
