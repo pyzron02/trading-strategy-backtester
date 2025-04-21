@@ -9,6 +9,8 @@ import json
 import argparse
 from datetime import datetime
 import uuid
+import numpy as np
+import pandas as pd
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +26,23 @@ from workflows.workflow_utils import logger, logging_system
 
 # Import the unified workflow
 from workflows.unified_workflow import run_unified_workflow, is_parameter_grid
+
+def generate_monte_carlo_summary(result, output_dir):
+    """
+    This function is deprecated as summary generation is now handled in monte_carlo_workflow.py.
+    This stub is maintained for backwards compatibility.
+    
+    Args:
+        result (dict): The workflow result dictionary
+        output_dir (str): The output directory path
+    """
+    logger.info(f"Monte Carlo summary generation is handled directly in monte_carlo_workflow.py")
+    logger.info(f"Skipping duplicate summary generation for output directory: {output_dir}")
+    
+    # Check if summary file already exists to inform user
+    summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+    if os.path.exists(summary_file):
+        logger.info(f"Monte Carlo summary file already exists at: {summary_file}")
 
 def parse_args():
     """Parse command-line arguments."""
@@ -155,6 +174,10 @@ def run_cli():
             logger.info(f"Running with config file: {args.config}")
             result = run_unified_workflow_from_config(args.config)
             
+            # Get workflow type
+            workflow_type = result.get("workflow_type", "")
+            
+            # Print summary of results
             if result["status"] == "success":
                 logger.info("\n" + "=" * 80)
                 logger.info(f"Workflow completed successfully.")
@@ -166,6 +189,23 @@ def run_cli():
                     logger.info(f"Strategy: {strategy_name} - Status: {status} - Output: {output_dir}")
             else:
                 logger.error(f"\nError: {result.get('message', 'Unknown error')}")
+            
+            # No longer need to generate monte_carlo summary - handled in monte_carlo_workflow.py
+            if workflow_type == "monte_carlo":
+                for strategy_name, strategy_result in result.get("results", {}).items():
+                    output_dir = strategy_result.get("output_dir", "N/A")
+                    if os.path.exists(output_dir):
+                        # Check for summary file existence only
+                        summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+                        if os.path.exists(summary_file):
+                            logger.info(f"Monte Carlo summary file exists at: {summary_file}")
+                        else:
+                            logger.warning(f"Monte Carlo summary file not found at: {summary_file}")
+                    else:
+                        logger.warning(f"Output directory doesn't exist: {output_dir}")
+                
+            # Exit with error if the workflow failed
+            if result["status"] != "success":
                 sys.exit(1)
                 
         except Exception as e:
@@ -262,11 +302,50 @@ def run_cli():
     try:
         result = run_unified_workflow(args.workflow, **workflow_params)
         
+        # Display status message
         if result["status"] == "success":
             logger.info("\n" + "=" * 80)
             logger.info(f"Workflow completed successfully. Results saved to: {output_dir}")
         else:
             logger.error(f"\nError: {result.get('message', 'Unknown error')}")
+        
+        # For monte carlo workflow, just check if the summary file exists
+        # No need to generate it here as it's done in monte_carlo_workflow.py
+        if args.workflow == "monte_carlo":
+            logger.info(f"Monte Carlo workflow completed. Checking for summary file...")
+            
+            # Check if output_dir exists
+            if not os.path.exists(output_dir):
+                logger.warning(f"Output directory doesn't exist: {output_dir}")
+                # Try to find correct output dir from result if available
+                for strategy_name, strategy_data in result.get("results", {}).items():
+                    if "output_dir" in strategy_data:
+                        output_dir = strategy_data["output_dir"]
+                        logger.info(f"Using output directory from result: {output_dir}")
+                        break
+            
+            # If we have a valid output_dir, check for summary file
+            if os.path.exists(output_dir):
+                summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+                if os.path.exists(summary_file):
+                    logger.info(f"Monte Carlo summary file exists at: {summary_file}")
+                    
+                    # Show the first few lines of the summary
+                    try:
+                        with open(summary_file, 'r') as f:
+                            first_lines = [next(f) for _ in range(5)]
+                        logger.info(f"Summary file contents (first 5 lines):")
+                        for line in first_lines:
+                            logger.info(line.rstrip())
+                    except Exception as read_err:
+                        logger.warning(f"Could not read summary file: {str(read_err)}")
+                else:
+                    logger.warning(f"Monte Carlo summary file not found at: {summary_file}")
+            else:
+                logger.error(f"Cannot find valid output directory for summary file")
+        
+        # Exit with error if the workflow failed
+        if result["status"] != "success":
             sys.exit(1)
     
     except Exception as e:
