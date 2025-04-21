@@ -322,9 +322,9 @@ class MonteCarloAnalysis:
         for col in sample_cols:
             ax.plot(self.simulated_paths[col], color='skyblue', alpha=0.1)
         
-        # Plot original equity curve
+        # Plot optimized equity curve
         original_values = np.concatenate([[self.equity_values.iloc[0]], self.equity_values.values])
-        ax.plot(original_values, color='red', linewidth=2, label='Original Equity Curve')
+        ax.plot(original_values, color='red', linewidth=2, label='Optimized Equity Curve')
         
         # Plot confidence interval
         lower_bound = self.simulated_paths.quantile((1 - self.confidence_level) / 2, axis=1)

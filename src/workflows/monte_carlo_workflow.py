@@ -33,7 +33,7 @@ from workflows.workflow_utils import (
 from engine.run_backtest import run_backtest
 from monte_carlo.monte_carlo_analysis import MonteCarloAnalysis
 from monte_carlo.visualizations import MonteCarloVisualizer
-from workflows.simple_workflow import ensure_data_available
+from workflows.simple_workflow import ensure_data_available, convert_grid_to_single_values
 
 def calculate_trading_days(start_date_str: str, end_date_str: str) -> int:
     """
@@ -194,6 +194,15 @@ def run_monte_carlo_workflow(
     print_section("Strategy Parameters")
     print_parameters(parameters)
     
+    # Check for parameter grids and convert to single values if needed
+    has_grid = any(isinstance(v, list) for v in parameters.values())
+    if has_grid:
+        logger.info("Parameter grid detected in Monte Carlo workflow. Converting to single values.")
+        original_params = parameters.copy()
+        parameters = convert_grid_to_single_values(parameters)
+        logger.info("Converted parameters from grid to single values.")
+        print_parameters(parameters)
+    
     try:
         # Check if stock_data.csv exists but don't regenerate it
         stock_data_path = os.path.join(data_dir, "stock_data.csv")
@@ -235,7 +244,7 @@ def run_monte_carlo_workflow(
         # Run backtest
         backtest_result = run_backtest(
             strategy_name=strategy_name,
-            parameters=adapted_parameters,
+            parameters=adapted_parameters,  # These are the optimized parameters from complete_workflow
             tickers=tickers,
             start_date=start_date,
             end_date=end_date,
