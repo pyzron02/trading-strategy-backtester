@@ -210,15 +210,10 @@ class MonteCarloVisualizer:
         
         # Save or show the plot
         if save and self.output_dir:
-            # Always save HTML version
+            # Save HTML version
             html_path = os.path.join(self.output_dir, f"{self.strategy_name}_monte_carlo_paths.html")
             try:
                 fig.write_html(html_path)
-                
-                # Also save a static version for backward compatibility if kaleido is available
-                if KALEIDO_AVAILABLE:
-                    png_path = os.path.join(self.output_dir, f"{self.strategy_name}_monte_carlo_paths.png")
-                    fig.write_image(png_path)
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Error saving plot: {e}")
@@ -357,15 +352,10 @@ class MonteCarloVisualizer:
         
         # Save or show the plot
         if save and self.output_dir:
-            # Always save HTML version
+            # Save HTML version
             html_path = os.path.join(self.output_dir, f"{self.strategy_name}_return_distribution.html")
             try:
                 fig.write_html(html_path)
-                
-                # Also save a static version for backward compatibility if kaleido is available
-                if KALEIDO_AVAILABLE:
-                    png_path = os.path.join(self.output_dir, f"{self.strategy_name}_return_distribution.png")
-                    fig.write_image(png_path)
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Error saving plot: {e}")
@@ -499,15 +489,10 @@ class MonteCarloVisualizer:
         
         # Save or show the plot
         if save and self.output_dir:
-            # Always save HTML version
+            # Save HTML version
             html_path = os.path.join(self.output_dir, f"{self.strategy_name}_drawdown_analysis.html")
             try:
                 fig.write_html(html_path)
-                
-                # Also save a static version for backward compatibility if kaleido is available
-                if KALEIDO_AVAILABLE:
-                    png_path = os.path.join(self.output_dir, f"{self.strategy_name}_drawdown_analysis.png")
-                    fig.write_image(png_path)
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Error saving plot: {e}")
@@ -533,7 +518,7 @@ class MonteCarloVisualizer:
             logging.getLogger(__name__).error("No simulation paths available for creating dashboard")
             return None
         
-        # Create a figure with subplots
+        # Create a figure with subplots - adjust layout for better screen fit
         fig = make_subplots(
             rows=3, cols=2,
             specs=[
@@ -541,7 +526,7 @@ class MonteCarloVisualizer:
                 [{"type": "xy"}, {"type": "xy"}],
                 [{"colspan": 2, "type": "table"}, None]
             ],
-            row_heights=[0.45, 0.35, 0.2],
+            row_heights=[0.40, 0.35, 0.25],
             subplot_titles=(
                 f'{self.strategy_name}: Monte Carlo Equity Curves ({self.simulation_results.get("num_simulations", 0)} simulations)',
                 'Return Distribution', 'Maximum Drawdown Distribution',
@@ -811,16 +796,25 @@ class MonteCarloVisualizer:
             logger.exception("Full traceback:")
             return None
         
-        # Update layout
+        # Update layout to fit better on screen without scrolling
         fig.update_layout(
-            height=900,  # Larger to accommodate all plots
+            height=800,  # Optimized height to avoid scrolling
+            width=1200,  # Standard width for most displays
+            margin=dict(l=40, r=40, t=80, b=40),  # Reduce margins
             showlegend=True,
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
                 y=1.02,
-                xanchor="right",
-                x=1
+                xanchor="center",
+                x=0.5,
+                bgcolor='rgba(255, 255, 255, 0.8)',
+                bordercolor='rgba(0, 0, 0, 0.2)',
+                borderwidth=1,
+                font=dict(size=10),
+                itemsizing='constant',
+                itemwidth=30,
+                tracegroupgap=5
             ),
             hovermode='closest'
         )
@@ -837,15 +831,10 @@ class MonteCarloVisualizer:
         
         # Save or show the plot
         if save and self.output_dir:
-            # Always save HTML version
+            # Save HTML version
             html_path = os.path.join(self.output_dir, f"{self.strategy_name}_monte_carlo_dashboard.html")
             try:
-                fig.write_html(html_path)
-                
-                # Also save a static version for backward compatibility if kaleido is available
-                if KALEIDO_AVAILABLE:
-                    png_path = os.path.join(self.output_dir, f"{self.strategy_name}_monte_carlo_dashboard.png")
-                    fig.write_image(png_path, width=1200, height=900)
+                fig.write_html(html_path, config={'responsive': True})
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Error saving plot: {e}")
