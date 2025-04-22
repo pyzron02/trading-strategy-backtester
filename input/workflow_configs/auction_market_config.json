@@ -28,10 +28,10 @@
             },
             "parameter_grid": {
                 "param_preset": ["default", "aggressive"],
-                "value_area": [0.7, 0.75],
+                "value_area": [0.7, 0.75, 0.8],
                 "use_vwap": [true],
                 "position_size": [100, 200],
-                "risk_percent": [0.01, 0.02],
+                "risk_percent": [0.01, 0.02, 0.05, 0.1],
                 "use_atr_sizing": [true],
                 "atr_period": [14, 20]
             },
@@ -41,19 +41,9 @@
                 "max_combinations": null
             },
             "monte_carlo": {
-                "n_simulations": 50,
+                "n_simulations": 100,
                 "keep_permuted_data": false
             }
         }
-    },
-    "frontend": {
-        "progress_file": "/home/pyzron02/trading-strategy-backtester/output/AuctionMarket_test/progress.json",
-        "update_interval": 1.0
-    },
-    "logging": {
-        "log_to_console": true,
-        "log_to_file": true,
-        "log_level": "DEBUG",
-        "log_file": "/home/pyzron02/trading-strategy-backtester/output/AuctionMarket_test/AuctionMarket_complete.log"
     }
 }

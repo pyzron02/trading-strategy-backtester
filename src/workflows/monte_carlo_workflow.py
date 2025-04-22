@@ -88,6 +88,7 @@ def run_monte_carlo_workflow(
     random_seed=None,
     plot=False,
     enhanced_plots=False,
+    workflow_type="monte_carlo",  # Add workflow_type parameter
     _temp_files_to_cleanup=None,
     **kwargs
 ) -> Dict[str, Any]:
@@ -116,6 +117,7 @@ def run_monte_carlo_workflow(
         random_seed: Random seed for reproducibility
         plot: Whether to plot results
         enhanced_plots: Whether to create enhanced plots
+        workflow_type: Type of workflow
         _temp_files_to_cleanup: List of temporary files to clean up
         **kwargs: Additional arguments
         
@@ -537,7 +539,8 @@ def run_monte_carlo_workflow(
                         simulation_results=mc_results,
                         confidence_level=confidence_level,
                         output_dir=output_dir,
-                        strategy_name=strategy_name
+                        strategy_name=strategy_name,
+                        workflow_type=workflow_type  # Pass the workflow_type parameter
                     )
                     
                     # Create all available plot types

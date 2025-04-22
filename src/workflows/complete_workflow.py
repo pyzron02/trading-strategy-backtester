@@ -519,7 +519,8 @@ def run_complete_workflow(
         "commission": commission,
         "data_dir": data_dir,
         "plot": plot,
-        "enhanced_plots": enhanced_plots
+        "enhanced_plots": enhanced_plots,
+        "workflow_type": "complete"
     }
     
     monte_carlo_result = run_monte_carlo_workflow(**monte_carlo_kwargs)
