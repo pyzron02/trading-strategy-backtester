@@ -17,7 +17,7 @@
       },
       "optimization": {
         "n_trials": 100,
-        "optimization_metric": "sharpe_ratio",
+        "optimization_metric": "win_rate",
         "max_combinations": 200
       }
     }

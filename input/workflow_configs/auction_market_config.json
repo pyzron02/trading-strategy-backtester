@@ -36,8 +36,8 @@
                 "atr_period": [14, 20]
             },
             "optimization": {
-                "n_trials": 10,
-                "optimization_metric": "sharpe_ratio",
+                "n_trials": 200,
+                "optimization_metric": "total_return",
                 "max_combinations": null
             },
             "monte_carlo": {

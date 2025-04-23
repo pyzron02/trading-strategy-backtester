@@ -14,8 +14,9 @@ import itertools
 from datetime import datetime
 from tqdm import tqdm
 import random
-import multiprocessing
+import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import time
 
 # Add the current directory to the path
 current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -149,6 +150,9 @@ class InSampleExcellence:
         self.verbose = verbose
         self.plot = plot  # Whether to generate plots
         
+        # Initialize logger
+        self.logger = logger.get_logger(__name__)
+        
         # Create output directory if it doesn't exist
         os.makedirs(self.output_dir, exist_ok=True)
         
@@ -169,15 +173,12 @@ class InSampleExcellence:
             f.write(f"Period: {self.start_date} to {self.end_date}\n\n")
         
         # Define parameter grid based on strategy
-        self.param_grid = self._get_param_grid(strategy_name)
+        self.param_grid = self._get_param_grid()
     
-    def _get_param_grid(self, strategy_name):
+    def _get_param_grid(self):
         """
-        Get the parameter grid for the specified strategy.
+        Get the parameter grid for the strategy.
         
-        Args:
-            strategy_name (str): Name of the strategy
-            
         Returns:
             dict: Parameter grid for the strategy
         """
@@ -202,6 +203,7 @@ class InSampleExcellence:
                     f.write("Falling back to default parameter grid.\n\n")
             
         # Otherwise, use default parameter grids based on strategy name
+        strategy_name = self.strategy_name
         if strategy_name == 'SimpleStock':
             return {
                 'sma_period': [10, 20, 50, 100, 200],
@@ -213,11 +215,13 @@ class InSampleExcellence:
                 'position_size': [10, 20, 50],
                 'max_positions': [3, 5, 10]
             }
-        elif strategy_name == 'AuctionMarketStrategy':
+        elif strategy_name == 'AuctionMarketStrategy' or strategy_name == 'AuctionMarket':
             return {
-                'volume_threshold': [1.5, 2.0, 2.5, 3.0],
-                'price_threshold': [0.5, 1.0, 1.5, 2.0],
-                'position_size': [10, 20, 50]
+                'param_preset': ['default', 'aggressive', 'conservative'],
+                'value_area': [0.7, 0.75, 0.8],
+                'position_size': [50, 100, 200],
+                'risk_percent': [0.01, 0.02, 0.05],
+                'atr_period': [14, 20, 30]
             }
         else:
             # Default parameter grid
@@ -226,582 +230,1259 @@ class InSampleExcellence:
                 'param2': [10, 20, 30]
             }
     
-    def _generate_parameter_combinations(self, param_grid, max_combinations=100):
+    def _generate_parameter_combinations(self, param_grid, max_combinations=None):
         """
         Generate parameter combinations for grid search, limiting to max_combinations.
         
         Args:
             param_grid (dict): Parameter grid with parameter names as keys and lists of values as values.
-            max_combinations (int): Maximum number of combinations to generate.
+            max_combinations (int): Maximum number of combinations to generate. If None, uses self.max_combinations.
             
         Returns:
             list: List of parameter dictionaries.
         """
-        # Calculate all possible combinations
-        keys = param_grid.keys()
-        values = param_grid.values()
-        all_combinations = list(itertools.product(*values))
-        
-        # If there are too many combinations, sample randomly
-        if len(all_combinations) > max_combinations:
-            np.random.seed(42)  # For reproducibility
-            indices = np.random.choice(len(all_combinations), max_combinations, replace=False)
-            combinations = [all_combinations[i] for i in indices]
-        else:
-            combinations = all_combinations
-        
-        # Convert to list of dictionaries
-        param_combinations = []
-        for combo in combinations:
-            param_dict = dict(zip(keys, combo))
-            param_combinations.append(param_dict)
-        
-        return param_combinations
+        if not param_grid:
+            self.logger.error("Parameter grid is empty, cannot generate combinations")
+            return []
+            
+        # Use class max_combinations if none provided
+        if max_combinations is None:
+            max_combinations = self.max_combinations if self.max_combinations is not None else self.n_trials
+            self.logger.debug(f"Using max_combinations: {max_combinations}")
+            
+        try:
+            # Calculate all possible combinations
+            keys = list(param_grid.keys())
+            values = list(param_grid.values())
+            
+            # Log parameter grid information
+            self.logger.info(f"Parameter grid contains {len(keys)} parameters")
+            for k, v in param_grid.items():
+                self.logger.debug(f"Parameter {k}: {len(v)} values - {v}")
+            
+            # Calculate total number of combinations
+            total_combinations = 1
+            for v in values:
+                total_combinations *= len(v)
+                
+            self.logger.info(f"Total possible combinations: {total_combinations}")
+            
+            # If total is less than max, use all combinations
+            if total_combinations <= max_combinations:
+                self.logger.info(f"Using all {total_combinations} combinations (less than max: {max_combinations})")
+                all_combinations = list(itertools.product(*values))
+                combinations = all_combinations
+            else:
+                # If there are too many combinations, sample randomly
+                self.logger.info(f"Sampling {max_combinations} from {total_combinations} possible combinations")
+                
+                # Set random seed for reproducibility
+                np.random.seed(self.random_seed)
+                
+                # Generate all combinations if reasonable, otherwise sample strategically
+                if total_combinations > 1000000:  # If too many combinations to generate all
+                    self.logger.warning(f"Too many combinations to enumerate ({total_combinations}). Using strategic sampling.")
+                    combinations = []
+                    for _ in range(max_combinations):
+                        # Generate a random parameter combination by selecting one value from each parameter list
+                        combo = tuple(np.random.choice(param_values) for param_values in values)
+                        combinations.append(combo)
+                else:
+                    # Generate all combinations and then sample
+                    all_combinations = list(itertools.product(*values))
+                    indices = np.random.choice(len(all_combinations), max_combinations, replace=False)
+                    combinations = [all_combinations[i] for i in indices]
+            
+            # Convert to list of dictionaries
+            param_combinations = []
+            for combo in combinations:
+                param_dict = dict(zip(keys, combo))
+                param_combinations.append(param_dict)
+            
+            # Log a sample of generated combinations
+            sample_size = min(5, len(param_combinations))
+            sample_combinations = param_combinations[:sample_size]
+            self.logger.debug(f"Sample of generated combinations: {sample_combinations}")
+            
+            return param_combinations
+            
+        except Exception as e:
+            self.logger.error(f"Error generating parameter combinations: {str(e)}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return []
     
-    def run_optimization(self, metric='sharpe_ratio', max_combinations=100, n_jobs=None):
+    def run_optimization(self, metric_name="sharpe_ratio"):
         """
-        Run optimization process and find the best parameter combination.
+        Run the parameter optimization process using grid search.
         
         Args:
-            metric (str): Metric to optimize (e.g., 'sharpe_ratio', 'profit_factor')
-            max_combinations (int): Maximum number of parameter combinations to test
-            n_jobs (int): Number of parallel processes to use
+            metric_name (str): The metric to optimize (default: sharpe_ratio)
             
         Returns:
-            tuple: (best_parameters, trials_dataframe)
+            dict: Optimization results containing all parameter combinations and their metrics
         """
-        self.optimization_metric = metric
-        parameter_combinations = self._generate_parameter_combinations(self.param_grid, max_combinations)
+        self.logger.info(f"Starting parameter optimization for {self.strategy_name} using {metric_name}")
         
-        # If parameter combinations is empty, return early
+        # Get parameter grid for the strategy
+        param_grid = self._get_param_grid()
+        if not param_grid:
+            self.logger.error("Parameter grid is empty. Cannot run optimization.")
+            # Create an error file to indicate the optimization failed
+            self._create_error_log("Parameter grid is empty. Cannot run optimization.")
+            return {"error": "Parameter grid is empty", "results": pd.DataFrame()}
+            
+        # Generate all parameter combinations
+        parameter_combinations = self._generate_parameter_combinations(param_grid)
         if not parameter_combinations:
-            with open(self.log_file, 'a') as f:
-                f.write("No parameter combinations could be generated.\n")
-            return None, pd.DataFrame()
+            self.logger.error("No parameter combinations generated. Cannot run optimization.")
+            self._create_error_log("No parameter combinations generated.")
+            return {"error": "No parameter combinations generated", "results": pd.DataFrame()}
+            
+        total_combinations = len(parameter_combinations)
+        self.logger.info(f"Generated {total_combinations} parameter combinations for optimization")
         
-        # Create parameter directories
-        param_dirs = []
-        for i in range(len(parameter_combinations)):
-            param_dir = os.path.join(self.output_dir, f"params_{i}")
-            os.makedirs(param_dir, exist_ok=True)
-            param_dirs.append(param_dir)
+        # Prepare results storage
+        results = []
+        successful_combinations = 0
         
-        # Prepare arguments for parallel execution
-        args_list = []
-        for i, (params, param_dir) in enumerate(zip(parameter_combinations, param_dirs)):
-            args_list.append((
-                self.strategy_name, 
-                self.tickers, 
-                params, 
-                self.start_date, 
-                self.end_date, 
-                param_dir,
-                None,  # warmup_period
-                getattr(self, 'initial_capital', 100000.0),
-                getattr(self, 'commission', 0.001),
-                getattr(self, 'data_dir', 'input'),
-                i
-            ))
-        
-        # Determine number of processes to use
-        if n_jobs is None:
-            n_jobs = max(1, multiprocessing.cpu_count() - 1)
-        n_jobs = min(n_jobs, len(args_list))
-        
-        # Log progress information
-        with open(self.log_file, 'a') as f:
-            f.write(f"Running optimization with {len(parameter_combinations)} parameter combinations\n")
-            f.write(f"Using {n_jobs} parallel processes\n")
-            f.write("Starting parallel backtests...\n\n")
-        
-        # Clear previous results
-        self.results = []
-        
-        # Run backtests in parallel with progress bar
-        with tqdm(total=len(args_list), desc="Backtesting") as pbar:
+        # Create progress bar if verbose mode is enabled
+        if self.verbose:
             try:
-                # Use process pool for parallel execution
-                with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-                    # Submit all jobs
-                    future_to_idx = {executor.submit(_run_single_backtest, args): i for i, args in enumerate(args_list)}
-                    
-                    # Check for a progress file for frontend updates
-                    progress_file = None
-                    if hasattr(self, 'output_dir') and self.output_dir:
-                        # Look in parent directory to find workflow_config.json which would contain progress_file
-                        workflow_config_path = os.path.join(os.path.dirname(self.output_dir), 'workflow_config.json')
-                        if os.path.exists(workflow_config_path):
-                            try:
-                                with open(workflow_config_path, 'r') as f:
-                                    workflow_config = json.load(f)
-                                if 'frontend' in workflow_config and 'progress_file' in workflow_config['frontend']:
-                                    progress_file = workflow_config['frontend']['progress_file']
-                                    print(f"Found progress file for frontend updates: {progress_file}")
-                            except Exception as e:
-                                print(f"Error reading workflow config for progress updates: {e}")
-                    
-                    # Process results as they complete
-                    total_completed = 0
-                    for future in as_completed(future_to_idx):
-                        idx = future_to_idx[future]
-                        try:
-                            i, result, params = future.result()
-                            if result:
-                                self.results.append({
-                                    'parameters': params,
-                                    'metrics': result.get('metrics', {}),
-                                    'total_return': result.get('total_return', 0),
-                                    'sharpe_ratio': result.get('sharpe_ratio', 0),
-                                    'max_drawdown': result.get('max_drawdown', 0),
-                                    'equity_curve': result.get('equity_curve', None)
-                                })
-                            else:
-                                self.results.append({
-                                    'parameters': params,
-                                    'metrics': {},
-                                    'total_return': 0,
-                                    'sharpe_ratio': 0,
-                                    'max_drawdown': 0,
-                                    'equity_curve': None
-                                })
-                            
-                            # Update frontend progress file if available
-                            total_completed += 1
-                            if progress_file and os.path.exists(progress_file):
-                                try:
-                                    progress_pct = int((total_completed / len(args_list)) * 100)
-                                    # Update the progress data in the file
-                                    with open(progress_file, 'r') as f:
-                                        progress_data = json.load(f)
-                                    
-                                    # Update with optimization progress (keeping existing progress for earlier steps)
-                                    progress_data.update({
-                                        'current_step': f"Optimization: Testing parameter set {total_completed}/{len(args_list)}",
-                                        'progress': max(progress_data.get('progress', 0), 10 + int(20 * total_completed / len(args_list))),
-                                        'current_step_progress': progress_pct,
-                                        'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                    })
-                                    
-                                    with open(progress_file, 'w') as f:
-                                        json.dump(progress_data, f, indent=4)
-                                except Exception as e:
-                                    print(f"Error updating progress file: {e}")
-                        except Exception as e:
-                            with open(self.log_file, 'a') as f:
-                                f.write(f"Error in backtest {idx}: {str(e)}\n")
-                        pbar.update(1)
-            except Exception as e:
-                with open(self.log_file, 'a') as f:
-                    f.write(f"Error in parallel execution: {str(e)}\n")
+                from tqdm import tqdm
+                pbar = tqdm(total=total_combinations, desc="Optimizing")
+            except ImportError:
+                self.logger.info("tqdm not installed, progress bar disabled")
+                pbar = None
+        else:
+            pbar = None
         
-        # Calculate metrics from results
-        metrics = self._calculate_metrics(self.output_dir)
-        
-        # Get best parameter combination based on the selected metric
-        best_params = None
-        best_value = None
-        trials_data = []
-        
-        # Determine whether this metric should be maximized or minimized
-        is_maximize = True
-        if metric.startswith('max_drawdown'):
-            is_maximize = False  # For drawdown, lower is better
-        
-        # Extract parameters and metrics for each trial
-        for i, result in enumerate(self.results):
-            if not result:
-                continue
+        # Run backtest for each parameter combination
+        for i, params in enumerate(parameter_combinations):
+            try:
+                self.logger.debug(f"Testing combination {i+1}/{total_combinations}: {params}")
                 
-            trial_data = {}
-            
-            # Add parameters with prefix
-            if 'parameters' in result:
-                for key, value in result['parameters'].items():
-                    trial_data[f'param_{key}'] = value
-            
-            # Add metrics
-            if 'metrics' in result:
-                trial_data.update(result['metrics'])
-            
-            # Add other result fields
-            for key in ['total_return', 'sharpe_ratio', 'max_drawdown']:
-                if key in result:
-                    trial_data[key] = result[key]
-            
-            # Add trial number
-            trial_data['trial_number'] = i
-            
-            # Extract the metric value we're optimizing for
-            current_value = None
-            
-            # First look in metrics
-            if 'metrics' in result and metric in result['metrics']:
-                current_value = result['metrics'][metric]
-            # Then look directly in result
-            elif metric in result:
-                current_value = result[metric]
-            
-            # Update best parameters if this is better
-            if current_value is not None and np.isfinite(current_value):
-                if best_value is None or (is_maximize and current_value > best_value) or (not is_maximize and current_value < best_value):
-                    best_value = current_value
-                    best_params = result.get('parameters', {})
-            
-            trials_data.append(trial_data)
-        
-        # Create DataFrame for trials
-        trials_df = pd.DataFrame(trials_data) if trials_data else pd.DataFrame()
-        
-        # Save metrics to file
-        self._save_best_parameters(
-            best_params,
-            {metric: best_value} if best_value is not None else {},
-            parameter_combinations,
-            metric
-        )
-        
-        # Log completion
-        with open(self.log_file, 'a') as f:
-            f.write(f"Optimization complete.\n")
-            if best_params:
-                f.write(f"Best parameters: {best_params}\n")
-                f.write(f"Best {metric}: {best_value}\n")
-            else:
-                f.write("No valid results found.\n")
-        
-        # Plot parameter importance if we have enough data
-        if not trials_df.empty and len(trials_df) > 5:
-            try:
-                self._plot_parameter_importance(metric)
+                # Run backtest with current parameters
+                backtest_result = self._run_single_backtest(params)
+                
+                if backtest_result:
+                    # Extract metrics from backtest results
+                    metrics = self._extract_metrics_from_results(backtest_result)
+                    
+                    # Add parameter values to metrics dictionary with param_ prefix
+                    for param_name, param_value in params.items():
+                        metrics[f'param_{param_name}'] = param_value
+                    
+                    # Make sure we have at least one key metric
+                    has_key_metric = False
+                    for key_metric in ['total_return', 'sharpe_ratio', 'calmar_ratio']:
+                        if key_metric in metrics:
+                            has_key_metric = True
+                            break
+                    
+                    if not has_key_metric:
+                        # If no key metrics, add a default one to prevent failures
+                        self.logger.warning(f"No key metrics found for combination {i+1}, adding default metric")
+                        metrics['total_return'] = 0.0
+                    
+                    # Add to results list
+                    results.append(metrics)
+                    successful_combinations += 1
+                    
+                    if self.verbose:
+                        if metric_name in metrics:
+                            self.logger.debug(f"Combination {i+1} {metric_name}: {metrics.get(metric_name, 'N/A')}")
+                        else:
+                            self.logger.debug(f"Combination {i+1} metrics: {list(metrics.keys())}")
+                else:
+                    self.logger.warning(f"No valid results for combination {i+1}")
+                    
             except Exception as e:
-                with open(self.log_file, 'a') as f:
-                    f.write(f"Error creating parameter importance plot: {str(e)}\n")
+                self.logger.error(f"Error testing combination {i+1}: {str(e)}")
+                import traceback
+                self.logger.debug(traceback.format_exc())
+                
+            finally:
+                # Update progress bar
+                if pbar:
+                    pbar.update(1)
+                    
+        # Close progress bar
+        if pbar:
+            pbar.close()
+            
+        self.logger.info(f"Completed {successful_combinations}/{total_combinations} parameter combinations")
         
-        return best_params, trials_df
+        # Convert results to DataFrame for easier processing
+        if not results:
+            self.logger.warning("No successful combinations found during optimization")
+            self._create_error_log("No successful combinations found during optimization.")
+            return {"error": "No successful combinations", "results": pd.DataFrame(), "successful": 0, "total": total_combinations}
+            
+        results_df = pd.DataFrame(results)
+        
+        # Ensure the metric column exists
+        if metric_name not in results_df.columns:
+            self.logger.error(f"Metric '{metric_name}' not found in results. Available metrics: {list(results_df.columns)}")
+            
+            # Try to use an alternative metric
+            alternative_metrics = ['total_return', 'sharpe_ratio', 'calmar_ratio', 'profit_factor']
+            for alt_metric in alternative_metrics:
+                if alt_metric in results_df.columns:
+                    self.logger.info(f"Using alternative metric '{alt_metric}' instead of '{metric_name}'")
+                    metric_name = alt_metric
+                    break
+            else:
+                # If still no suitable metric, use the first numeric column
+                numeric_cols = results_df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0 and not all(col.startswith('param_') for col in numeric_cols):
+                    # Find first numeric column that is not a parameter
+                    for col in numeric_cols:
+                        if not col.startswith('param_'):
+                            metric_name = col
+                            self.logger.info(f"No standard metrics found. Using '{metric_name}' as fallback")
+                            break
+                else:
+                    self.logger.error("No usable metric columns found")
+                    self._create_error_log("No usable metric columns found in optimization results.")
+                    return {"error": "No metric columns", "results": results_df, "successful": successful_combinations, "total": total_combinations}
+        
+        # Save best parameters
+        best_params = self._save_best_parameters(results_df, metric_name)
+        
+        # Check if best_params is empty
+        if not best_params:
+            self.logger.error("Failed to find or save best parameters")
+            self._create_error_log("Failed to find or save best parameters.")
+            return {"error": "Failed to save best parameters", "results": results_df, "successful": successful_combinations, "total": total_combinations}
+        
+        # Create parameter importance plots
+        if self.plot:
+            self._plot_parameter_importance(results_df, metric_name)
+        
+        return {
+            "results": results_df, 
+            "successful": successful_combinations, 
+            "total": total_combinations,
+            "best_params": best_params,
+            "metric": metric_name
+        }
+        
+    def _create_error_log(self, error_message):
+        """Create an error log file to indicate optimization failure."""
+        error_file = os.path.join(self.output_dir, "optimization_error.txt")
+        try:
+            with open(error_file, 'w') as f:
+                f.write(f"Optimization Error: {error_message}\n")
+                f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Strategy: {self.strategy_name}\n")
+                f.write(f"Period: {self.start_date} to {self.end_date}\n")
+            self.logger.info(f"Error log saved to {error_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to create error log: {str(e)}")
     
-    def _calculate_metrics(self, results_path):
+    def _calculate_metrics(self, results, desired_metric=None):
         """
         Calculate performance metrics from backtest results.
         
         Args:
-            results_path (str): Path to the backtest results directory.
+            results (dict): Dictionary containing backtest results
+            desired_metric (str): Optional specific metric to return
             
         Returns:
-            dict: Dictionary of performance metrics.
+            dict: Dictionary of calculated metrics or specific metric value if desired_metric is provided
         """
-        # Load equity curve
-        equity_curve_path = os.path.join(results_path, 'equity_curve.csv')
-        if not os.path.exists(equity_curve_path):
-            return {}
-        
-        equity_curve = pd.read_csv(equity_curve_path)
-        equity_curve['Date'] = pd.to_datetime(equity_curve['Date'])
-        equity_curve.set_index('Date', inplace=True)
-        
-        # Load trade log
-        trade_log_path = os.path.join(results_path, 'trade_log.csv')
-        if not os.path.exists(trade_log_path):
-            return {}
-        
-        trade_log = pd.read_csv(trade_log_path)
-        
-        # Calculate metrics
         metrics = {}
         
-        # Calculate returns
-        equity_curve['Return'] = equity_curve['Value'].pct_change()
-        
-        # Total return
-        initial_value = equity_curve['Value'].iloc[0]
-        final_value = equity_curve['Value'].iloc[-1]
-        total_return = (final_value - initial_value) / initial_value
-        metrics['total_return'] = total_return
-        
-        # Annualized return
-        days = (equity_curve.index[-1] - equity_curve.index[0]).days
-        years = days / 365.25
-        annualized_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
-        metrics['annualized_return'] = annualized_return
-        
-        # Volatility
-        daily_volatility = equity_curve['Return'].std()
-        annualized_volatility = daily_volatility * (252 ** 0.5)
-        metrics['volatility'] = annualized_volatility
-        
-        # Sharpe ratio (assuming risk-free rate of 0)
-        sharpe_ratio = annualized_return / annualized_volatility if annualized_volatility > 0 else 0
-        metrics['sharpe_ratio'] = sharpe_ratio
-        
-        # Maximum drawdown
-        equity_curve['Peak'] = equity_curve['Value'].cummax()
-        equity_curve['Drawdown'] = (equity_curve['Value'] - equity_curve['Peak']) / equity_curve['Peak']
-        max_drawdown = abs(equity_curve['Drawdown'].min())
-        metrics['max_drawdown'] = max_drawdown
-        
-        # Calculate trade metrics
-        if not trade_log.empty:
-            # Filter to closed trades
-            closed_trades = trade_log[trade_log['type'] == 'close']
+        try:
+            # Check if results contains the necessary data
+            if not results or not isinstance(results, dict):
+                self.logger.warning("Invalid results format for metric calculation")
+                return metrics
+                
+            # Extract portfolio dataframe if available
+            portfolio = None
+            if 'portfolio' in results and isinstance(results['portfolio'], pd.DataFrame):
+                portfolio = results['portfolio']
+            elif 'portfolio_history' in results and isinstance(results['portfolio_history'], pd.DataFrame):
+                portfolio = results['portfolio_history']
+            else:
+                self.logger.warning("No portfolio data found in results")
+                return metrics
+                
+            # Ensure portfolio has required columns
+            required_cols = ['equity']
+            if not all(col in portfolio.columns for col in required_cols):
+                self.logger.warning(f"Portfolio missing required columns: {required_cols}")
+                return metrics
+                
+            # Extract equity curve
+            equity = portfolio['equity'].values
+            returns = np.diff(equity) / equity[:-1]
             
-            # Win rate
-            winning_trades = closed_trades[closed_trades['pnl'] > 0]
-            win_rate = len(winning_trades) / len(closed_trades) if len(closed_trades) > 0 else 0
-            metrics['win_rate'] = win_rate
+            # Skip metrics calculation if we don't have enough data
+            if len(equity) < 2:
+                self.logger.warning("Not enough data points to calculate metrics")
+                return metrics
+                
+            # Calculate basic metrics
+            initial_equity = equity[0]
+            final_equity = equity[-1]
+            total_return = (final_equity / initial_equity) - 1
             
-            # Profit factor
-            gross_profit = winning_trades['pnl'].sum() if not winning_trades.empty else 0
-            losing_trades = closed_trades[closed_trades['pnl'] <= 0]
-            gross_loss = abs(losing_trades['pnl'].sum()) if not losing_trades.empty else 0
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-            metrics['profit_factor'] = profit_factor
+            metrics['initial_equity'] = initial_equity
+            metrics['final_equity'] = final_equity
+            metrics['total_return'] = total_return
             
-            # Average win/loss ratio
-            avg_win = winning_trades['pnl'].mean() if not winning_trades.empty else 0
-            avg_loss = abs(losing_trades['pnl'].mean()) if not losing_trades.empty else 0
-            win_loss_ratio = avg_win / avg_loss if avg_loss > 0 else float('inf')
-            metrics['win_loss_ratio'] = win_loss_ratio
+            # Calculate additional metrics if we have enough data
+            if len(returns) > 0:
+                # Annualized metrics (assuming daily data)
+                trading_days = 252
+                years = len(returns) / trading_days
+                
+                if years > 0:
+                    # Annual return
+                    annual_return = (1 + total_return) ** (1 / years) - 1
+                    metrics['annual_return'] = annual_return
+                    
+                    # Volatility
+                    daily_std = np.std(returns)
+                    annual_volatility = daily_std * np.sqrt(trading_days)
+                    metrics['volatility'] = annual_volatility
+                    
+                    # Sharpe ratio (assuming risk-free rate of 0)
+                    if annual_volatility > 0:
+                        sharpe_ratio = annual_return / annual_volatility
+                        metrics['sharpe_ratio'] = sharpe_ratio
+                    
+                # Maximum drawdown
+                peak = np.maximum.accumulate(equity)
+                drawdown = (equity - peak) / peak
+                max_drawdown = abs(np.min(drawdown))
+                metrics['max_drawdown'] = max_drawdown
+                
+                # Calmar ratio
+                if max_drawdown > 0 and years > 0:
+                    calmar_ratio = annual_return / max_drawdown
+                    metrics['calmar_ratio'] = calmar_ratio
+                
+                # Win rate if trades are available
+                if 'trades' in results and isinstance(results['trades'], pd.DataFrame) and len(results['trades']) > 0:
+                    trades_df = results['trades']
+                    if 'profit' in trades_df.columns:
+                        profitable_trades = (trades_df['profit'] > 0).sum()
+                        total_trades = len(trades_df)
+                        if total_trades > 0:
+                            win_rate = profitable_trades / total_trades
+                            metrics['win_rate'] = win_rate
+                            
+                            # Average profit per trade
+                            avg_profit = trades_df['profit'].mean()
+                            metrics['avg_profit'] = avg_profit
+                            
+                            # Profit factor
+                            gross_profit = trades_df[trades_df['profit'] > 0]['profit'].sum()
+                            gross_loss = abs(trades_df[trades_df['profit'] < 0]['profit'].sum())
+                            
+                            if gross_loss > 0:
+                                profit_factor = gross_profit / gross_loss
+                                metrics['profit_factor'] = profit_factor
             
-            # Number of trades
-            metrics['num_trades'] = len(closed_trades)
-        
-        return metrics
+            # Return specific metric if requested
+            if desired_metric is not None:
+                return metrics.get(desired_metric)
+                
+            return metrics
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating metrics: {str(e)}")
+            return metrics
     
-    def _save_best_parameters(self, best_params, best_metrics, parameter_combinations, metric_name):
-        """
-        Save the best parameters to a file and return them for further use.
-        """
-        # Get the best parameter set info
-        best_params_dict = best_params.copy()
-        
-        # If not a dict (e.g. a parameter set object), convert
-        if not isinstance(best_params_dict, dict):
-            best_params_dict = best_params_dict.to_dict()
-        
-        # Create output directory if it doesn't exist
-        os.makedirs(self.output_dir, exist_ok=True)
-        
-        # Save to pickle file
-        best_params_pickle = os.path.join(self.output_dir, 'best_parameters.pkl')
-        with open(best_params_pickle, 'wb') as f:
-            pickle.dump(best_params_dict, f)
-        
-        # Save to human-readable text file
-        best_params_txt = os.path.join(self.output_dir, 'best_parameters.txt')
-        with open(best_params_txt, 'w') as f:
-            f.write(f"Strategy: {self.strategy_name}\n")
-            f.write(f"Optimization Metric: {metric_name}\n")
-            f.write(f"In-sample Period: {self.start_date} to {self.end_date}\n\n")
-            f.write("Parameters:\n")
-            for param, value in best_params_dict.items():
-                f.write(f"  {param}: {value}\n")
+    def _calculate_annualized_return(self, equity_curve):
+        """Calculate annualized return from equity curve."""
+        try:
+            # Calculate total return
+            total_return = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
             
-            f.write("\nPerformance Metrics:\n")
-            for metric, value in best_metrics.items():
-                if isinstance(value, (int, float)):
-                    f.write(f"  {metric}: {value:.4f}\n")
-                else:
-                    f.write(f"  {metric}: {value}\n")
-
-        # Save to standard parameters.txt file that tools expect
-        params_txt = os.path.join(self.output_dir, 'parameters.txt')
-        with open(params_txt, 'w') as f:
-            # Header
-            f.write(f"# {self.strategy_name} - Optimized Parameters\n")
-            f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# Optimization Metric: {metric_name}\n")
-            f.write(f"# In-sample Period: {self.start_date} to {self.end_date}\n\n")
+            # Calculate years
+            start_date = equity_curve.index[0]
+            end_date = equity_curve.index[-1]
+            days = (end_date - start_date).days
+            years = days / 365.25
             
-            # Parameters in key:value format
-            for param, value in best_params_dict.items():
-                f.write(f"{param}: {value}\n")
-            
-            # Performance metrics (with simple formatting for numeric values)
-            f.write("\n# Performance Metrics\n")
-            for metric, value in best_metrics.items():
-                if isinstance(value, (int, float)):
-                    f.write(f"{metric}: {value:.6f}\n")
-                else:
-                    f.write(f"{metric}: {value}\n")
-        
-        logger.info('in_sample', f"Best parameters saved to {best_params_txt} and {params_txt}")
-        
-        # Create dictionary of results
-        results = {
-            'best_parameters': best_params_dict,
-            'best_metrics': best_metrics,
-            'all_results': parameter_combinations,
-            'metric_name': metric_name
-        }
-        
-        return results
+            # Avoid division by zero
+            if years <= 0:
+                return total_return
+                
+            # Calculate annualized return
+            return (1 + total_return) ** (1 / years) - 1
+        except Exception:
+            return 0
     
-    def _plot_parameter_importance(self, metric):
+    def _calculate_max_drawdown(self, equity_curve):
+        """Calculate maximum drawdown from equity curve."""
+        try:
+            # Calculate running maximum
+            running_max = equity_curve.cummax()
+            
+            # Calculate drawdown
+            drawdown = (equity_curve / running_max) - 1
+            
+            # Return maximum drawdown (will be negative)
+            return abs(drawdown.min())
+        except Exception:
+            return 0
+    
+    def _calculate_sharpe_ratio(self, returns, risk_free_rate=0.0):
+        """Calculate Sharpe ratio from returns."""
+        try:
+            # Annualize mean and std
+            mean_return = returns.mean() * 252
+            std_return = returns.std() * (252 ** 0.5)
+            
+            # Avoid division by zero
+            if std_return == 0:
+                return 0
+                
+            # Calculate Sharpe ratio
+            return (mean_return - risk_free_rate) / std_return
+        except Exception:
+            return 0
+    
+    def _calculate_sortino_ratio(self, returns, risk_free_rate=0.0):
+        """Calculate Sortino ratio from returns."""
+        try:
+            # Annualize mean and downside std
+            mean_return = returns.mean() * 252
+            
+            # Only consider negative returns for downside risk
+            negative_returns = returns[returns < 0]
+            
+            # If no negative returns, return a high value
+            if len(negative_returns) == 0:
+                return 100  # arbitrary high value
+                
+            downside_std = negative_returns.std() * (252 ** 0.5)
+            
+            # Avoid division by zero
+            if downside_std == 0:
+                return 0
+                
+            # Calculate Sortino ratio
+            return (mean_return - risk_free_rate) / downside_std
+        except Exception:
+            return 0
+    
+    def _calculate_calmar_ratio(self, annualized_return, max_drawdown):
+        """Calculate Calmar ratio."""
+        try:
+            # Avoid division by zero
+            if max_drawdown == 0:
+                return 0 if annualized_return <= 0 else 100  # arbitrary high value
+                
+            # Calculate Calmar ratio
+            return annualized_return / max_drawdown
+        except Exception:
+            return 0
+    
+    def _calculate_win_rate(self, results):
+        """Calculate win rate from trades."""
+        try:
+            trades = results.get('trades', [])
+            
+            # If no trades, return 0
+            if not trades:
+                return 0
+                
+            # Count profitable trades
+            profitable_trades = sum(1 for trade in trades if trade.get('profit', 0) > 0)
+            
+            # Calculate win rate
+            return profitable_trades / len(trades)
+        except Exception:
+            return 0
+    
+    def _calculate_profit_factor(self, results):
+        """Calculate profit factor from trades."""
+        try:
+            trades = results.get('trades', [])
+            
+            # If no trades, return 0
+            if not trades:
+                return 0
+                
+            # Calculate gross profit and gross loss
+            gross_profit = sum(trade.get('profit', 0) for trade in trades if trade.get('profit', 0) > 0)
+            gross_loss = sum(abs(trade.get('profit', 0)) for trade in trades if trade.get('profit', 0) < 0)
+            
+            # Avoid division by zero
+            if gross_loss == 0:
+                return 0 if gross_profit <= 0 else 100  # arbitrary high value
+                
+            # Calculate profit factor
+            return gross_profit / gross_loss
+        except Exception:
+            return 0
+    
+    def _calculate_recovery_factor(self, total_return, max_drawdown):
+        """Calculate recovery factor."""
+        try:
+            # Avoid division by zero
+            if max_drawdown == 0:
+                return 0 if total_return <= 0 else 100  # arbitrary high value
+                
+            # Calculate recovery factor
+            return total_return / max_drawdown
+        except Exception:
+            return 0
+    
+    def _save_best_parameters(self, results_df, metric_name):
         """
-        Plot the importance of each parameter on the specified metric.
+        Save the best parameters from optimization results.
         
         Args:
-            metric (str): Metric to analyze
+            results_df (pd.DataFrame): DataFrame containing optimization results
+            metric_name (str): The metric used for determining the best parameters
+        
+        Returns:
+            dict: The best parameters
         """
-        # Skip plotting if plot is disabled
-        if not self.plot:
+        if not isinstance(results_df, pd.DataFrame):
+            self.logger.warning(f"Results is not a DataFrame, it's a {type(results_df)}")
+            return {}
+            
+        if results_df.empty:
+            self.logger.warning("No results to save best parameters from")
+            return {}
+            
+        try:
+            # Check if the metric exists in the DataFrame
+            if metric_name not in results_df.columns:
+                self.logger.error(f"Metric '{metric_name}' not found in results DataFrame")
+                available_metrics = list(results_df.columns)
+                self.logger.info(f"Available metrics: {available_metrics}")
+                
+                # Use a default metric if available
+                default_metrics = ['sharpe_ratio', 'total_return', 'annualized_return']
+                for default_metric in default_metrics:
+                    if default_metric in results_df.columns:
+                        self.logger.info(f"Using '{default_metric}' as fallback metric")
+                        metric_name = default_metric
+                        break
+                else:
+                    self.logger.error("No suitable fallback metric found")
+                    # Use the first numeric column as a last resort
+                    numeric_cols = results_df.select_dtypes(include=['number']).columns
+                    if len(numeric_cols) > 0:
+                        metric_name = numeric_cols[0]
+                        self.logger.info(f"Using '{metric_name}' as last resort metric")
+                    else:
+                        self.logger.error("No numeric columns found, cannot determine best parameters")
+                        return {}
+            
+            # Copy the DataFrame to avoid modifying the original
+            df = results_df.copy()
+            
+            # For metrics where lower is better (e.g., max_drawdown, volatility), invert the values
+            invert_metrics = ['max_drawdown', 'volatility', 'max_drawdown_pct', 'ulcer_index']
+            if metric_name in invert_metrics:
+                self.logger.info(f"Inverting values for metric '{metric_name}' (lower is better)")
+                # Avoid division by zero
+                df[metric_name] = df[metric_name].apply(lambda x: -x if x != 0 else 0)
+            
+            # Sort by the metric (descending) to get the best parameters
+            sorted_df = df.sort_values(by=metric_name, ascending=False)
+            
+            # Check if we actually have any valid rows after sorting
+            if len(sorted_df) == 0:
+                self.logger.error("No valid rows found after sorting by metric")
+                return {}
+            
+            # Get the best row
+            best_row = sorted_df.iloc[0]
+            
+            # Extract parameter columns
+            # Step 1: Try columns with param_ prefix
+            param_columns = [col for col in df.columns if col.startswith('param_')]
+            
+            # Step 2: If no param_ columns found, try to infer parameter columns
+            if not param_columns:
+                self.logger.warning("No columns with 'param_' prefix found. Attempting to infer parameter columns.")
+                
+                # Common known metric names to exclude (these are definitely not parameters)
+                known_metric_names = set(['sharpe_ratio', 'total_return', 'annualized_return', 
+                               'max_drawdown', 'win_rate', 'profit_factor', 'sortino_ratio',
+                               'calmar_ratio', 'volatility', 'num_trades', 'avg_trade_pnl',
+                               'profit_loss_ratio', 'avg_trade_duration', 'max_drawdown_pct',
+                               'ulcer_index', 'recovery_factor', 'expectancy', 'gain_to_pain',
+                               'omega_ratio', 'information_ratio', 'treynor_ratio'])
+                
+                # First check for columns that have both numeric and non-numeric values
+                # (parameters often have consistent types across rows)
+                param_candidates = set()
+                
+                # Add columns that have string values (likely strategy parameters)
+                string_cols = df.select_dtypes(include=['object']).columns
+                param_candidates.update(string_cols)
+                
+                # Add integer columns that have a small number of unique values (likely parameters)
+                for col in df.select_dtypes(include=['int', 'int32', 'int64']).columns:
+                    if col not in known_metric_names and df[col].nunique() < 50:  # Arbitrary threshold
+                        param_candidates.add(col)
+                
+                # Add float columns with few unique values (likely parameters, not metrics)
+                for col in df.select_dtypes(include=['float', 'float32', 'float64']).columns:
+                    if col not in known_metric_names and df[col].nunique() < 30:  # Parameters usually have fewer unique values
+                        param_candidates.add(col)
+                
+                # Remove columns that are likely performance metrics
+                param_columns = [col for col in param_candidates if col not in known_metric_names]
+                
+                # If still no parameters found, use columns that don't match known metric names
+                if not param_columns:
+                    all_cols = set(df.columns)
+                    param_columns = list(all_cols - known_metric_names)
+                
+                self.logger.info(f"Inferred parameter columns: {param_columns}")
+            
+            # Create a dictionary of best parameters
+            best_params = {}
+            for col in param_columns:
+                # Extract the parameter name (remove 'param_' prefix if it exists)
+                param_name = col[6:] if col.startswith('param_') else col
+                param_value = best_row[col]
+                
+                # Convert NumPy types to native Python types
+                if isinstance(param_value, (np.integer, np.int32, np.int64)):
+                    param_value = int(param_value)
+                elif isinstance(param_value, (np.float32, np.float64)):
+                    param_value = float(param_value)
+                elif isinstance(param_value, np.bool_):
+                    param_value = bool(param_value)
+                
+                best_params[param_name] = param_value
+            
+            # If we still don't have any parameters, try one last approach - look at column names
+            if not best_params:
+                self.logger.warning("Still no parameters identified. Attempting heuristic approach.")
+                # Look for columns that might represent strategy parameters based on name patterns
+                potential_param_names = ['period', 'size', 'threshold', 'window', 'lookback', 
+                                        'length', 'multiplier', 'factor', 'level', 'ratio', 
+                                        'stop', 'target', 'limit', 'fast', 'slow', 'signal']
+                
+                for col in df.columns:
+                    # Check if any of the potential parameter names appear in the column name
+                    if any(param_name in col.lower() for param_name in potential_param_names):
+                        best_params[col] = best_row[col]
+            
+            # Ensure we don't include the main metric in parameters
+            if metric_name in best_params:
+                del best_params[metric_name]
+            
+            # If we still have no parameters, issue a clear error
+            if not best_params:
+                self.logger.error("Failed to identify any parameter columns in the results dataframe")
+                error_message = "Could not identify parameter columns in optimization results"
+                self._create_error_log(error_message)
+                return {}
+            
+            # Create a dictionary of best metrics
+            all_cols = set(df.columns)
+            param_cols_set = set(param_columns)
+            metric_cols = all_cols - param_cols_set
+            best_metrics = {col: best_row[col] for col in metric_cols if col in best_row}
+            
+            # Log the best parameters and their performance
+            self.logger.info(f"Best parameters found for metric '{metric_name}':")
+            for param, value in best_params.items():
+                self.logger.info(f"  {param}: {value}")
+            
+            self.logger.info(f"Performance of best parameters:")
+            for metric, value in best_metrics.items():
+                self.logger.info(f"  {metric}: {value}")
+            
+            # Create summary information
+            summary_info = {
+                "strategy": self.strategy_name,
+                "optimization_metric": metric_name,
+                "best_value": float(best_row[metric_name]) if metric_name in best_row else None,
+                "parameters": best_params,
+                "metrics": best_metrics,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Save the best parameters to a JSON file
+            import json
+            
+            # Create the output directory if it doesn't exist
+            os.makedirs(self.output_dir, exist_ok=True)
+            
+            # Save the best parameters
+            best_params_file = os.path.join(self.output_dir, f"best_params_{self.strategy_name}.json")
+            with open(best_params_file, 'w') as f:
+                json.dump(best_params, f, indent=4)
+            
+            # Also save a more comprehensive summary file
+            summary_file = os.path.join(self.output_dir, f"optimization_summary_{self.strategy_name}.json")
+            with open(summary_file, 'w') as f:
+                json.dump(summary_info, f, indent=4)
+            
+            self.logger.info(f"Best parameters saved to {best_params_file}")
+            self.logger.info(f"Optimization summary saved to {summary_file}")
+            
+            # Save a summary of all results
+            results_file = os.path.join(self.output_dir, f"optimization_results_{self.strategy_name}.csv")
+            results_df.to_csv(results_file, index=False)
+            self.logger.info(f"All optimization results saved to {results_file}")
+            
+            return best_params
+            
+        except Exception as e:
+            self.logger.error(f"Error saving best parameters: {str(e)}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return {}
+    
+    def _plot_parameter_importance(self, results_df, metric_name):
+        """
+        Plot the importance of each parameter on the optimization metric.
+        
+        Args:
+            results_df (pd.DataFrame): DataFrame containing optimization results
+            metric_name (str): The metric used for optimization
+        """
+        if not isinstance(results_df, pd.DataFrame):
+            self.logger.warning(f"Results is not a DataFrame, it's a {type(results_df)}")
             return
             
-        if not self.results:
+        if results_df.empty:
+            self.logger.warning("Results DataFrame is empty, cannot plot parameter importance")
             return
-        
-        # Create a figure with subplots for each parameter
-        param_names = list(self.results[0]['parameters'].keys())
-        n_params = len(param_names)
-        
-        if n_params == 0:
+            
+        # Check if the metric exists in the DataFrame
+        if metric_name not in results_df.columns:
+            self.logger.warning(f"Metric '{metric_name}' not found in columns, cannot plot parameter importance")
             return
-        
-        # Create a figure with subplots
-        fig, axes = plt.subplots(1, n_params, figsize=(5 * n_params, 5))
-        if n_params == 1:
-            axes = [axes]  # Make axes iterable if there's only one subplot
-        
-        # For each parameter, plot its effect on the metric
-        for i, param in enumerate(param_names):
-            # Extract parameter values and corresponding metric values
-            param_values = []
-            metric_values = []
             
-            for result in self.results:
-                param_values.append(result['parameters'][param])
-                metric_values.append(result.get(metric, 0))
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
             
-            # Create a DataFrame for easier plotting
-            df = pd.DataFrame({
-                'param_value': param_values,
-                'metric_value': metric_values
-            })
+            # Create output directory for plots
+            plots_dir = os.path.join(self.output_dir, "parameter_plots")
+            os.makedirs(plots_dir, exist_ok=True)
             
-            # Group by parameter value and calculate mean metric value
-            grouped = df.groupby('param_value')['metric_value'].mean().reset_index()
+            # Get parameter columns (those with 'param_' prefix)
+            param_columns = [col for col in results_df.columns if col.startswith('param_')]
             
-            # Plot
-            x_values = range(len(grouped))  # Create numeric x positions
-            axes[i].bar(x_values, grouped['metric_value'])
-            axes[i].set_title(f'Effect of {param} on {metric}')
-            axes[i].set_xlabel(param)
-            axes[i].set_ylabel(metric)
+            if not param_columns:
+                self.logger.warning("No parameter columns found, cannot plot parameter importance")
+                return
+                
+            # Determine if we should maximize or minimize the metric
+            minimize_metrics = ['max_drawdown', 'volatility']
+            ascending = metric_name in minimize_metrics
             
-            # Set both x-ticks and x-tick labels
-            axes[i].set_xticks(x_values)  # Set tick positions
+            # Create a figure for the summary of top N best combinations
+            plt.figure(figsize=(12, 8))
             
-            # Rotate x-axis labels if there are many values
-            if len(grouped) > 5:
-                axes[i].set_xticklabels(grouped['param_value'].astype(str), rotation=45)
-            else:
-                axes[i].set_xticklabels(grouped['param_value'].astype(str))
-        
-        plt.tight_layout()
-        
-        # Save the figure
-        fig_path = os.path.join(self.output_dir, f'parameter_importance_{metric}.png')
-        plt.savefig(fig_path)
-        plt.close()
-        
-        print(f"Parameter importance plot saved to {fig_path}")
+            # Sort by the metric and get top N combinations
+            top_n = min(20, len(results_df))
+            try:
+                top_results = results_df.sort_values(by=metric_name, ascending=ascending).head(top_n)
+                
+                # Create bar chart of top results
+                ax = top_results[metric_name].plot(kind='bar', color='skyblue')
+                plt.title(f'Top {top_n} Parameter Combinations by {metric_name}')
+                plt.ylabel(metric_name)
+                plt.xlabel('Combination Index')
+                plt.tight_layout()
+                plt.savefig(os.path.join(plots_dir, f'top_{top_n}_combinations.png'))
+                plt.close()
+            except Exception as e:
+                self.logger.warning(f"Error creating top combinations plot: {str(e)}")
+                plt.close()
+            
+            # For each parameter, create a box plot showing its impact on the metric
+            for param in param_columns:
+                param_name = param[6:]  # Remove 'param_' prefix
+                plt.figure(figsize=(10, 6))
+                
+                try:
+                    # Check if parameter is numeric or categorical
+                    if pd.api.types.is_numeric_dtype(results_df[param]):
+                        # For numeric parameters, create scatter plot
+                        plt.scatter(results_df[param], results_df[metric_name], alpha=0.6)
+                        plt.title(f'Impact of {param_name} on {metric_name}')
+                        plt.xlabel(param_name)
+                        plt.ylabel(metric_name)
+                        
+                        # Add trend line if there are enough data points
+                        if len(results_df) > 5:
+                            x_values = np.array(results_df[param].values.astype(float))
+                            y_values = np.array(results_df[metric_name].values.astype(float))
+                            z = np.polyfit(x_values, y_values, 1)
+                            p = np.poly1d(z)
+                            plt.plot(x_values, p(x_values), "r--", alpha=0.8)
+                    else:
+                        # For categorical parameters, create box plot
+                        sns.boxplot(x=param, y=metric_name, data=results_df)
+                        plt.title(f'Impact of {param_name} on {metric_name}')
+                        plt.xlabel(param_name)
+                        plt.ylabel(metric_name)
+                        plt.xticks(rotation=45)
+                    
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(plots_dir, f'param_impact_{param_name}.png'))
+                    plt.close()
+                except Exception as e:
+                    self.logger.warning(f"Error creating impact plot for {param_name}: {str(e)}")
+                    plt.close()
+            
+            # Create heatmap of parameter correlations with the metric
+            try:
+                # First, select only numeric columns
+                numeric_cols = [col for col in results_df.columns 
+                               if pd.api.types.is_numeric_dtype(results_df[col])]
+                
+                if len(numeric_cols) > 1:  # Need at least 2 numeric columns for correlation
+                    plt.figure(figsize=(12, 10))
+                    correlation = results_df[numeric_cols].corr()
+                    mask = np.triu(np.ones_like(correlation, dtype=bool))
+                    sns.heatmap(correlation, mask=mask, annot=True, cmap='coolwarm', 
+                               vmin=-1, vmax=1, center=0, square=True, linewidths=.5)
+                    plt.title('Parameter Correlation Matrix')
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(plots_dir, 'parameter_correlation.png'))
+                    plt.close()
+            except Exception as e:
+                self.logger.warning(f"Error creating correlation heatmap: {str(e)}")
+                plt.close()
+            
+            # Create parallel coordinates plot for top combinations
+            try:
+                # Make sure param_columns is not empty and top_results has rows
+                has_params = len(param_columns) > 1
+                has_results = isinstance(top_results, pd.DataFrame) and len(top_results) > 0
+                
+                if has_params and has_results:
+                    plt.figure(figsize=(15, 8))
+                    pd.plotting.parallel_coordinates(
+                        top_results[param_columns + [metric_name]].reset_index(), 
+                        metric_name, 
+                        colormap='viridis'
+                    )
+                    plt.title(f'Parallel Coordinates Plot for Top {top_n} Combinations')
+                    plt.grid(True)
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(plots_dir, 'parallel_coordinates.png'))
+                    plt.close()
+            except Exception as e:
+                self.logger.warning(f"Error creating parallel coordinates plot: {str(e)}")
+                plt.close()
+            
+            self.logger.info(f"Parameter importance plots saved to {plots_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Error creating parameter importance plots: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def _extract_metrics_from_results(self, results):
         """
-        Extract performance metrics directly from the results dictionary.
+        Extract specific metrics from backtest results.
         
         Args:
-            results (dict): Dictionary of backtest results.
+            results (dict): The backtest results
             
         Returns:
-            dict: Dictionary of performance metrics.
+            dict: The extracted metrics
         """
-        metrics = {}
+        extracted_metrics = {}
         
-        # Basic metrics
-        metrics['total_return'] = results.get('total_return', 0)
-        metrics['alpha'] = results.get('alpha', 0)
-        metrics['benchmark_return'] = results.get('benchmark_return', 0)
-        
-        # Calculate Sharpe ratio if we have equity curve data
-        equity_curve = results.get('equity_curve', [])
-        if equity_curve:
-            # Convert to DataFrame
-            equity_df = pd.DataFrame(equity_curve)
-            if 'Date' in equity_df.columns and 'Value' in equity_df.columns:
-                equity_df['Date'] = pd.to_datetime(equity_df['Date'])
-                equity_df.set_index('Date', inplace=True)
+        if not results or not isinstance(results, dict):
+            self.logger.error("No valid results to extract metrics from")
+            return extracted_metrics
+            
+        try:
+            # Extract basic metrics directly from results
+            for metric in ['total_return', 'sharpe_ratio', 'calmar_ratio']:
+                if metric in results:
+                    extracted_metrics[metric] = results[metric]
+                elif metric == 'sharpe_ratio' and 'sharpe_ratio' not in results:
+                    # Calculate Sharpe ratio if not provided directly
+                    returns = results.get('returns', None)
+                    if returns is not None and len(returns) > 0:
+                        try:
+                            sharpe = self._calculate_sharpe_ratio(returns)
+                            extracted_metrics['sharpe_ratio'] = sharpe
+                        except Exception as e:
+                            self.logger.warning(f"Could not calculate Sharpe ratio: {str(e)}")
+                elif metric == 'volatility' and 'volatility' not in results:
+                    # Calculate volatility if not provided directly
+                    returns = results.get('returns', None)
+                    if returns is not None and len(returns) > 0:
+                        try:
+                            vol = self._calculate_volatility(returns)
+                            extracted_metrics['volatility'] = vol
+                        except Exception as e:
+                            self.logger.warning(f"Could not calculate volatility: {str(e)}")
+                elif metric == 'calmar_ratio' and 'calmar_ratio' not in results:
+                    # Calculate Calmar ratio if not provided directly
+                    returns = results.get('returns', None)
+                    if returns is not None and len(returns) > 0:
+                        try:
+                            calmar = self._calculate_calmar_ratio(returns)
+                            extracted_metrics['calmar_ratio'] = calmar
+                        except Exception as e:
+                            self.logger.warning(f"Could not calculate Calmar ratio: {str(e)}")
+                            
+            # Extract from metrics dictionary if available and original extraction didn't succeed
+            if 'metrics' in results and isinstance(results['metrics'], dict):
+                metrics_dict = results['metrics']
+                for metric in ['total_return', 'sharpe_ratio', 'calmar_ratio']:
+                    if metric not in extracted_metrics and metric in metrics_dict:
+                        extracted_metrics[metric] = metrics_dict[metric]
+            
+            # Extract from stats dictionary if available and original extraction didn't succeed
+            if 'stats' in results and isinstance(results['stats'], dict):
+                stats_dict = results['stats']
+                for metric in ['total_return', 'sharpe_ratio', 'calmar_ratio']:
+                    if metric not in extracted_metrics and metric in stats_dict:
+                        extracted_metrics[metric] = stats_dict[metric]
+                        
+            # Calculate average trade duration
+            if 'trades' in results and isinstance(results['trades'], pd.DataFrame) and not results['trades'].empty:
+                try:
+                    trades_df = results['trades']
+                    trades_df['duration'] = (pd.to_datetime(trades_df['exit_time']) - 
+                                           pd.to_datetime(trades_df['entry_time']))
+                    avg_duration = trades_df['duration'].mean()
+                    if pd.notna(avg_duration):
+                        extracted_metrics['avg_trade_duration'] = avg_duration.total_seconds() / 86400  # in days
+                except Exception as e:
+                    self.logger.warning(f"Could not calculate average trade duration: {str(e)}")
+            
+            # Default metrics if none were extracted
+            if not extracted_metrics:
+                self.logger.warning("No metrics could be extracted from results, adding default metrics")
                 
-                # Calculate daily returns
-                equity_df['Return'] = equity_df['Value'].pct_change().dropna()
+                # Check if there are any returns or equity values
+                returns = results.get('returns', None)
+                equity = results.get('equity', None)
                 
-                # Calculate Sharpe ratio (annualized)
-                if len(equity_df) > 1 and equity_df['Return'].std() > 0:
-                    sharpe = equity_df['Return'].mean() / equity_df['Return'].std() * np.sqrt(252)
-                    metrics['sharpe_ratio'] = sharpe
-                else:
-                    metrics['sharpe_ratio'] = 0
-        
-        # Add other metrics if available
-        if hasattr(results, 'get'):
-            for key in ['max_drawdown', 'win_rate', 'profit_factor']:
-                if key in results:
-                    metrics[key] = results[key]
-        
-        return metrics
+                if returns is not None and len(returns) > 0:
+                    # Add some default metrics based on returns
+                    extracted_metrics['total_return'] = float(returns.iloc[-1] if isinstance(returns, pd.Series) else returns[-1])
+                elif equity is not None and len(equity) > 0:
+                    # Calculate return from equity
+                    start_equity = equity[0] if isinstance(equity, list) else equity.iloc[0]
+                    end_equity = equity[-1] if isinstance(equity, list) else equity.iloc[-1]
+                    if start_equity > 0:
+                        extracted_metrics['total_return'] = (end_equity / start_equity) - 1.0
+            
+            # Convert numpy and pandas types to Python native types
+            for key, value in list(extracted_metrics.items()):
+                if isinstance(value, (np.integer, np.floating)):
+                    extracted_metrics[key] = float(value)
+                elif isinstance(value, pd.Series):
+                    extracted_metrics[key] = float(value.iloc[-1])
+                elif isinstance(value, pd.Timestamp):
+                    extracted_metrics[key] = value.isoformat()
+                elif isinstance(value, datetime):
+                    extracted_metrics[key] = value.isoformat()
+            
+            return extracted_metrics
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting metrics: {str(e)}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return extracted_metrics
 
-    def run(self):
+    def _run_single_backtest(self, params):
         """
-        Run the optimization process.
+        Run a single backtest with the given parameters.
+        
+        Args:
+            params (dict): Dictionary of parameters for the backtest
+            
+        Returns:
+            dict: Results of the backtest
+        """
+        try:
+            # Create a parameter directory for this run
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            param_dir = os.path.join(self.output_dir, f"param_set_{timestamp}")
+            os.makedirs(param_dir, exist_ok=True)
+            
+            # Run backtest with these parameters
+            self.logger.debug(f"Running backtest with parameters: {params}")
+            
+            results = run_backtest(
+                strategy_name=self.strategy_name,
+                tickers=self.tickers,
+                parameters=params,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                output_dir=param_dir,
+                initial_capital=self.initial_capital,
+                commission=self.commission,
+                data_dir=self.data_dir,
+                plot=False  # Don't generate plots for individual parameter trials
+            )
+            
+            # Save parameters to file
+            params_file = os.path.join(param_dir, "parameters.txt")
+            with open(params_file, 'w') as f:
+                f.write(f"Parameter Set for {self.strategy_name}\n")
+                f.write(f"Testing period: {self.start_date} to {self.end_date}\n\n")
+                f.write("Parameters:\n")
+                for param, value in params.items():
+                    f.write(f"  {param}: {value}\n")
+                f.write(f"\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            
+            # Log basic results
+            if results:
+                if 'metrics' in results and isinstance(results['metrics'], dict):
+                    for key, value in results['metrics'].items():
+                        self.logger.debug(f"Metric {key}: {value}")
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in backtest with params {params}: {str(e)}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return None
+
+    def run(self, metric_name='sharpe_ratio', ascending=False):
+        """
+        Run the optimization process to find the best strategy parameters.
+        
+        Args:
+            metric_name (str): The metric to optimize for (default: 'sharpe_ratio')
+            ascending (bool): Whether to sort the metric in ascending order (default: False)
+                              Set to False for metrics like sharpe_ratio, returns, where higher is better
+                              Set to True for metrics like drawdown, where lower is better
         
         Returns:
-            tuple: (best_parameters, trials_dataframe)
+            dict: The best parameters and their metrics
         """
+        self.logger.info(f"Starting optimization for {self.strategy_name}")
+        self.logger.info(f"Optimizing for metric: {metric_name}")
+        
+        # Get parameter grid
+        param_grid = self._get_param_grid()
+        if not param_grid:
+            self.logger.error("Failed to get parameter grid, aborting optimization")
+            self._create_error_log("Failed to get parameter grid")
+            return {"error": "Failed to get parameter grid", "parameters": {}}
+        
         # Generate parameter combinations
-        parameter_combinations = self._generate_parameter_combinations(self.param_grid, max_combinations=self.n_trials)
-        
-        # Log information about the optimization process
-        with open(self.log_file, 'a') as f:
-            f.write(f"Running optimization with {len(parameter_combinations)} parameter combinations\n")
-            f.write(f"Optimization metric: {self.optimization_metric}\n\n")
-        
-        # Run the optimization
-        best_params, trials_df = self.run_optimization(
-            metric=self.optimization_metric,
-            max_combinations=self.n_trials
-        )
-        
-        # Check if we have valid results
-        if best_params is None or trials_df is None or trials_df.empty:
-            print("Warning: No valid parameter combinations found during optimization")
+        parameter_combinations = self._generate_parameter_combinations(param_grid)
+        if not parameter_combinations:
+            self.logger.error("No parameter combinations generated, aborting optimization")
+            self._create_error_log("No parameter combinations generated")
+            return {"error": "No parameter combinations generated", "parameters": {}}
             
-            # Try to salvage results if we have any parameter combinations
-            if parameter_combinations and len(parameter_combinations) > 0:
-                # Use the first parameter combination as a fallback
-                best_params = parameter_combinations[0]
-                print(f"Using the first parameter combination as fallback: {best_params}")
+        self.logger.info(f"Generated {len(parameter_combinations)} parameter combinations")
+        
+        # Create results directory if it doesn't exist
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Run optimization
+        optimization_results = self.run_optimization(metric_name)
+        
+        # Check if optimization returned an error
+        if "error" in optimization_results:
+            error_msg = optimization_results.get('error', 'Unknown error')
+            self.logger.error(f"Optimization failed: {error_msg}")
+            
+            # Write summary file with error information
+            summary_file = os.path.join(self.output_dir, "optimization_summary.txt")
+            with open(summary_file, 'w') as f:
+                f.write(f"Optimization for {self.strategy_name} failed\n")
+                f.write(f"Error: {error_msg}\n")
+                f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Metric: {metric_name}\n")
+                f.write(f"Number of combinations attempted: {optimization_results.get('total', 0)}\n")
+                f.write(f"Number of successful combinations: {optimization_results.get('successful', 0)}\n")
+            
+            return {"error": error_msg, "parameters": {}}
+            
+        # Get results dataframe
+        results_df = optimization_results.get('results')
+        
+        # If no results dataframe or it's empty, return error
+        if results_df is None or not isinstance(results_df, pd.DataFrame) or results_df.empty:
+            error_msg = "Optimization produced no valid results"
+            self.logger.error(error_msg)
+            self._create_error_log(error_msg)
+            return {"error": error_msg, "parameters": {}}
+        
+        # Use the metric name that was actually used (might have been changed in run_optimization)
+        used_metric_name = optimization_results.get('metric', metric_name)
+        if used_metric_name != metric_name:
+            self.logger.info(f"Using metric '{used_metric_name}' instead of requested '{metric_name}'")
+            metric_name = used_metric_name
+        
+        # Check if best_params are already in the optimization results
+        if "best_params" in optimization_results and optimization_results["best_params"]:
+            best_params = optimization_results["best_params"]
+            self.logger.info(f"Using best parameters from optimization results: {best_params}")
+            
+            # Extract metrics for the best parameters if available
+            best_metrics = {}
+            if "metrics" in optimization_results:
+                best_metrics = optimization_results["metrics"]
+            
+            # Create a summary file
+            summary_file = os.path.join(self.output_dir, "optimization_summary.txt")
+            with open(summary_file, 'w') as f:
+                f.write(f"Optimization for {self.strategy_name} complete\n")
+                f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Metric: {metric_name}\n")
+                f.write(f"Number of combinations tested: {optimization_results.get('total', 0)}\n")
+                f.write(f"Number of successful combinations: {optimization_results.get('successful', 0)}\n\n")
+                f.write("Best Parameters:\n")
+                for param, value in best_params.items():
+                    f.write(f"  {param}: {value}\n")
                 
-                # Create a minimal trials dataframe if needed
-                if trials_df is None or trials_df.empty:
-                    if hasattr(self, 'results') and self.results:
-                        # Try to construct from existing results
-                        trials_df = pd.DataFrame(self.results)
+                if best_metrics:
+                    f.write("\nBest Metrics:\n")
+                    for metric, value in best_metrics.items():
+                        f.write(f"  {metric}: {value}\n")
+            
+            # Return best parameters and metrics
+            return {
+                "parameters": best_params,
+                "metrics": best_metrics,
+                "all_results": results_df
+            }
+        
+        # If best_params not in optimization_results, extract from DataFrame
+        try:
+            # Verify metric exists in DataFrame
+            if metric_name not in results_df.columns:
+                self.logger.warning(f"Metric '{metric_name}' not in results, checking for alternatives")
+                
+                # Try common alternative metrics
+                alternative_metrics = ['sharpe_ratio', 'total_return', 'profit_factor', 'calmar_ratio']
+                for alt_metric in alternative_metrics:
+                    if alt_metric in results_df.columns:
+                        self.logger.info(f"Using alternative metric '{alt_metric}'")
+                        metric_name = alt_metric
+                        break
+                else:
+                    # If no standard metrics found, use first numeric non-parameter column
+                    numeric_cols = [col for col in results_df.columns 
+                                   if pd.api.types.is_numeric_dtype(results_df[col]) 
+                                   and not col.startswith('param_')]
+                    
+                    if numeric_cols:
+                        metric_name = numeric_cols[0]
+                        self.logger.info(f"Using fallback metric '{metric_name}'")
                     else:
-                        # Create a minimal dataframe with just parameters
-                        trials_data = []
-                        for i, params in enumerate(parameter_combinations):
-                            param_data = {f'param_{k}': v for k, v in params.items()}
-                            param_data['trial_number'] = i
-                            param_data[self.optimization_metric] = 0.0  # Default metric value
-                            trials_data.append(param_data)
-                        trials_df = pd.DataFrame(trials_data)
+                        error_msg = "No usable metric columns found in results"
+                        self.logger.error(error_msg)
+                        self._create_error_log(error_msg)
+                        return {"error": error_msg, "parameters": {}}
+            
+            # Sort by metric value
+            # For metrics where lower is better (e.g., max_drawdown), use ascending=True
+            invert_metrics = ['max_drawdown', 'volatility', 'max_drawdown_pct', 'ulcer_index']
+            is_ascending = ascending
+            if metric_name in invert_metrics:
+                is_ascending = not ascending
+                self.logger.info(f"Inverting sort order for metric '{metric_name}'")
+            
+            # Sort the dataframe
+            sorted_df = results_df.sort_values(by=metric_name, ascending=is_ascending)
+            
+            # Extract parameter columns
+            param_columns = [col for col in sorted_df.columns if col.startswith('param_')]
+            
+            # If no param columns found, try to infer
+            if not param_columns:
+                self.logger.warning("No 'param_' columns found, trying to infer parameter columns")
+                # Exclude common metric columns
+                common_metrics = ['sharpe_ratio', 'total_return', 'calmar_ratio', 'volatility', 
+                                 'max_drawdown', 'win_rate', 'profit_factor']
+                param_columns = [col for col in sorted_df.columns if col not in common_metrics]
+                self.logger.info(f"Inferred parameter columns: {param_columns}")
+            
+            # Extract best parameters
+            if len(sorted_df) > 0 and param_columns:
+                best_row = sorted_df.iloc[0]
+                best_params = {}
+                
+                for col in param_columns:
+                    # Remove 'param_' prefix if present
+                    param_name = col[6:] if col.startswith('param_') else col
+                    best_params[param_name] = best_row[col]
+                
+                # Extract metrics for the best parameters
+                best_metrics = {}
+                metric_columns = [col for col in sorted_df.columns if col not in param_columns]
+                
+                for col in metric_columns:
+                    best_metrics[col] = best_row[col]
+                
+                # Log best parameters
+                self.logger.info(f"Best parameters found: {best_params}")
+                self.logger.info(f"Best {metric_name}: {best_row.get(metric_name, 'N/A')}")
+                
+                # Create a summary file
+                summary_file = os.path.join(self.output_dir, "optimization_summary.txt")
+                with open(summary_file, 'w') as f:
+                    f.write(f"Optimization for {self.strategy_name} complete\n")
+                    f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Metric: {metric_name}\n")
+                    f.write(f"Number of combinations tested: {len(parameter_combinations)}\n")
+                    f.write(f"Number of successful combinations: {len(sorted_df)}\n\n")
+                    f.write("Best Parameters:\n")
+                    for param, value in best_params.items():
+                        f.write(f"  {param}: {value}\n")
+                    
+                    if best_metrics:
+                        f.write("\nBest Metrics:\n")
+                        for metric, value in best_metrics.items():
+                            if not metric.startswith('param_'):
+                                f.write(f"  {metric}: {value}\n")
+                
+                # Save as JSON for easier programmatic access
+                best_result = {
+                    "strategy": self.strategy_name,
+                    "parameters": best_params,
+                    "metrics": best_metrics,
+                    "optimization_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                
+                # Save to JSON file
+                import json
+                best_params_file = os.path.join(self.output_dir, "best_parameters.json")
+                with open(best_params_file, 'w') as f:
+                    json.dump(best_result, f, indent=4)
+                
+                return {
+                    "parameters": best_params,
+                    "metrics": best_metrics,
+                    "all_results": sorted_df
+                }
+            else:
+                error_msg = "Could not determine best parameters from results"
+                self.logger.error(error_msg)
+                self._create_error_log(error_msg)
+                return {"error": error_msg, "parameters": {}}
         
-        # Save trial data to CSV
-        if trials_df is not None and not trials_df.empty:
-            trials_csv = os.path.join(self.output_dir, f"{self.strategy_name}_trials.csv")
-            trials_df.to_csv(trials_csv, index=False)
-            print(f"Trial data saved to {trials_csv}")
-        
-        return best_params, trials_df
+        except Exception as e:
+            error_msg = f"Error finding best parameters: {str(e)}"
+            self.logger.error(error_msg)
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            self._create_error_log(error_msg)
+            return {"error": error_msg, "parameters": {}}
 
 def main():
     parser = argparse.ArgumentParser(description="Optimize strategy parameters on historical data.")
@@ -833,7 +1514,7 @@ def main():
         end_date=args.end_date
     )
     
-    optimizer.run_optimization(
+    optimizer.run(
         metric=args.metric,
         max_combinations=args.max_combinations
     )

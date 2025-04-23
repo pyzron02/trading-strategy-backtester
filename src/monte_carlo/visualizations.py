@@ -526,7 +526,7 @@ class MonteCarloVisualizer:
                 [{"type": "xy"}, {"type": "xy"}],
                 [{"colspan": 2, "type": "table"}, None]
             ],
-            row_heights=[0.40, 0.35, 0.25],
+            row_heights=[0.45, 0.35, 0.20],  # Adjusted to give more space to the equity curve
             subplot_titles=(
                 f'{self.strategy_name}: Monte Carlo Equity Curves ({self.simulation_results.get("num_simulations", 0)} simulations)',
                 'Return Distribution', 'Maximum Drawdown Distribution',
@@ -798,21 +798,21 @@ class MonteCarloVisualizer:
         
         # Update layout to fit better on screen without scrolling
         fig.update_layout(
-            height=800,  # Optimized height to avoid scrolling
+            height=850,  # Increased height to accommodate legend
             width=1200,  # Standard width for most displays
-            margin=dict(l=40, r=40, t=80, b=40),  # Reduce margins
+            margin=dict(l=40, r=40, t=100, b=40),  # Increased top margin for legend
             showlegend=True,
             legend=dict(
-                orientation="v",
-                yanchor="top",
-                y=1.0,
-                xanchor="right",
-                x=1.0,
+                orientation="h",  # Horizontal orientation
+                yanchor="bottom",
+                y=1.02,  # Position above the chart
+                xanchor="center",
+                x=0.5,  # Center horizontally
                 bgcolor='rgba(255, 255, 255, 0.9)',
                 bordercolor='rgba(0, 0, 0, 0.3)',
                 borderwidth=1,
-                font=dict(size=11),
-                tracegroupgap=15
+                font=dict(size=10),  # Slightly smaller font
+                tracegroupgap=10  # Reduce spacing between legend groups
             ),
             hovermode='closest'
         )
@@ -832,20 +832,40 @@ class MonteCarloVisualizer:
         
         # Make legend items more concise for better display
         for trace in fig.data:
-            if trace.name and "Original Equity Curve" in trace.name:
-                trace.name = "Original"
-            elif trace.name and "Optimized Equity Curve" in trace.name:
-                trace.name = "Optimized"
-            elif trace.name and "Median Simulation" in trace.name:
-                trace.name = "Median"
-            elif trace.name and "Confidence Interval" in trace.name:
-                trace.name = f"{self.confidence_level*100:.0f}% Confidence"
-            elif trace.name and "Original Max Drawdown" in trace.name:
-                trace.name = "Original DD"
-            elif trace.name and "Mean Max Drawdown" in trace.name:
-                trace.name = "Mean DD"
-            elif trace.name and "Worst Drawdown" in trace.name:
-                trace.name = "Worst DD"
+            if hasattr(trace, 'name'):
+                if trace.name and "Original Equity Curve" in trace.name:
+                    trace.name = "Original"
+                elif trace.name and "Optimized Equity Curve" in trace.name:
+                    trace.name = "Optimized"
+                elif trace.name and "Median Simulation" in trace.name:
+                    trace.name = "Median"
+                elif trace.name and "Confidence Interval" in trace.name:
+                    trace.name = f"{self.confidence_level*100:.0f}% Confidence"
+                elif trace.name and "Original Max Drawdown" in trace.name:
+                    trace.name = "Original DD"
+                elif trace.name and "Mean Max Drawdown" in trace.name:
+                    trace.name = "Mean DD"
+                elif trace.name and "Worst Drawdown" in trace.name:
+                    trace.name = "Worst DD"
+                elif trace.name and "Original: " in trace.name:
+                    # Keep the percentage value but with shorter label
+                    pct_value = trace.name.split(": ")[1] if ": " in trace.name else ""
+                    trace.name = f"Original: {pct_value}"
+                elif trace.name and "Mean: " in trace.name:
+                    # Keep the percentage value but with shorter label
+                    pct_value = trace.name.split(": ")[1] if ": " in trace.name else ""
+                    trace.name = f"Mean: {pct_value}"
+                elif trace.name and "VaR: " in trace.name:
+                    # Keep the percentage value but with shorter label
+                    pct_value = trace.name.split(": ")[1] if ": " in trace.name else ""
+                    trace.name = f"VaR: {pct_value}"
+                elif trace.name and "Worst: " in trace.name:
+                    # Keep the percentage value but with shorter label
+                    pct_value = trace.name.split(": ")[1] if ": " in trace.name else ""
+                    trace.name = f"Worst: {pct_value}"
+                elif trace.name == "Return Distribution" or trace.name == "Drawdown Distribution":
+                    # These can remain as is - they don't appear in the main legend
+                    pass
         
         # Save or show the plot
         if save and self.output_dir:

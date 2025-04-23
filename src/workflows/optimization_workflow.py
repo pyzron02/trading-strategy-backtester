@@ -257,10 +257,28 @@ def run_optimization_workflow(
         )
         
         # Run optimization
-        best_params, trials_df = optimizer.run()
+        result = optimizer.run()
+        
+        # Handle different return types from optimizer.run()
+        if isinstance(result, tuple) and len(result) == 2:
+            best_params, trials_df = result
+        elif isinstance(result, dict) and 'parameters' in result:
+            best_params = result.get('parameters', {})
+            trials_df = result.get('all_results', pd.DataFrame())
+        else:
+            best_params = None
+            trials_df = None
+            logger.error(f"Unexpected result type from optimizer.run(): {type(result)}")
         
         # Check if we have valid results
-        if best_params is None or trials_df is None or (isinstance(trials_df, pd.DataFrame) and trials_df.empty):
+        if best_params is None or trials_df is None:
+            valid_results = False
+        elif isinstance(trials_df, pd.DataFrame):
+            valid_results = not trials_df.empty
+        else:
+            valid_results = False
+            
+        if not valid_results:
             logger.error("Optimization failed to produce valid results")
             
             # Log workflow failure
@@ -302,6 +320,46 @@ def run_optimization_workflow(
             }
             
         # Ensure we have valid values in the optimization metric
+        if not isinstance(trials_df, pd.DataFrame):
+            logger.error(f"trials_df is not a DataFrame, it's a {type(trials_df)}")
+            
+            # Log workflow failure
+            print_workflow_log(
+                workflow_name="Optimization Workflow",
+                strategy_name=strategy_name,
+                tickers=tickers,
+                start_date=start_date,
+                end_date=end_date,
+                status="FAILED",
+                additional_info={"error": f"trials_df is not a DataFrame, it's a {type(trials_df)}"}
+            )
+            
+            return {
+                "status": "error",
+                "message": f"trials_df is not a DataFrame, it's a {type(trials_df)}",
+                "output_dir": output_dir
+            }
+            
+        if optimization_metric not in trials_df.columns:
+            logger.error(f"Optimization metric '{optimization_metric}' not found in results columns: {list(trials_df.columns)}")
+            
+            # Log workflow failure
+            print_workflow_log(
+                workflow_name="Optimization Workflow",
+                strategy_name=strategy_name,
+                tickers=tickers,
+                start_date=start_date,
+                end_date=end_date,
+                status="FAILED",
+                additional_info={"error": f"Optimization metric '{optimization_metric}' not found in results columns: {list(trials_df.columns)}"}
+            )
+            
+            return {
+                "status": "error",
+                "message": f"Optimization metric '{optimization_metric}' not found in results columns: {list(trials_df.columns)}",
+                "output_dir": output_dir
+            }
+            
         if trials_df[optimization_metric].isna().all():
             logger.error(f"All values for optimization metric '{optimization_metric}' are NaN")
             
@@ -331,14 +389,28 @@ def run_optimization_workflow(
         with open(best_params_file, "w") as f:
             json.dump(best_params, f, indent=4)
         
-        # Run backtest with best parameters
+        # Convert numerical parameters from numpy types to Python types and integers where needed
+        converted_params = {}
+        for key, value in best_params.items():
+            # Convert float parameters to int for parameters that likely need integers
+            if isinstance(value, (np.float64, np.float32, float)) and key in ['sma_period', 'max_positions']:
+                converted_params[key] = int(value)
+            elif isinstance(value, (np.float64, np.float32, np.int64, np.int32)):
+                # Convert numpy types to Python native types
+                converted_params[key] = value.item()
+            else:
+                converted_params[key] = value
+                
+        logger.info(f"Converting parameters for backtest: {best_params} -> {converted_params}")
+        
+        # Run backtest with converted best parameters
         backtest_result = run_backtest(
             strategy_name=strategy_name,
             tickers=tickers,
             start_date=start_date,
             end_date=end_date,
             output_dir=output_dir,
-            parameters=best_params,
+            parameters=converted_params,
             plot=plot,  # Use the plot parameter passed to the function
             initial_capital=initial_capital,
             commission=commission,
@@ -384,16 +456,21 @@ def run_optimization_workflow(
         
         # Safely calculate best value
         try:
-            if optimization_metric.startswith("max_drawdown"):
-                best_value = trials_df[optimization_metric].min()
+            # Make sure we have a valid DataFrame and column
+            if isinstance(trials_df, pd.DataFrame) and optimization_metric in trials_df.columns:
+                if optimization_metric.startswith("max_drawdown"):
+                    best_value = trials_df[optimization_metric].min()
+                else:
+                    best_value = trials_df[optimization_metric].max()
+                    
+                # Check if best_value is valid
+                if not pd.isna(best_value) and np.isfinite(best_value):
+                    results["trials_summary"]["best_value"] = best_value
+                else:
+                    logger.warning(f"Best value for {optimization_metric} is not valid: {best_value}")
+                    results["trials_summary"]["best_value"] = "N/A"
             else:
-                best_value = trials_df[optimization_metric].max()
-                
-            # Check if best_value is valid
-            if not pd.isna(best_value) and np.isfinite(best_value):
-                results["trials_summary"]["best_value"] = best_value
-            else:
-                logger.warning(f"Best value for {optimization_metric} is not valid: {best_value}")
+                logger.warning(f"Cannot calculate best value: trials_df is not a valid DataFrame or missing column {optimization_metric}")
                 results["trials_summary"]["best_value"] = "N/A"
         except Exception as e:
             logger.warning(f"Could not calculate best value for {optimization_metric}: {str(e)}")
@@ -401,7 +478,12 @@ def run_optimization_workflow(
         
         # Save trials dataframe
         trials_file = os.path.join(output_dir, "optimization_trials.csv")
-        trials_df.to_csv(trials_file, index=False)
+        if isinstance(trials_df, pd.DataFrame):
+            trials_df.to_csv(trials_file, index=False)
+        else:
+            logger.warning(f"Cannot save trials data to CSV: trials_df is not a DataFrame, it's a {type(trials_df)}")
+            # Create an empty CSV with column headers so downstream code doesn't break
+            pd.DataFrame(columns=['param_' + k for k in best_params.keys()] + [optimization_metric]).to_csv(trials_file, index=False)
         
         print_section("Optimization Results")
         logger.info(f"Best {optimization_metric}: {results['trials_summary']['best_value']}")

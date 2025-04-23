@@ -266,10 +266,21 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         if workflow_type in strategy_config:
             params.update(strategy_config[workflow_type])
             
-        # For complete workflow, pass monte_carlo config if available
-        if workflow_type == 'complete' and 'monte_carlo' in strategy_config:
-            params['monte_carlo_config'] = strategy_config['monte_carlo']
-            logger.info(f"Passing Monte Carlo configuration to complete workflow: {strategy_config['monte_carlo']}")
+        # For complete workflow, pass optimization and monte_carlo config if available
+        if workflow_type == 'complete':
+            # Pass optimization configuration if available
+            if 'optimization' in strategy_config:
+                # Copy optimization parameters to the main parameters
+                for key, value in strategy_config['optimization'].items():
+                    # Only add if not already set by the complete workflow parameters
+                    if key not in params:
+                        params[key] = value
+                logger.info(f"Passing optimization configuration to complete workflow: {strategy_config['optimization']}")
+                
+            # Pass monte_carlo configuration if available
+            if 'monte_carlo' in strategy_config:
+                params['monte_carlo_config'] = strategy_config['monte_carlo']
+                logger.info(f"Passing Monte Carlo configuration to complete workflow: {strategy_config['monte_carlo']}")
         
         # Add temp files list to parameters for cleanup
         params['_temp_files_to_cleanup'] = temp_files_to_cleanup

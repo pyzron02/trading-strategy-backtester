@@ -9,7 +9,8 @@
     "commission": 0.001,
     "plot": false,
     "enhanced_plots": true,
-    "verbose": false
+    "verbose": false,
+    "n_simulations": 1000
   },
   "strategies": {
     "MACrossover": {
@@ -17,15 +18,15 @@
         "fast_period": [5, 10, 15, 20],
         "slow_period": [30, 50, 100, 200],
         "position_size": [50, 100, 150],
-        "entry_threshold": [0.0, 0.01, 0.02],
-        "exit_threshold": [0.0, 0.01, 0.02]
+        "entry_threshold": [0.0, 0.01, 0.02, 0.05, 0.1, 0.2],
+        "exit_threshold": [0.0, 0.01, 0.02, 0.05, 0.1, 0.2]
       },
       "optimization": {
-        "n_trials": 50,
-        "optimization_metric": "sharpe_ratio"
+        "n_trials": 150,
+        "optimization_metric": "total_return"
       },
       "monte_carlo": {
-        "n_simulations": 200
+        "n_simulations": 1000
       }
     }
   }
