@@ -803,18 +803,16 @@ class MonteCarloVisualizer:
             margin=dict(l=40, r=40, t=80, b=40),  # Reduce margins
             showlegend=True,
             legend=dict(
-                orientation="v",  # Change to vertical orientation
+                orientation="v",
                 yanchor="top",
-                y=0.98,
+                y=1.0,
                 xanchor="right",
-                x=0.99,
-                bgcolor='rgba(255, 255, 255, 0.8)',
-                bordercolor='rgba(0, 0, 0, 0.2)',
+                x=1.0,
+                bgcolor='rgba(255, 255, 255, 0.9)',
+                bordercolor='rgba(0, 0, 0, 0.3)',
                 borderwidth=1,
-                font=dict(size=10),
-                itemsizing='constant',
-                itemwidth=30,
-                tracegroupgap=8  # Increase space between legend items
+                font=dict(size=11),
+                tracegroupgap=15
             ),
             hovermode='closest'
         )
@@ -828,6 +826,26 @@ class MonteCarloVisualizer:
         fig.update_yaxes(title_text='Equity', tickprefix='$', row=1, col=1)
         fig.update_yaxes(title_text='Frequency', row=2, col=1)
         fig.update_yaxes(title_text='Frequency', row=2, col=2)
+        
+        # Update subplot titles to be more concise
+        fig.update_annotations(font_size=12)
+        
+        # Make legend items more concise for better display
+        for trace in fig.data:
+            if trace.name and "Original Equity Curve" in trace.name:
+                trace.name = "Original"
+            elif trace.name and "Optimized Equity Curve" in trace.name:
+                trace.name = "Optimized"
+            elif trace.name and "Median Simulation" in trace.name:
+                trace.name = "Median"
+            elif trace.name and "Confidence Interval" in trace.name:
+                trace.name = f"{self.confidence_level*100:.0f}% Confidence"
+            elif trace.name and "Original Max Drawdown" in trace.name:
+                trace.name = "Original DD"
+            elif trace.name and "Mean Max Drawdown" in trace.name:
+                trace.name = "Mean DD"
+            elif trace.name and "Worst Drawdown" in trace.name:
+                trace.name = "Worst DD"
         
         # Save or show the plot
         if save and self.output_dir:
