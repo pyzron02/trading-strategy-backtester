@@ -803,18 +803,18 @@ class MonteCarloVisualizer:
             margin=dict(l=40, r=40, t=80, b=40),  # Reduce margins
             showlegend=True,
             legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="center",
-                x=0.5,
+                orientation="v",  # Change to vertical orientation
+                yanchor="top",
+                y=0.98,
+                xanchor="right",
+                x=0.99,
                 bgcolor='rgba(255, 255, 255, 0.8)',
                 bordercolor='rgba(0, 0, 0, 0.2)',
                 borderwidth=1,
                 font=dict(size=10),
                 itemsizing='constant',
                 itemwidth=30,
-                tracegroupgap=5
+                tracegroupgap=8  # Increase space between legend items
             ),
             hovermode='closest'
         )
