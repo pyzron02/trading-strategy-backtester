@@ -100,6 +100,7 @@ The configuration file uses JSON format with the following structure:
 | `n_trials` | Number of optimization trials | 50 |
 | `optimization_metric` | Metric to optimize | "sharpe_ratio" |
 | `max_combinations` | Maximum parameter combinations to test | null |
+| `keep_all_results` | Save results of all parameter configurations | false |
 
 #### Monte Carlo
 
@@ -115,12 +116,16 @@ The configuration file uses JSON format with the following structure:
 |-----------|-------------|---------|
 | `window_size` | Window size in trading days | 252 |
 | `step_size` | Step size in trading days | 63 |
+| `in_sample_ratio` | Ratio of in-sample data to the total window (0.0-1.0) | 0.7 |
 
 ## Example Files
 
-- `simple_backtest_config.json`: Basic backtest with a single strategy
-- `optimization_config.json`: Parameter optimization for multiple strategies
-- `multi_strategy_config.json`: Comprehensive analysis of multiple strategies
+- `simple_workflow_config.json`: Basic backtest with a single parameter set
+- `optimization_workflow_config.json`: Parameter optimization with grid search
+- `monte_carlo_workflow_config.json`: Monte Carlo simulations for risk analysis
+- `walkforward_workflow_config.json`: Walk-forward testing for robustness testing
+- `complete_config.json`: Comprehensive workflow that combines multiple analysis types
+- `auction_market_config.json`: Example configuration for the auction market strategy
 
 ## Standard Output Format
 

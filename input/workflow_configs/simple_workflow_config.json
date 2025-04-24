@@ -4,19 +4,22 @@
     "start_date": "2020-10-02",
     "end_date": "2023-12-31",
     "data_dir": "input",
-    "tickers": ["SPY", "NVDA", "TSLA", "PLTR"],
+    "tickers": ["SPY", "AAPL", "MSFT", "AMZN"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false
+    "plot": false,
+    "verbose": false
   },
   "strategies": {
-    "MACrossover": {
+    "AuctionMarket": {
       "parameters": {
-        "fast_period": 10,
-        "slow_period": 50,
+        "param_preset": "default",
+        "value_area": 0.7,
+        "use_vwap": true,
         "position_size": 100,
-        "entry_threshold": 0.0,
-        "exit_threshold": 0.0
+        "risk_percent": 0.01,
+        "use_atr_sizing": true,
+        "atr_period": 14
       }
     }
   }

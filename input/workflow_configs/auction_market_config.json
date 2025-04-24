@@ -41,7 +41,7 @@
                 "max_combinations": null
             },
             "monte_carlo": {
-                "n_simulations": 100,
+                "n_simulations": 1000,
                 "keep_permuted_data": false
             }
         }
