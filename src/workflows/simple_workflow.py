@@ -11,6 +11,8 @@ import pandas as pd
 from typing import Dict, List, Any, Optional, Union
 import datetime
 import uuid
+import logging
+import tempfile
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +28,8 @@ from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
     logger, logging_system, print_workflow_log, adapt_strategy_parameters,
-    setup_output_dir_logging, remove_output_dir_logging
+    setup_output_dir_logging, remove_output_dir_logging,
+    check_logs_for_errors, print_error_report
 )
 
 # Import engine components
@@ -258,6 +261,17 @@ def run_simple_workflow(
             logger.debug(f"Parameters: {strategy_params}")
         except Exception as e:
             logger.error(f"Error loading parameters from {param_file}: {str(e)}")
+            
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+            
             return {"status": "error", "message": f"Error loading parameters: {str(e)}"}
     
     # Override with any directly provided parameters
@@ -301,6 +315,16 @@ def run_simple_workflow(
                 status="FAILED",
                 additional_info={"error": error_msg}
             )
+            
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
             
             return {
                 "status": "error",
@@ -349,6 +373,16 @@ def run_simple_workflow(
                 additional_info={"error": error_msg}
             )
             
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+            
             return {
                 "status": "error", 
                 "message": error_msg,
@@ -384,6 +418,16 @@ def run_simple_workflow(
             status="FAILED",
             additional_info={"error": error_msg}
         )
+        
+        # Check logs for errors
+        logger.info("Checking logs for errors...")
+        error_logs = check_logs_for_errors(output_dir)
+        
+        if error_logs:
+            # Generate error report and save to file
+            error_report_path = os.path.join(output_dir, "error_report.txt")
+            print_error_report(error_logs, error_report_path)
+            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
         
         return {
             "status": "error",
@@ -425,11 +469,46 @@ def run_simple_workflow(
     )
     
     # Clean up temporary files
+    files_to_delete = []
+    files_skipped = []
+    
     for temp_file in _temp_files_to_cleanup:
+        if os.path.exists(temp_file):
+            # Skip files in the workflow_configs directory
+            if "workflow_configs" in temp_file:
+                files_skipped.append(temp_file)
+            else:
+                files_to_delete.append(temp_file)
+    
+    if files_skipped:
+        logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
+        for file_path in files_skipped:
+            logger.debug(f"Preserved file: {file_path}")
+    
+    for temp_file in files_to_delete:
         try:
             os.remove(temp_file)
             logger.info(f"Cleaned up temporary file: {temp_file}")
         except Exception as e:
             logger.warning(f"Error cleaning up temporary file: {str(e)}")
+    
+    # Check logs for errors
+    logger.info("Checking logs for errors...")
+    error_logs = check_logs_for_errors(output_dir)
+    
+    if error_logs:
+        # Add log errors to the results
+        workflow_result["log_errors"] = {
+            "count": sum(len(errors) for errors in error_logs.values()),
+            "files": len(error_logs)
+        }
+        
+        # Generate error report and save to file
+        error_report_path = os.path.join(output_dir, "error_report.txt")
+        print_error_report(error_logs, error_report_path)
+        logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+    else:
+        logger.info("No errors found in logs.")
+        workflow_result["log_errors"] = {"count": 0, "files": 0}
     
     return workflow_result 

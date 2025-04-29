@@ -9,7 +9,7 @@ import json
 import pandas as pd
 import numpy as np
 import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +24,8 @@ if project_root not in sys.path:
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
-    logger, logging_system, print_workflow_log
+    logger, logging_system, print_workflow_log,
+    check_logs_for_errors, print_error_report
 )
 
 # Import engine components
@@ -48,6 +49,7 @@ def run_walkforward_workflow(
     verbose: bool = False,
     initial_capital: float = 100000.0,
     commission: float = 0.001,
+    _temp_files_to_cleanup: Optional[List[str]] = None,
     data_dir: str = "input",
     plot: bool = False  # Whether to generate plots during backtests
 ) -> Dict[str, Any]:
@@ -79,6 +81,11 @@ def run_walkforward_workflow(
     # Allow strategy parameter as alternative to strategy_name for compatibility
     if strategy_name is None and strategy is not None:
         strategy_name = strategy
+        
+    # Track temporary files if not already tracking
+    if _temp_files_to_cleanup is None:
+        _temp_files_to_cleanup = []
+        
     # Log workflow start
     additional_info = {
         "output_dir": output_dir,
@@ -111,13 +118,79 @@ def run_walkforward_workflow(
         param_grid_file = param_file
         logger.info(f"Using parameter grid file: {param_grid_file}")
     else:
-        # Try to find parameter grid file in the default location
-        param_grid_file = os.path.join(
-            project_root, "input", "parameter_grids", f"{strategy_name}_grid.json"
-        )
-        if not os.path.exists(param_grid_file):
-            logger.error(f"Parameter grid file not found for {strategy_name}")
-            return {"status": "error", "message": "Parameter grid file not found"}
+        # Try to find parameter grid file in multiple potential locations
+        strategy_snake_case = ''.join(['_'+c.lower() if c.isupper() else c.lower() for c in strategy_name]).lstrip('_')
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # List of possible locations to search
+        possible_locations = [
+            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name.lower()}_grid.json"),
+            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name}_grid.json"),
+            os.path.join(project_root, "input", "parameter_grids", f"{strategy_snake_case}_grid.json"),
+            os.path.join(project_root, "input", f"{strategy_name.lower()}_grid.json"),
+            os.path.join(project_root, "input", f"{strategy_name}_grid.json"),
+        ]
+        
+        # Add special case paths for specific strategies
+        if strategy_name == "MACrossover":
+            possible_locations.extend([
+                os.path.join(project_root, "input", "parameter_grids", "ma_crossover_grid.json"),
+                os.path.join(project_root, "input", "ma_crossover_grid.json"),
+            ])
+        
+        # Try to find the grid file
+        param_grid_file = None
+        for location in possible_locations:
+            if os.path.exists(location):
+                param_grid_file = location
+                logger.info(f"Found parameter grid file: {location}")
+                break
+        
+        # If no grid file is found, create one
+        if not param_grid_file:
+            logger.warning(f"No parameter grid file found for {strategy_name}. Creating a temporary one.")
+            
+            # Get default parameters from the strategy parameter file
+            strategy_param_file = find_strategy_param_file(strategy_name)
+            if strategy_param_file:
+                try:
+                    with open(strategy_param_file, 'r') as f:
+                        params = json.load(f)
+                    
+                    # Create a simple grid with some variations
+                    param_grid = {}
+                    for key, value in params.items():
+                        if isinstance(value, (int, float)) and key not in ['initial_capital', 'commission']:
+                            # Create a range of values around the default
+                            if value == 0:
+                                param_grid[key] = [0, 1, 2, 5, 10]
+                            else:
+                                param_grid[key] = [
+                                    value * 0.5,
+                                    value * 0.75,
+                                    value,
+                                    value * 1.25,
+                                    value * 1.5
+                                ]
+                    
+                    # Ensure directory exists
+                    os.makedirs(os.path.join(project_root, "input", "parameter_grids"), exist_ok=True)
+                    
+                    # Save the grid to a file
+                    param_grid_file = os.path.join(project_root, "input", "parameter_grids", f"{strategy_name.lower()}_grid_{timestamp}.json")
+                    with open(param_grid_file, 'w') as f:
+                        json.dump(param_grid, f, indent=4)
+                    
+                    logger.info(f"Created temporary parameter grid file: {param_grid_file}")
+                    
+                    # Track for cleanup
+                    _temp_files_to_cleanup.append(param_grid_file)
+                except Exception as e:
+                    logger.error(f"Error creating parameter grid: {e}")
+                    return {"status": "error", "message": f"Parameter grid file not found and could not create one: {str(e)}"}
+            else:
+                logger.error(f"Error: Parameter grid file not found for {strategy_name} and no default parameters available")
+                return {"status": "error", "message": "Parameter grid file not found and no default parameters available"}
     
     print_section("Running Walk-Forward Analysis")
     logger.info(f"Strategy: {strategy_name}")
@@ -178,8 +251,64 @@ def run_walkforward_workflow(
             combined_equity_curve = pd.DataFrame()
         if not isinstance(combined_trade_log, pd.DataFrame):
             combined_trade_log = pd.DataFrame()
+            
+        # Add this period's results since run_test() doesn't properly populate periods
+        if 'in_sample_results' in results and 'out_sample_results' in results:
+            period_results.append({
+                "in_sample": {
+                    "start_date": in_sample_start,
+                    "end_date": in_sample_end
+                },
+                "out_sample": {
+                    "start_date": out_sample_start,
+                    "end_date": out_sample_end,
+                    "metrics": results.get('out_sample_results', {})
+                },
+                "best_params": parameters
+            })
         
-        for period in results["periods"]:
+        # Check if the comparison DataFrame is available from the results
+        comparison_data = None
+        if 'comparison' in results and isinstance(results['comparison'], pd.DataFrame) and not results['comparison'].empty:
+            comparison_data = results['comparison']
+            logger.info("Found performance comparison data in results")
+            
+            # Save a copy of the comparison data with proper formatting
+            comparison_file = os.path.join(output_dir, 'performance_comparison_formatted.csv')
+            
+            # Format the values for display (convert decimals to percentages)
+            formatted_comparison = comparison_data.copy()
+            for col in ['In-Sample', 'Out-of-Sample', 'Difference']:
+                formatted_comparison[col] = formatted_comparison[col].apply(
+                    lambda x: f"{x*100:.2f}%" if isinstance(x, (int, float)) else x)
+            
+            formatted_comparison.to_csv(comparison_file)
+            logger.info(f"Saved formatted performance comparison to {comparison_file}")
+        else:
+            logger.warning("No performance comparison data found in results")
+        
+        # Look for the summary file which contains extracted metrics
+        summary_file = results.get('summary_file')
+        if summary_file and os.path.exists(summary_file):
+            logger.info(f"Found summary file: {summary_file}")
+            
+            # Extract key metrics from the summary file for the final report
+            try:
+                with open(summary_file, 'r') as f:
+                    summary_content = f.read()
+                    
+                # Include summary in workflow summary
+                summary_section = "\nWalk Forward Analysis Summary:\n"
+                summary_section += "-----------------------------\n"
+                summary_section += summary_content
+                
+                # Create a workflow summary file
+                with open(os.path.join(output_dir, 'workflow_summary.txt'), 'w') as f:
+                    f.write(summary_section)
+            except Exception as e:
+                logger.error(f"Error processing summary file: {e}")
+        
+        for period in results.get("periods", []):
             # Add period results
             period_results.append({
                 "in_sample": {
@@ -393,17 +522,81 @@ def run_walkforward_workflow(
         
         logger.info(f"\nAnalyzed {len(period_results)} windows")
         
-        # Save summary report
-        summary_file = os.path.join(output_dir, "walkforward_summary.txt")
-        save_results_summary(results, summary_file, "Walk-Forward Analysis Results")
+        # Save combined equity curve and trade log
+        if not combined_equity_curve.empty:
+            combined_equity_path = os.path.join(output_dir, "combined_equity_curve.csv")
+            combined_equity_curve.to_csv(combined_equity_path)
+            logger.info(f"Combined equity curve saved to {combined_equity_path}")
         
-        # Save combined equity curve
-        if isinstance(combined_equity_curve, pd.DataFrame) and not combined_equity_curve.empty:
-            combined_equity_curve.to_csv(os.path.join(output_dir, "combined_equity_curve.csv"))
+        if not combined_trade_log.empty:
+            combined_trades_path = os.path.join(output_dir, "combined_trade_log.csv")
+            combined_trade_log.to_csv(combined_trades_path)
+            logger.info(f"Combined trade log saved to {combined_trades_path}")
         
-        # Save combined trade log
-        if isinstance(combined_trade_log, pd.DataFrame) and not combined_trade_log.empty:
-            combined_trade_log.to_csv(os.path.join(output_dir, "combined_trade_log.csv"))
+        # Save the performance metrics to a CSV file
+        performance_metrics = {
+            "total_return": overall_metrics.get("total_return", 0.0) if overall_metrics else 0.0,
+            "sharpe_ratio": overall_metrics.get("sharpe_ratio", 0.0) if overall_metrics else 0.0, 
+            "max_drawdown": overall_metrics.get("max_drawdown", 0.0) if overall_metrics else 0.0,
+        }
+        
+        # Read performance comparison data if available
+        if os.path.exists(os.path.join(output_dir, "performance_comparison.csv")):
+            try:
+                comparison_df = pd.read_csv(os.path.join(output_dir, "performance_comparison.csv"), index_col=0)
+                if not comparison_df.empty:
+                    for idx, row in comparison_df.iterrows():
+                        metric_name = idx.lower().replace(' ', '_')
+                        performance_metrics[f"{metric_name}_in_sample"] = row["In-Sample"]
+                        performance_metrics[f"{metric_name}_out_sample"] = row["Out-of-Sample"]
+                        performance_metrics[f"{metric_name}_difference"] = row["Difference"]
+                        performance_metrics[f"{metric_name}_degradation"] = row["Degradation %"]
+                    
+                    # Update the overall metrics with the out-of-sample values
+                    # These are more reliable than the ones calculated from the combined equity curve
+                    if "total_return" in comparison_df.index:
+                        performance_metrics["total_return"] = comparison_df.loc["total_return", "Out-of-Sample"]
+            except Exception as e:
+                logger.error(f"Error reading performance comparison: {e}")
+        
+        # Create summary dictionary with all results
+        summary = {
+            "strategy": strategy_name,
+            "tickers": tickers,
+            "start_date": start_date,
+            "end_date": end_date,
+            "period_results": period_results,
+            "overall_metrics": overall_metrics or {},
+            "performance_metrics": performance_metrics,
+            "parameters": parameters or {},
+            "window_size": window_size,
+            "step_size": step_size,
+            "output_dir": output_dir,
+            "status": "success"
+        }
+        
+        # Save summary
+        summary_path = os.path.join(output_dir, "walkforward_summary.json")
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2, default=str)
+        
+        # Generate and save results summary
+        results_for_summary = {
+            "strategy_name": strategy_name,
+            "parameters": parameters or {},  # Ensure parameters is a dict even if None
+            "dates": {
+                "start_date": start_date,
+                "end_date": end_date
+            },
+            "metrics": performance_metrics,
+            "notes": f"Walk-forward analysis with {len(period_results)} periods"
+        }
+        
+        summary_text = save_results_summary(
+            results=results_for_summary,
+            filename=os.path.join(output_dir, "walkforward_summary.txt"),
+            title=f"Walk-Forward Analysis: {strategy_name}"
+        )
         
         logger.info(f"\nDetailed results saved to: {output_dir}")
         
@@ -413,8 +606,8 @@ def run_walkforward_workflow(
         
         # Log workflow completion
         completion_info = {
-            "total_return": f"{overall_metrics.get('total_return', 0.0):.2%}",
-            "win_rate": f"{overall_metrics.get('win_rate', 0.0):.2%}",
+            "total_return": f"{overall_metrics.get('total_return', 0.0) if overall_metrics else 0.0:.2%}",
+            "win_rate": f"{overall_metrics.get('win_rate', 0.0) if overall_metrics else 0.0:.2%}",
             "output_dir": output_dir
         }
         print_workflow_log(
@@ -427,6 +620,49 @@ def run_walkforward_workflow(
             additional_info=completion_info
         )
         
+        # Clean up temporary files
+        files_to_delete = []
+        files_skipped = []
+        
+        for temp_file in _temp_files_to_cleanup:
+            if os.path.exists(temp_file):
+                # Skip files in the workflow_configs directory
+                if "workflow_configs" in temp_file:
+                    files_skipped.append(temp_file)
+                else:
+                    files_to_delete.append(temp_file)
+        
+        if files_skipped:
+            logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
+            for file_path in files_skipped:
+                logger.debug(f"Preserved file: {file_path}")
+        
+        for temp_file in files_to_delete:
+            try:
+                os.remove(temp_file)
+                logger.info(f"Cleaned up temporary file: {temp_file}")
+            except Exception as e:
+                logger.warning(f"Error cleaning up temporary file {temp_file}: {str(e)}")
+        
+        # Check logs for errors
+        logger.info("Checking logs for errors...")
+        error_logs = check_logs_for_errors(output_dir)
+        
+        if error_logs:
+            # Add log errors to the results
+            summary["log_errors"] = {
+                "count": sum(len(errors) for errors in error_logs.values()),
+                "files": len(error_logs)
+            }
+            
+            # Generate error report and save to file
+            error_report_path = os.path.join(output_dir, "error_report.txt")
+            print_error_report(error_logs, error_report_path)
+            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+        else:
+            logger.info("No errors found in logs.")
+            summary["log_errors"] = {"count": 0, "files": 0}
+        
         return {
             "status": "success",
             "results": results,
@@ -437,4 +673,24 @@ def run_walkforward_workflow(
         error_trace = traceback.format_exc()
         logger.error(f"Error in run_walkforward_workflow: {e}")
         logger.error(f"Traceback: {error_trace}")
+        
+        # Clean up temporary files even on error
+        for temp_file in _temp_files_to_cleanup:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logger.info(f"Cleaned up temporary file: {temp_file}")
+            except Exception as cleanup_error:
+                logger.warning(f"Error cleaning up temporary file {temp_file}: {str(cleanup_error)}")
+        
+        # Check logs for errors
+        logger.info("Checking logs for errors...")
+        error_logs = check_logs_for_errors(output_dir)
+        
+        if error_logs:
+            # Generate error report and save to file
+            error_report_path = os.path.join(output_dir, "error_report.txt")
+            print_error_report(error_logs, error_report_path)
+            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+        
         return {"status": "error", "message": str(e)} 

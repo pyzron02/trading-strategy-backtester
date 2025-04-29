@@ -22,7 +22,10 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Import workflow modules
-from workflows.workflow_utils import logger, logging_system, find_strategy_param_file
+from workflows.workflow_utils import (
+    logger, logging_system, find_strategy_param_file,
+    check_logs_for_errors, print_error_report
+)
 from workflows.simple_workflow import run_simple_workflow, ensure_data_available
 from workflows.optimization_workflow import run_optimization_workflow
 from workflows.monte_carlo_workflow import run_monte_carlo_workflow
@@ -126,28 +129,73 @@ def run_unified_workflow(workflow_type, **kwargs):
     # Log nested status for debugging
     logger.debug(f"Running {workflow_type} workflow, nested={is_nested}")
     
+    # Get the output directory from kwargs
+    output_dir = kwargs.get('output_dir')
+    
+    # Add _temp_files_to_cleanup back to kwargs
+    kwargs['_temp_files_to_cleanup'] = temp_files_to_cleanup
+    
     try:
         if workflow_type == "simple":
-            from workflows.simple_workflow import run_simple_workflow
-            return run_simple_workflow(**kwargs)
+            result = run_simple_workflow(**kwargs)
         elif workflow_type == "optimization":
-            from workflows.optimization_workflow import run_optimization_workflow
-            return run_optimization_workflow(**kwargs)
+            result = run_optimization_workflow(**kwargs)
         elif workflow_type == "monte_carlo":
-            from workflows.monte_carlo_workflow import run_monte_carlo_workflow
-            return run_monte_carlo_workflow(**kwargs)
+            result = run_monte_carlo_workflow(**kwargs)
         elif workflow_type == "complete":
-            from workflows.complete_workflow import run_complete_workflow
-            return run_complete_workflow(**kwargs)
+            result = run_complete_workflow(**kwargs)
         elif workflow_type == "walkforward":
-            from workflows.walkforward_workflow import run_walkforward_workflow
-            return run_walkforward_workflow(**kwargs)
+            result = run_walkforward_workflow(**kwargs)
         else:
             logger.error(f"Unknown workflow type: {workflow_type}")
             return {"status": "error", "message": f"Unknown workflow type: {workflow_type}"}
+        
+        # If output directory exists and we have a valid result, check for log errors
+        if output_dir and os.path.exists(output_dir) and result.get("status") == "success":
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Add log errors to the results
+                if "results" in result:
+                    result["results"]["log_errors"] = {
+                        "count": sum(len(errors) for errors in error_logs.values()),
+                        "files": len(error_logs)
+                    }
+                else:
+                    result["log_errors"] = {
+                        "count": sum(len(errors) for errors in error_logs.values()),
+                        "files": len(error_logs)
+                    }
+                
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+            else:
+                logger.info("No errors found in logs.")
+                if "results" in result:
+                    result["results"]["log_errors"] = {"count": 0, "files": 0}
+                else:
+                    result["log_errors"] = {"count": 0, "files": 0}
+        
+        return result
     except Exception as e:
-        logger.error(f"Error in {workflow_type} workflow: {str(e)}")
-        logger.exception(e)
+        logger.exception(f"Error in {workflow_type} workflow: {str(e)}")
+        
+        # Check logs for errors even on exception
+        if output_dir and os.path.exists(output_dir):
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+        
         return {"status": "error", "message": f"Error in {workflow_type} workflow: {str(e)}"}
 
 def load_config_file(config_file_path: str) -> Dict[str, Any]:
@@ -338,12 +386,28 @@ def cleanup_temporary_files(temp_files):
     if not temp_files:
         return
     
-    logger.info(f"Cleaning up {len(temp_files)} temporary parameter/grid files")
+    # Filter out any files from workflow_configs directory
+    files_to_delete = []
+    files_skipped = []
+    
     for file_path in temp_files:
+        if os.path.exists(file_path):
+            # Skip files in the workflow_configs directory
+            if "workflow_configs" in file_path:
+                files_skipped.append(file_path)
+            else:
+                files_to_delete.append(file_path)
+    
+    if files_skipped:
+        logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
+        for file_path in files_skipped:
+            logger.debug(f"Preserved file: {file_path}")
+    
+    logger.info(f"Cleaning up {len(files_to_delete)} temporary parameter/grid files")
+    for file_path in files_to_delete:
         try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                logger.debug(f"Deleted temporary file: {file_path}")
+            os.remove(file_path)
+            logger.debug(f"Deleted temporary file: {file_path}")
         except Exception as e:
             logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
 

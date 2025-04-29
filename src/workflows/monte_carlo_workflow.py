@@ -12,6 +12,10 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import uuid
+import seaborn as sns
+from dateutil.relativedelta import relativedelta
+import logging
+import random
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +30,9 @@ if project_root not in sys.path:
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     time_execution, find_strategy_param_file, logger, logging_system,
-    print_workflow_log, adapt_strategy_parameters
+    print_workflow_log, adapt_strategy_parameters,
+    save_results_summary, setup_output_dir_logging, remove_output_dir_logging,
+    check_logs_for_errors, print_error_report
 )
 
 # Import engine components
@@ -53,6 +59,11 @@ def calculate_trading_days(start_date_str: str, end_date_str: str) -> int:
         # Calculate the difference in days
         delta = end_date - start_date
         total_days = delta.days
+        
+        # Ensure total_days is at least 1 to avoid division by zero
+        if total_days <= 0:
+            logger.warning(f"Start date {start_date} is on or after end date {end_date}. Setting to 1 trading day.")
+            return 1
         
         # Estimate trading days (roughly 252 trading days per year)
         years = total_days / 365.25
@@ -124,6 +135,38 @@ def run_monte_carlo_workflow(
     Returns:
         Dictionary with Monte Carlo simulation results
     """
+    # Validate date inputs to prevent division by zero issues
+    try:
+        if start_date and end_date:
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+            
+            # Check if dates make sense
+            if start_date_obj >= end_date_obj:
+                error_msg = f"Start date {start_date} must be before end date {end_date}"
+                logger.error(error_msg)
+                return {
+                    "status": "error",
+                    "message": error_msg
+                }
+            
+            # Ensure reasonable date range - at least 5 days difference
+            min_days = 5
+            if (end_date_obj - start_date_obj).days < min_days:
+                error_msg = f"Date range too small ({(end_date_obj - start_date_obj).days} days). Need at least {min_days} days for Monte Carlo analysis."
+                logger.error(error_msg)
+                return {
+                    "status": "error",
+                    "message": error_msg
+                }
+    except Exception as e:
+        error_msg = f"Error validating dates: {str(e)}"
+        logger.error(error_msg)
+        return {
+            "status": "error",
+            "message": error_msg
+        }
+    
     # Use strategy if provided, otherwise use strategy_name
     if strategy is not None and strategy_name is None:
         strategy_name = strategy
@@ -146,6 +189,9 @@ def run_monte_carlo_workflow(
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Set up logging for this workflow
+    setup_output_dir_logging(output_dir, strategy_name, "monte_carlo")
     
     # Set logging level based on verbose flag
     if verbose:
@@ -170,7 +216,21 @@ def run_monte_carlo_workflow(
                     additional_info={"error": error_msg}
                 )
                 
-                return {"status": "error", "message": error_msg}
+                # Check logs for errors
+                logger.info("Checking logs for errors...")
+                error_logs = check_logs_for_errors(output_dir)
+                
+                if error_logs:
+                    # Generate error report and save to file
+                    error_report_path = os.path.join(output_dir, "error_report.txt")
+                    print_error_report(error_logs, error_report_path)
+                    logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+                
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "output_dir": output_dir
+                }
         
         try:
             with open(param_file, 'r') as f:
@@ -190,7 +250,21 @@ def run_monte_carlo_workflow(
                 additional_info={"error": error_msg}
             )
             
-            return {"status": "error", "message": error_msg}
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+            
+            return {
+                "status": "error",
+                "message": error_msg,
+                "output_dir": output_dir
+            }
     
     # Print parameters
     print_section("Strategy Parameters")
@@ -225,6 +299,16 @@ def run_monte_carlo_workflow(
                 status="FAILED",
                 additional_info={"error": error_msg}
             )
+            
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
             
             return {
                 "status": "error",
@@ -303,6 +387,16 @@ def run_monte_carlo_workflow(
                 additional_info={"error": error_msg}
             )
             
+            # Check logs for errors
+            logger.info("Checking logs for errors...")
+            error_logs = check_logs_for_errors(output_dir)
+            
+            if error_logs:
+                # Generate error report and save to file
+                error_report_path = os.path.join(output_dir, "error_report.txt")
+                print_error_report(error_logs, error_report_path)
+                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+            
             return {
                 "status": "error", 
                 "message": error_msg,
@@ -330,46 +424,11 @@ def run_monte_carlo_workflow(
                         error_msg = "No equity curve data found in backtest result or file"
                         logger.error(error_msg)
                         
-                        # Create error summary file
-                        try:
-                            summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
-                            with open(summary_file, 'w') as f:
-                                f.write("=" * 80 + "\n")
-                                f.write("MONTE CARLO SIMULATION RESULTS\n")
-                                f.write("=" * 80 + "\n\n")
-                                
-                                # Basic test information
-                                f.write(f"Strategy: {strategy_name}\n")
-                                f.write(f"Period: {start_date} to {end_date}\n")
-                                f.write(f"Tickers: {', '.join(tickers)}\n")
-                                f.write(f"Initial Capital: ${initial_capital:.2f}\n")
-                                f.write(f"Commission Rate: {commission:.4f}\n\n")
-                                
-                                # Error information
-                                f.write("-" * 80 + "\n")
-                                f.write("Error Information:\n")
-                                f.write("-" * 80 + "\n")
-                                f.write(f"Error: {error_msg}\n\n")
-                                
-                                # End of summary
-                                f.write("\n" + "=" * 80 + "\n")
-                                f.write("WORKFLOW STATUS: ERROR\n")
-                                f.write("=" * 80 + "\n")
-                            
-                            logger.info(f"Monte Carlo error summary saved to: {summary_file}")
-                        except Exception as summary_err:
-                            logger.error(f"Failed to create error summary file: {str(summary_err)}")
+                        # Log workflow failure and error handling
+                        write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
                         
-                        # Log workflow failure
-                        print_workflow_log(
-                            workflow_name="Monte Carlo Workflow",
-                            strategy_name=strategy_name,
-                            tickers=tickers,
-                            start_date=start_date,
-                            end_date=end_date,
-                            status="FAILED",
-                            additional_info={"error": error_msg}
-                        )
+                        # Remove output dir handlers
+                        remove_output_dir_logging()
                         
                         return {
                             "status": "error", 
@@ -380,46 +439,11 @@ def run_monte_carlo_workflow(
                 error_msg = "No backtest result available for Monte Carlo analysis"
                 logger.error(error_msg)
                 
-                # Create error summary file
-                try:
-                    summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
-                    with open(summary_file, 'w') as f:
-                        f.write("=" * 80 + "\n")
-                        f.write("MONTE CARLO SIMULATION RESULTS\n")
-                        f.write("=" * 80 + "\n\n")
-                        
-                        # Basic test information
-                        f.write(f"Strategy: {strategy_name}\n")
-                        f.write(f"Period: {start_date} to {end_date}\n")
-                        f.write(f"Tickers: {', '.join(tickers)}\n")
-                        f.write(f"Initial Capital: ${initial_capital:.2f}\n")
-                        f.write(f"Commission Rate: {commission:.4f}\n\n")
-                        
-                        # Error information
-                        f.write("-" * 80 + "\n")
-                        f.write("Error Information:\n")
-                        f.write("-" * 80 + "\n")
-                        f.write(f"Error: {error_msg}\n\n")
-                        
-                        # End of summary
-                        f.write("\n" + "=" * 80 + "\n")
-                        f.write("WORKFLOW STATUS: ERROR\n")
-                        f.write("=" * 80 + "\n")
-                    
-                    logger.info(f"Monte Carlo error summary saved to: {summary_file}")
-                except Exception as summary_err:
-                    logger.error(f"Failed to create error summary file: {str(summary_err)}")
+                # Log workflow failure and error handling
+                write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
                 
-                # Log workflow failure
-                print_workflow_log(
-                    workflow_name="Monte Carlo Workflow",
-                    strategy_name=strategy_name,
-                    tickers=tickers,
-                    start_date=start_date,
-                    end_date=end_date,
-                    status="FAILED",
-                    additional_info={"error": error_msg}
-                )
+                # Remove output dir handlers
+                remove_output_dir_logging()
                 
                 return {
                     "status": "error", 
@@ -427,25 +451,88 @@ def run_monte_carlo_workflow(
                     "output_dir": output_dir
                 }
             
+            # Verify backtest data is valid for Monte Carlo analysis
+            if backtest_data.empty:
+                error_msg = "Equity curve is empty. Cannot perform Monte Carlo analysis."
+                logger.error(error_msg)
+                
+                # Log workflow failure and error handling
+                write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
+                
+                # Remove output dir handlers
+                remove_output_dir_logging()
+                
+                return {
+                    "status": "error", 
+                    "message": error_msg,
+                    "output_dir": output_dir
+                }
+                
+            if len(backtest_data) < 5:  # Require at least 5 data points
+                error_msg = f"Not enough data points for Monte Carlo analysis. Found {len(backtest_data)}, need at least 5."
+                logger.error(error_msg)
+                
+                # Log workflow failure and error handling
+                write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
+                
+                # Remove output dir handlers
+                remove_output_dir_logging()
+                
+                return {
+                    "status": "error", 
+                    "message": error_msg,
+                    "output_dir": output_dir
+                }
+                
+            # Ensure initial equity is not zero (which would cause division by zero)
+            initial_equity_value = backtest_data.iloc[0]
+            if isinstance(initial_equity_value, pd.Series):
+                initial_equity_value = initial_equity_value.iloc[0]
+                
+            if initial_equity_value == 0:
+                logger.warning("Initial equity is zero. Setting to 0.01 to avoid division by zero.")
+                if isinstance(backtest_data.iloc[0], pd.Series):
+                    backtest_data.iloc[0] = 0.01
+                else:
+                    backtest_data.iloc[0] = 0.01
+            
             # Run Monte Carlo analysis
             print_section("Running Monte Carlo Analysis")
             logger.info(f"Number of simulations: {n_simulations}")
             
             # Default values for missing parameters
-            confidence_level = 0.95
-            bootstrap_pct = 0.5
-            random_seed = 42
+            confidence_level = confidence_level or 0.95
+            bootstrap_pct = bootstrap_pct or 0.5
+            random_seed = random_seed or 42
             
             logger.info(f"Confidence level: {confidence_level}")
             logger.info(f"Bootstrap percentage: {bootstrap_pct}")
             
-            mc_analyzer = MonteCarloAnalysis(
-                equity_curve=backtest_data,
-                num_simulations=n_simulations,
-                confidence_level=confidence_level,
-                random_seed=random_seed,
-                bootstrap_pct=bootstrap_pct
-            )
+            try:
+                mc_analyzer = MonteCarloAnalysis(
+                    equity_curve=backtest_data,
+                    num_simulations=n_simulations,
+                    confidence_level=confidence_level,
+                    random_seed=random_seed,
+                    bootstrap_pct=bootstrap_pct
+                )
+            except Exception as e:
+                error_msg = f"Error initializing Monte Carlo analysis: {str(e)}"
+                logger.error(error_msg)
+                if verbose:
+                    logger.exception("Full error traceback:")
+                
+                # Log workflow failure and error handling
+                write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
+                
+                # Remove output dir handlers
+                remove_output_dir_logging()
+                
+                return {
+                    "status": "error", 
+                    "message": error_msg,
+                    "output_dir": output_dir
+                }
             
             # Check for progress file in workflow_config.json
             progress_file = None
@@ -460,59 +547,63 @@ def run_monte_carlo_workflow(
                 except Exception as e:
                     logger.warning(f"Error reading workflow config for progress updates: {e}")
             
-            # Run the analysis
-            mc_results = mc_analyzer.run(progress_file)
-            
-            if not mc_results:
-                error_msg = "Monte Carlo analysis failed to produce results"
+            # Run the analysis with error handling
+            try:
+                mc_results = mc_analyzer.run(progress_file)
+            except Exception as e:
+                error_msg = f"Error running Monte Carlo simulations: {str(e)}"
                 logger.error(error_msg)
+                if verbose:
+                    logger.exception("Full error traceback:")
                 
-                # Create error summary file
-                try:
-                    summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
-                    with open(summary_file, 'w') as f:
-                        f.write("=" * 80 + "\n")
-                        f.write("MONTE CARLO SIMULATION RESULTS\n")
-                        f.write("=" * 80 + "\n\n")
-                        
-                        # Basic test information
-                        f.write(f"Strategy: {strategy_name}\n")
-                        f.write(f"Period: {start_date} to {end_date}\n")
-                        f.write(f"Tickers: {', '.join(tickers)}\n")
-                        f.write(f"Initial Capital: ${initial_capital:.2f}\n")
-                        f.write(f"Commission Rate: {commission:.4f}\n\n")
-                        
-                        # Error information
-                        f.write("-" * 80 + "\n")
-                        f.write("Error Information:\n")
-                        f.write("-" * 80 + "\n")
-                        f.write(f"Error: {error_msg}\n\n")
-                        
-                        # End of summary
-                        f.write("\n" + "=" * 80 + "\n")
-                        f.write("WORKFLOW STATUS: ERROR\n")
-                        f.write("=" * 80 + "\n")
-                    
-                    logger.info(f"Monte Carlo error summary saved to: {summary_file}")
-                except Exception as summary_err:
-                    logger.error(f"Failed to create error summary file: {str(summary_err)}")
+                # Log workflow failure and error handling
+                write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
                 
-                # Log workflow failure
-                print_workflow_log(
-                    workflow_name="Monte Carlo Workflow",
-                    strategy_name=strategy_name,
-                    tickers=tickers,
-                    start_date=start_date,
-                    end_date=end_date,
-                    status="FAILED",
-                    additional_info={"error": error_msg}
-                )
+                # Remove output dir handlers
+                remove_output_dir_logging()
                 
                 return {
                     "status": "error", 
                     "message": error_msg,
                     "output_dir": output_dir
                 }
+            
+            if not mc_results:
+                error_msg = "Monte Carlo analysis failed to produce results"
+                logger.error(error_msg)
+                
+                # Log workflow failure and error handling
+                write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
+                
+                # Remove output dir handlers
+                remove_output_dir_logging()
+                
+                return {
+                    "status": "error", 
+                    "message": error_msg,
+                    "output_dir": output_dir
+                }
+            
+            # Validate key Monte Carlo results to catch potential NaN or division by zero issues
+            key_metrics = ['initial_equity', 'final_equity_original', 'return_original', 
+                          'mean_final_equity', 'mean_return', 'probability_of_profit']
+            
+            for metric in key_metrics:
+                if metric not in mc_results or pd.isna(mc_results[metric]):
+                    error_msg = f"Monte Carlo analysis produced invalid results for metric: {metric}"
+                    logger.error(error_msg)
+                    
+                    # Log workflow failure and error handling
+                    write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
+                    
+                    # Remove output dir handlers
+                    remove_output_dir_logging()
+                    
+                    return {
+                        "status": "error", 
+                        "message": error_msg,
+                        "output_dir": output_dir
+                    }
             
             # Generate plots only if plot flag is enabled
             equity_values = mc_analyzer.equity_values
@@ -690,46 +781,11 @@ def run_monte_carlo_workflow(
             if verbose:
                 logger.exception("Full error traceback:")
             
-            # Create error summary file
-            try:
-                summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
-                with open(summary_file, 'w') as f:
-                    f.write("=" * 80 + "\n")
-                    f.write("MONTE CARLO SIMULATION RESULTS\n")
-                    f.write("=" * 80 + "\n\n")
-                    
-                    # Basic test information
-                    f.write(f"Strategy: {strategy_name}\n")
-                    f.write(f"Period: {start_date} to {end_date}\n")
-                    f.write(f"Tickers: {', '.join(tickers)}\n")
-                    f.write(f"Initial Capital: ${initial_capital:.2f}\n")
-                    f.write(f"Commission Rate: {commission:.4f}\n\n")
-                    
-                    # Error information
-                    f.write("-" * 80 + "\n")
-                    f.write("Error Information:\n")
-                    f.write("-" * 80 + "\n")
-                    f.write(f"Error: {error_msg}\n\n")
-                    
-                    # End of summary
-                    f.write("\n" + "=" * 80 + "\n")
-                    f.write("WORKFLOW STATUS: ERROR\n")
-                    f.write("=" * 80 + "\n")
-                
-                logger.info(f"Monte Carlo error summary saved to: {summary_file}")
-            except Exception as summary_err:
-                logger.error(f"Failed to create error summary file: {str(summary_err)}")
+            # Log workflow failure and error handling
+            write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
             
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Monte Carlo Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": error_msg}
-            )
+            # Remove output dir handlers
+            remove_output_dir_logging()
             
             return {
                 "status": "error",
@@ -743,46 +799,11 @@ def run_monte_carlo_workflow(
         if verbose:
             logger.exception("Full error traceback:")
         
-        # Create error summary file
-        try:
-            summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
-            with open(summary_file, 'w') as f:
-                f.write("=" * 80 + "\n")
-                f.write("MONTE CARLO SIMULATION RESULTS\n")
-                f.write("=" * 80 + "\n\n")
-                
-                # Basic test information
-                f.write(f"Strategy: {strategy_name}\n")
-                f.write(f"Period: {start_date} to {end_date}\n")
-                f.write(f"Tickers: {', '.join(tickers)}\n")
-                f.write(f"Initial Capital: ${initial_capital:.2f}\n")
-                f.write(f"Commission Rate: {commission:.4f}\n\n")
-                
-                # Error information
-                f.write("-" * 80 + "\n")
-                f.write("Error Information:\n")
-                f.write("-" * 80 + "\n")
-                f.write(f"Error: {error_msg}\n\n")
-                
-                # End of summary
-                f.write("\n" + "=" * 80 + "\n")
-                f.write("WORKFLOW STATUS: ERROR\n")
-                f.write("=" * 80 + "\n")
-            
-            logger.info(f"Monte Carlo error summary saved to: {summary_file}")
-        except Exception as summary_err:
-            logger.error(f"Failed to create error summary file: {str(summary_err)}")
+        # Log workflow failure and error handling
+        write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg)
         
-        # Log workflow failure
-        print_workflow_log(
-            workflow_name="Monte Carlo Workflow",
-            strategy_name=strategy_name,
-            tickers=tickers,
-            start_date=start_date,
-            end_date=end_date,
-            status="FAILED",
-            additional_info={"error": error_msg}
-        )
+        # Remove output dir handlers
+        remove_output_dir_logging()
         
         return {
             "status": "error",
@@ -812,11 +833,128 @@ def run_monte_carlo_workflow(
     )
     
     # Clean up temporary files
+    files_to_delete = []
+    files_skipped = []
+    
     for temp_file in _temp_files_to_cleanup:
+        if os.path.exists(temp_file):
+            # Skip files in the workflow_configs directory
+            if "workflow_configs" in temp_file:
+                files_skipped.append(temp_file)
+            else:
+                files_to_delete.append(temp_file)
+    
+    if files_skipped:
+        logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
+        for file_path in files_skipped:
+            logger.debug(f"Preserved file: {file_path}")
+    
+    for temp_file in files_to_delete:
         try:
             os.remove(temp_file)
             logger.info(f"Cleaned up temporary file: {temp_file}")
         except Exception as e:
             logger.warning(f"Error cleaning up temporary file: {str(e)}")
     
-    return workflow_result 
+    # Check logs for errors
+    logger.info("Checking logs for errors...")
+    error_logs = check_logs_for_errors(output_dir)
+    
+    if error_logs:
+        # Add log errors to the results
+        workflow_result["log_errors"] = {
+            "count": sum(len(errors) for errors in error_logs.values()),
+            "files": len(error_logs)
+        }
+        
+        # Generate error report and save to file
+        error_report_path = os.path.join(output_dir, "error_report.txt")
+        print_error_report(error_logs, error_report_path)
+        logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+    else:
+        logger.info("No errors found in logs.")
+        workflow_result["log_errors"] = {"count": 0, "files": 0}
+    
+    # Remove output dir handlers
+    remove_output_dir_logging()
+    
+    return workflow_result
+
+def write_error_summary(output_dir, strategy_name, tickers, start_date, end_date, initial_capital, commission, error_msg):
+    """Helper function to write error summary and check logs for errors."""
+    # Try to use the enhanced error reporting module if available
+    try:
+        from utils.error_reporting import generate_error_summary
+        
+        # Generate comprehensive error summary
+        summary_file = generate_error_summary(
+            output_dir=output_dir,
+            workflow_type="monte_carlo",
+            strategy_name=strategy_name,
+            start_date=start_date,
+            end_date=end_date,
+            tickers=tickers,
+            error_msg=error_msg
+        )
+        
+        logger.info(f"Error summary saved to: {summary_file}")
+        
+    except ImportError:
+        # Fall back to basic error summary if the module isn't available
+        logger.warning("Enhanced error reporting module not available. Using basic error summary.")
+        
+        # Create error summary file
+        try:
+            summary_file = os.path.join(output_dir, "monte_carlo_summary.txt")
+            with open(summary_file, 'w') as f:
+                f.write("=" * 80 + "\n")
+                f.write("MONTE CARLO SIMULATION RESULTS\n")
+                f.write("=" * 80 + "\n\n")
+                
+                # Basic test information
+                f.write(f"Strategy: {strategy_name}\n")
+                if isinstance(tickers, list):
+                    f.write(f"Tickers: {', '.join(tickers)}\n")
+                else:
+                    f.write(f"Tickers: {tickers}\n")
+                f.write(f"Period: {start_date} to {end_date}\n")
+                f.write(f"Initial Capital: ${initial_capital:.2f}\n")
+                f.write(f"Commission Rate: {commission:.4f}\n\n")
+                
+                # Error information
+                f.write("-" * 80 + "\n")
+                f.write("Error Information:\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"Error: {error_msg}\n\n")
+                
+                # End of summary
+                f.write("\n" + "=" * 80 + "\n")
+                f.write("WORKFLOW STATUS: ERROR\n")
+                f.write("=" * 80 + "\n")
+            
+            logger.info(f"Monte Carlo error summary saved to: {summary_file}")
+        except Exception as summary_err:
+            logger.error(f"Failed to create error summary file: {str(summary_err)}")
+    
+    # Log workflow failure
+    print_workflow_log(
+        workflow_name="Monte Carlo Workflow",
+        strategy_name=strategy_name,
+        tickers=tickers,
+        start_date=start_date,
+        end_date=end_date,
+        status="FAILED",
+        additional_info={"error": error_msg}
+    )
+    
+    # Check logs for errors
+    logger.info("Checking logs for errors...")
+    error_logs = check_logs_for_errors(output_dir)
+    
+    if error_logs:
+        # Generate error report and save to file
+        error_report_path = os.path.join(output_dir, "error_report.txt")
+        print_error_report(error_logs, error_report_path)
+        logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+    
+    return 

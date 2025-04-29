@@ -8,9 +8,10 @@ import sys
 import json
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Callable
 import datetime
 import uuid
+from tqdm import tqdm
 
 # Add the parent directory to the path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +26,9 @@ if project_root not in sys.path:
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
-    logger, logging_system, print_workflow_log
+    logger, logging_system, print_workflow_log, adapt_strategy_parameters,
+    setup_output_dir_logging, remove_output_dir_logging,
+    check_logs_for_errors, print_error_report
 )
 
 # Import engine components
@@ -238,6 +241,10 @@ def run_optimization_workflow(
     logger.info(f"Parameter grid file: {param_file}")
     
     try:
+        # Extract keep_all_results from kwargs if available
+        keep_all_results = kwargs.get("keep_all_results", False)
+        logger.info(f"Keep all parameter set results: {keep_all_results}")
+        
         # Initialize optimizer
         optimizer = InSampleExcellence(
             strategy_name=strategy_name,
@@ -253,7 +260,8 @@ def run_optimization_workflow(
             data_dir=data_dir,
             max_combinations=max_combinations,
             verbose=verbose,
-            plot=plot  # Pass the plot parameter to control chart generation
+            plot=plot,  # Pass the plot parameter to control chart generation
+            keep_results=keep_all_results  # Pass keep_all_results as keep_results
         )
         
         # Run optimization
@@ -515,6 +523,16 @@ def run_optimization_workflow(
             additional_info={"error": f"Optimization workflow failed: {str(e)}"}
         )
         
+        # Check logs for errors
+        logger.info("Checking logs for errors...")
+        error_logs = check_logs_for_errors(output_dir)
+        
+        if error_logs:
+            # Generate error report and save to file
+            error_report_path = os.path.join(output_dir, "error_report.txt")
+            print_error_report(error_logs, error_report_path)
+            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+        
         return {
             "status": "error",
             "message": f"Optimization workflow failed: {str(e)}",
@@ -542,12 +560,47 @@ def run_optimization_workflow(
     )
     
     # Clean up temporary files
+    files_to_delete = []
+    files_skipped = []
+    
     for temp_file in _temp_files_to_cleanup:
+        if os.path.exists(temp_file):
+            # Skip files in the workflow_configs directory
+            if "workflow_configs" in temp_file:
+                files_skipped.append(temp_file)
+            else:
+                files_to_delete.append(temp_file)
+    
+    if files_skipped:
+        logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
+        for file_path in files_skipped:
+            logger.debug(f"Preserved file: {file_path}")
+    
+    for temp_file in files_to_delete:
         try:
             os.remove(temp_file)
             logger.info(f"Cleaned up temporary file: {temp_file}")
         except Exception as e:
             logger.warning(f"Error cleaning up temporary file: {str(e)}")
+    
+    # Check logs for errors
+    logger.info("Checking logs for errors...")
+    error_logs = check_logs_for_errors(output_dir)
+    
+    if error_logs:
+        # Add log errors to the results
+        results["log_errors"] = {
+            "count": sum(len(errors) for errors in error_logs.values()),
+            "files": len(error_logs)
+        }
+        
+        # Generate error report and save to file
+        error_report_path = os.path.join(output_dir, "error_report.txt")
+        print_error_report(error_logs, error_report_path)
+        logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
+    else:
+        logger.info("No errors found in logs.")
+        results["log_errors"] = {"count": 0, "files": 0}
     
     return {
         "status": "success",
