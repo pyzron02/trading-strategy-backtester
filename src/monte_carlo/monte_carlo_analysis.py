@@ -184,6 +184,11 @@ class MonteCarloAnalysis:
         # Initialize containers
         initial_equity = self.equity_values.iloc[0]
         
+        # Ensure initial equity is not zero to avoid division by zero
+        if initial_equity == 0:
+            initial_equity = 0.01  # Set a minimal positive value instead of zero
+            print("Warning: Initial equity was zero. Setting to 0.01 to avoid division by zero.")
+        
         # Calculate bootstrap sample size
         sample_size = int(len(self.returns) * self.bootstrap_pct)
         
@@ -199,7 +204,11 @@ class MonteCarloAnalysis:
             path = [initial_equity]
             for ret in bootstrap_returns:
                 # Apply the return to the previous value
-                path.append(path[-1] * (1 + ret))
+                # Safeguard against extreme negative returns that could lead to zero or negative equity
+                next_value = path[-1] * (1 + ret)
+                if next_value <= 0:
+                    next_value = 0.01  # Set a minimal positive value instead of zero or negative
+                path.append(next_value)
             
             # Store the path (as a Series with appropriate index)
             all_paths.append(pd.Series(path, name=f'sim_{i}'))
@@ -241,13 +250,23 @@ class MonteCarloAnalysis:
         # Get the initial and final equity from the original curve
         initial_equity = self.equity_values.iloc[0]
         final_equity_original = self.equity_values.iloc[-1]
-        return_original = (final_equity_original / initial_equity) - 1
+        
+        # Ensure initial equity is not zero to avoid division by zero
+        if initial_equity == 0:
+            initial_equity = 0.01  # Set a minimal positive value instead of zero
+            print("Warning: Initial equity was zero. Setting to 0.01 to avoid division by zero.")
+        
+        # Calculate return with safety check for division by zero
+        return_original = (final_equity_original / initial_equity) - 1 if initial_equity > 0 else 0
         
         # Extract final equity values from all simulations and convert to numpy array
         final_equity_values = np.array(self.simulated_paths.iloc[-1].values)
         
-        # Calculate returns
-        returns = (final_equity_values / initial_equity) - 1
+        # Ensure no zeros in final equity values to avoid division by zero
+        final_equity_values = np.maximum(final_equity_values, 0.01)
+        
+        # Calculate returns with safety check for division by zero
+        returns = (final_equity_values / initial_equity) - 1 if initial_equity > 0 else np.zeros_like(final_equity_values)
         
         # Calculate mean and median
         mean_final_equity = np.mean(final_equity_values)
@@ -265,15 +284,19 @@ class MonteCarloAnalysis:
             [(1 - self.confidence_level) * 100 / 2, 100 - (1 - self.confidence_level) * 100 / 2]
         )
         
-        # Calculate VaR and CVaR
-        var_idx = int(np.ceil((1 - self.confidence_level) * len(returns)))
-        sorted_returns = np.sort(returns)
-        var_pct = sorted_returns[var_idx]
-        cvar_pct = np.mean(sorted_returns[:var_idx])
+        # Calculate VaR and CVaR with safety checks
+        if len(returns) > 0:
+            var_idx = max(0, min(int(np.ceil((1 - self.confidence_level) * len(returns))), len(returns) - 1))
+            sorted_returns = np.sort(returns)
+            var_pct = sorted_returns[var_idx]
+            cvar_pct = np.mean(sorted_returns[:var_idx+1]) if var_idx > 0 else sorted_returns[0]
+        else:
+            var_pct = 0
+            cvar_pct = 0
         
         # Calculate probability of profit (fix multi-dimensional indexing)
         returns_array = np.array(returns)  # Convert to numpy array before indexing
-        probability_of_profit = np.sum(returns_array > 0) / len(returns_array)
+        probability_of_profit = np.sum(returns_array > 0) / len(returns_array) if len(returns_array) > 0 else 0
         
         # Get best and worst returns
         worst_return = np.min(returns)
