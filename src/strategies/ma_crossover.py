@@ -29,7 +29,7 @@ class MACrossover(bt.Strategy):
     def __init__(self):
         """Initialize the strategy."""
         # Calculate warmup period
-        self.warmup_period = max(self.params.slow_period * 2, 50)
+        self.warmup_period = max(int(self.params.slow_period) * 2, 50)
         
         # Create dictionaries of indicators for each data feed
         self.fast_ma = {}
@@ -39,10 +39,10 @@ class MACrossover(bt.Strategy):
         for data in self.datas:
             # Use standard SMA indicators
             self.fast_ma[data] = bt.indicators.SMA(
-                data.close, period=self.params.fast_period
+                data.close, period=int(self.params.fast_period)
             )
             self.slow_ma[data] = bt.indicators.SMA(
-                data.close, period=self.params.slow_period
+                data.close, period=int(self.params.slow_period)
             )
             
             # Use standard CrossOver indicator

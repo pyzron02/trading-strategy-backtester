@@ -30,9 +30,14 @@ class MultiPositionStrategy(bt.Strategy):
 
     def __init__(self):
         """Initialize the strategy with indicators for each data feed."""
+        # Convert float parameters to integers if needed
+        self.p.sma_period = int(self.p.sma_period)
+        self.p.position_size = int(self.p.position_size)
+        self.p.max_positions = int(self.p.max_positions)
+        
         # Create dictionaries to access close prices and indicators by ticker name
         self.data_close = {data._name: data.close for data in self.datas}
-        self.sma = {data._name: bt.indicators.SimpleMovingAverage(data.close, period=self.params.sma_period) 
+        self.sma = {data._name: bt.indicators.SimpleMovingAverage(data.close, period=int(self.params.sma_period)) 
                    for data in self.datas}
         
         # Track active positions with buy prices and entry dates
