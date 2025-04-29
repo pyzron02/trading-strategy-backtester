@@ -117,7 +117,8 @@ class InSampleExcellence:
     def __init__(self, strategy_name, tickers=None, start_date='2015-01-01', end_date='2019-12-31',
                  output_dir='output/in_sample_excellence', parameter_grid=None, param_grid_file=None,
                  n_trials=100, optimization_metric='sharpe_ratio', random_seed=42, initial_capital=100000.0,
-                 commission=0.001, data_dir="input", max_combinations=None, verbose=False, plot=False):
+                 commission=0.001, data_dir="input", max_combinations=None, verbose=False, plot=False,
+                 keep_results=False):
         """
         Initialize the InSampleExcellence test.
         
@@ -132,6 +133,7 @@ class InSampleExcellence:
             n_trials (int): Number of parameter combinations to try
             optimization_metric (str): Metric to optimize (e.g., 'sharpe_ratio')
             random_seed (int): Random seed for reproducibility
+            keep_results (bool): Whether to save all parameter configuration results as CSV (default: False)
         """
         self.strategy_name = strategy_name
         self.tickers = tickers if tickers is not None else ['SPY']
@@ -149,6 +151,7 @@ class InSampleExcellence:
         self.max_combinations = max_combinations
         self.verbose = verbose
         self.plot = plot  # Whether to generate plots
+        self.keep_results = keep_results  # Whether to save all parameter configuration results and individual parameter set directories
         
         # Initialize logger
         self.logger = logger.get_logger(__name__)
@@ -930,10 +933,27 @@ class InSampleExcellence:
             self.logger.info(f"Best parameters saved to {best_params_file}")
             self.logger.info(f"Optimization summary saved to {summary_file}")
             
-            # Save a summary of all results
-            results_file = os.path.join(self.output_dir, f"optimization_results_{self.strategy_name}.csv")
-            results_df.to_csv(results_file, index=False)
-            self.logger.info(f"All optimization results saved to {results_file}")
+            # Save a summary of all results if keep_results is True
+            if self.keep_results:
+                results_file = os.path.join(self.output_dir, f"optimization_results_{self.strategy_name}.csv")
+                results_df.to_csv(results_file, index=False)
+                self.logger.info(f"All optimization results saved to {results_file}")
+            else:
+                self.logger.info("Skipping saving all parameter configuration results (keep_results=False)")
+                
+                # Clean up parameter set directories if keep_results is False
+                import shutil
+                param_dirs = [d for d in os.listdir(self.output_dir) if d.startswith('param_set_')]
+                if param_dirs:
+                    self.logger.info(f"Cleaning up {len(param_dirs)} parameter set directories")
+                    for param_dir in param_dirs:
+                        try:
+                            full_path = os.path.join(self.output_dir, param_dir)
+                            if os.path.isdir(full_path):
+                                shutil.rmtree(full_path)
+                                self.logger.debug(f"Removed parameter set directory: {param_dir}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to remove parameter set directory {param_dir}: {str(e)}")
             
             return best_params
             
