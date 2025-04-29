@@ -1,0 +1,42 @@
+version: '3'
+
+services:
+  backtester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./input:/app/trading-strategy-backtester/input
+      - ./output:/app/trading-strategy-backtester/output
+      - ./logs:/app/trading-strategy-backtester/logs
+      - ./cache:/app/trading-strategy-backtester/cache
+      - shared-data:/app/trading-strategy-backtester/output/shared
+    environment:
+      - BASE_DIR=/app/trading-strategy-backtester
+    networks:
+      - app-network
+    # You can uncomment this and comment out the default CMD in Dockerfile to run a specific command
+    # command: python src/workflows/cli.py --workflow simple --strategy MACrossover --tickers AAPL
+
+  # Example configuration for frontend service
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - shared-data:/app/frontend/public/data
+    depends_on:
+      - backtester
+    networks:
+      - app-network
+    # Uncomment when ready to build and use the frontend
+    profiles: ["frontend"]
+
+volumes:
+  shared-data:
+
+networks:
+  app-network:
+    driver: bridge
