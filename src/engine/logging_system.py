@@ -71,15 +71,18 @@ class LoggingSystem:
         if self._initialized:
             return
             
-        # Get the project root directory
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
+        import sys
+        from pathlib import Path
         
-        # Set log directory
-        self.log_dir = log_dir or os.path.join(project_root, 'logs')
+        # Add parent directory to sys.path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from utils.path_manager import path_manager
+        
+        # Set default log directory
+        self.log_dir = log_dir or str(path_manager.logs_dir)
         
         # Create log directory if it doesn't exist
-        os.makedirs(self.log_dir, exist_ok=True)
+        path_manager.ensure_dir(self.log_dir)
         
         # Set default level
         self.default_level = self.LEVELS.get(default_level.upper(), logging.INFO)

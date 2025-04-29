@@ -3,37 +3,22 @@
 
 import os
 import sys
+from pathlib import Path
+from .path_manager import path_manager
 
 def ensure_directories():
     """Ensure required directories exist."""
-    # Get the project root directory
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))  # Go up two levels (src -> project root)
+    # Ensure all base directories exist
+    dirs = path_manager.ensure_base_dirs()
     
-    # Create output directory
-    output_dir = os.path.join(project_root, 'output')
-    os.makedirs(output_dir, exist_ok=True)
-    print(f"Created output directory: {output_dir}")
+    # Print created directories
+    for name, path in dirs.items():
+        print(f"Created directory: {path}")
     
     # Create strategies directory
-    strategies_dir = os.path.join(os.path.dirname(current_dir), 'strategies')
-    os.makedirs(strategies_dir, exist_ok=True)
+    strategies_dir = path_manager.src_dir / 'strategies'
+    path_manager.ensure_dir(strategies_dir)
     print(f"Created strategies directory: {strategies_dir}")
-    
-    # Create input directory
-    input_dir = os.path.join(project_root, 'input')
-    os.makedirs(input_dir, exist_ok=True)
-    print(f"Created input directory: {input_dir}")
-    
-    # Create logs directory
-    logs_dir = os.path.join(project_root, 'logs')
-    os.makedirs(logs_dir, exist_ok=True)
-    print(f"Created logs directory: {logs_dir}")
-    
-    # Create cache directory
-    cache_dir = os.path.join(project_root, 'cache')
-    os.makedirs(cache_dir, exist_ok=True)
-    print(f"Created cache directory: {cache_dir}")
     
     return 0
 
@@ -44,7 +29,7 @@ def ensure_output_directory(output_dir):
     Args:
         output_dir: Path to the output directory
     """
-    os.makedirs(output_dir, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     print(f"Ensured output directory exists: {output_dir}")
 
 if __name__ == '__main__':
