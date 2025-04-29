@@ -1,6 +1,3 @@
-""" For all configs in the workflow_configs folder, run the workflow and check the output
-"""
-
 # Change to the project root directory first
 cd ~/trading-strategy-backtester
 

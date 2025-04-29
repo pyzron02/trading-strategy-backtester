@@ -158,6 +158,8 @@ The trading strategy backtester is built with a modular architecture designed fo
 
 ## Installation
 
+### Method 1: Local Installation
+
 1. **Clone the repository:**
    ```bash
    git clone <repository-url>
@@ -175,6 +177,51 @@ The trading strategy backtester is built with a modular architecture designed fo
 3. **Set up data:**
    ```bash
    python src/data_preprocessing/data_setup.py --tickers AAPL,MSFT,GOOG,NVDA
+   ```
+
+### Method 2: Docker Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd trading-strategy-backtester
+   ```
+
+2. **Build and run using Docker:**
+   ```bash
+   docker build -t trading-backtester .
+   docker run -v $(pwd)/input:/app/trading-strategy-backtester/input \
+              -v $(pwd)/output:/app/trading-strategy-backtester/output \
+              -v $(pwd)/logs:/app/trading-strategy-backtester/logs \
+              trading-backtester
+   ```
+
+3. **Or use Docker Compose:**
+   ```bash
+   docker-compose up
+   ```
+
+### Method 3: Integration with Frontend
+
+For integration with a frontend application, see the [Containerization Guide](README_CONTAINER.md).
+
+1. **Create project directory structure:**
+   ```bash
+   mkdir my-trading-app
+   cd my-trading-app
+   git clone <backtester-repo-url> trading-strategy-backtester
+   git clone <frontend-repo-url> frontend
+   ```
+
+2. **Set up Docker Compose:**
+   Copy the parent Docker Compose file to your project root:
+   ```bash
+   cp trading-strategy-backtester/docker-compose.parent.yml docker-compose.yml
+   ```
+
+3. **Run both services:**
+   ```bash
+   docker-compose up
    ```
 
 ## Usage
@@ -264,6 +311,27 @@ python src/workflows/cli.py --workflow complete \
     --n-simulations 100 \
     --enhanced-plots \
     --verbose
+```
+
+### Docker Usage
+
+When using Docker, you can run commands inside the container:
+
+```bash
+docker-compose exec backtester python src/workflows/cli.py --workflow simple \
+    --strategy MACrossover \
+    --tickers AAPL \
+    --start-date 2020-01-01 \
+    --end-date 2025-01-01
+```
+
+Or configure the command in docker-compose.yml:
+
+```yaml
+services:
+  backtester:
+    # ... other settings ...
+    command: python src/workflows/cli.py --workflow simple --strategy MACrossover --tickers AAPL
 ```
 
 ## Monte Carlo Simulation Process
@@ -393,6 +461,16 @@ python src/workflows/cli.py --workflow walkforward \
     --verbose
 ```
 
+## Containerization and Frontend Integration
+
+The system now supports containerization for easy deployment and integration with frontend applications:
+
+1. **Centralized Path Management**: All paths are now relative, making the application containerization-friendly
+2. **Docker Configuration**: Ready-to-use Dockerfile and docker-compose.yml files
+3. **Frontend Integration**: Configured for easy integration with a frontend application in a containerized environment
+
+For details on containerization and integration with a frontend application, see the [Containerization Guide](README_CONTAINER.md).
+
 ## Key Considerations
 
 1. **Data Quality**: Ensure your input data is clean and properly formatted
@@ -409,6 +487,7 @@ python src/workflows/cli.py --workflow walkforward \
 - **Parameter File Not Found**: Check that your strategy's parameter file exists in `input/parameters/`
 - **Visualization Issues**: Use the `--enhanced-plots` flag for improved visualizations
 - **Multi-dimensional Indexing Error**: May occur with some pandas/numpy operations, ensure data is converted to numpy arrays before advanced indexing
+- **Docker Path Issues**: If using Docker and experiencing path problems, ensure volume mounts are configured correctly and the BASE_DIR environment variable is set
 
 ## License
 

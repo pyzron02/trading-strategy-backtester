@@ -44,32 +44,45 @@ from strategies import registry
 class TradeLogger(bt.Analyzer):
     def __init__(self):
         self.trades = []
+        print("TradeLogger analyzer initialized")
     # Defining a TradeLogger class that inherits from backtrader's Analyzer
     # Initialize an empty list to store trades
 
+    def start(self):
+        """Called when the analyzer is started."""
+        print("TradeLogger analyzer started")
+        
+    def stop(self):
+        """Called when the analyzer is stopped."""
+        print(f"TradeLogger analyzer stopped. Total trades logged: {len(self.trades)}")
+
     def notify_trade(self, trade):
         """Log both opening and closing trades."""
-        date = bt.num2date(trade.dtopen if not trade.isclosed else trade.dtclose).strftime('%Y-%m-%d')
-        action = 'buy' if trade.size > 0 else 'sell'
-        trade_type = 'open' if not trade.isclosed else 'close'
-        trade_entry = {
-            'date': date,
-            'action': action,
-            'type': trade_type,
-            'price': trade.price,
-            'size': abs(trade.size),
-            'commission': trade.commission,
-            'pnl': trade.pnl if trade.isclosed else 0.0,  # PnL is 0 for open trades
-            'symbol': trade.data._name
-        }
-        self.trades.append(trade_entry)
-        print(f"{date} - {trade_type.capitalize()} trade logged: {trade_entry}")
+        try:
+            date = bt.num2date(trade.dtopen if not trade.isclosed else trade.dtclose).strftime('%Y-%m-%d')
+            action = 'buy' if trade.size > 0 else 'sell'
+            trade_type = 'open' if not trade.isclosed else 'close'
+            trade_entry = {
+                'date': date,
+                'action': action,
+                'type': trade_type,
+                'price': trade.price,
+                'size': abs(trade.size),
+                'commission': trade.commission,
+                'pnl': trade.pnl if trade.isclosed else 0.0,  # PnL is 0 for open trades
+                'symbol': trade.data._name
+            }
+            self.trades.append(trade_entry)
+            print(f"{date} - {trade_type.capitalize()} trade logged: {trade_entry}")
+        except Exception as e:
+            print(f"Error in TradeLogger.notify_trade: {e}")
     # Method triggered when a trade is opened or closed
     # - Formats the trade data (date, action, price, size, etc.) into a dictionary
     # - Appends the trade information to the trades list
     # - Prints trade information to the console
 
     def get_analysis(self):
+        print(f"TradeLogger.get_analysis called. Returning {len(self.trades)} trades.")
         return self.trades
     # Returns the collected trade information when analysis is requested
 
@@ -413,6 +426,7 @@ def run_backtest(
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
     cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
     cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+    cerebro.addanalyzer(TradeLogger, _name='tradelogger')
     
     # Run the backtest
     print(f"Starting backtest with {len(tickers)} tickers: {tickers}")
@@ -732,6 +746,9 @@ def run_backtest(
     
     # Equity curve (if available)
     equity_curve = None
+    drawdowns = None
+    monthly_returns = None
+    
     if hasattr(strategy, 'equity_curve') and strategy.equity_curve:
         # Convert to pandas DataFrame
         equity_curve = pd.DataFrame(strategy.equity_curve)
@@ -740,9 +757,42 @@ def run_backtest(
         equity_curve_file = os.path.join(output_dir, 'equity_curve.csv')
         equity_curve.to_csv(equity_curve_file, index=False)
         print(f"Saved equity curve to {equity_curve_file}")
+        
+        # Calculate drawdowns if we have an equity curve
+        try:
+            if 'Value' in equity_curve.columns and 'Date' in equity_curve.columns:
+                # Set Date as index
+                eq_curve = equity_curve.copy()
+                eq_curve['Date'] = pd.to_datetime(eq_curve['Date'])
+                eq_curve.set_index('Date', inplace=True)
+                
+                # Calculate rolling maximum
+                if not eq_curve.empty:
+                    rolling_max = eq_curve['Value'].cummax()
+                    # Calculate drawdown series (will be negative values)
+                    drawdowns = (eq_curve['Value'] / rolling_max) - 1
+                    
+                    # Save drawdowns to CSV
+                    if drawdowns is not None and not drawdowns.empty:
+                        drawdowns_file = os.path.join(output_dir, 'drawdowns.csv')
+                        drawdowns.to_csv(drawdowns_file, header=['Drawdown'])
+                        print(f"Saved drawdowns to {drawdowns_file}")
+                    
+                    # Calculate monthly returns
+                    # Resample to month end and calculate percent change
+                    monthly_returns = eq_curve['Value'].resample('M').last().pct_change().dropna()
+                    
+                    # Save monthly returns to CSV
+                    if monthly_returns is not None and not monthly_returns.empty:
+                        monthly_returns_file = os.path.join(output_dir, 'monthly_returns.csv')
+                        monthly_returns.to_csv(monthly_returns_file, header=['Return'])
+                        print(f"Saved monthly returns to {monthly_returns_file}")
+        except Exception as e:
+            print(f"Error calculating drawdowns or monthly returns: {e}")
     
     # Trade log (if available)
     trade_log = None
+    # First check the strategy's custom trades attribute
     if hasattr(strategy, 'trades') and strategy.trades:
         # Convert to pandas DataFrame
         trade_log = pd.DataFrame(strategy.trades)
@@ -751,6 +801,18 @@ def run_backtest(
         trade_log_file = os.path.join(output_dir, 'trade_log.csv')
         trade_log.to_csv(trade_log_file, index=False)
         print(f"Saved trade log to {trade_log_file}")
+    
+    # Also check the TradeLogger analyzer for trades (as a backup)
+    elif hasattr(strategy.analyzers, 'tradelogger'):
+        logger_trades = strategy.analyzers.tradelogger.get_analysis()
+        if logger_trades:
+            # Convert to pandas DataFrame
+            trade_log = pd.DataFrame(logger_trades)
+            
+            # Save to CSV
+            trade_log_file = os.path.join(output_dir, 'trade_log.csv')
+            trade_log.to_csv(trade_log_file, index=False)
+            print(f"Saved trade log from TradeLogger analyzer to {trade_log_file}")
     
     # Generate plots only if explicitly requested via the --plot flag
     if plot:
@@ -778,8 +840,16 @@ def run_backtest(
         "parameters": parameters,
         "metrics": metrics,
         "equity_curve": equity_curve,
-        "trade_log": trade_log
+        "trade_log": trade_log,
+        "drawdowns": drawdowns,
+        "monthly_returns": monthly_returns
     }
+    
+    # If we have no trades in trade_log, check if the TradeLogger has any
+    if (trade_log is None or trade_log.empty) and hasattr(strategy.analyzers, 'tradelogger'):
+        logger_trades = strategy.analyzers.tradelogger.get_analysis()
+        if logger_trades:
+            result["trade_log"] = pd.DataFrame(logger_trades)
     
     # Save detailed results to a text file
     with open(os.path.join(output_dir, 'results.txt'), 'w') as f:
