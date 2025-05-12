@@ -235,7 +235,7 @@ def run_walkforward_workflow(
             out_sample_end=out_sample_end,
             output_dir=output_dir,
             parameters=parameters,
-            plot=plot
+            plot=plot  # Respect the plot parameter from user configuration
         )
         
         # Run walk-forward analysis
@@ -280,7 +280,9 @@ def run_walkforward_workflow(
             formatted_comparison = comparison_data.copy()
             for col in ['In-Sample', 'Out-of-Sample', 'Difference']:
                 formatted_comparison[col] = formatted_comparison[col].apply(
-                    lambda x: f"{x*100:.2f}%" if isinstance(x, (int, float)) else x)
+                    lambda x: f"{float(x)*100:.2f}%" if isinstance(x, (int, float)) 
+                    else (f"{float(x)*100:.2f}%" if isinstance(x, str) and x.replace('.', '', 1).isdigit() 
+                          else x))
             
             formatted_comparison.to_csv(comparison_file)
             logger.info(f"Saved formatted performance comparison to {comparison_file}")
@@ -538,7 +540,29 @@ def run_walkforward_workflow(
             "total_return": overall_metrics.get("total_return", 0.0) if overall_metrics else 0.0,
             "sharpe_ratio": overall_metrics.get("sharpe_ratio", 0.0) if overall_metrics else 0.0, 
             "max_drawdown": overall_metrics.get("max_drawdown", 0.0) if overall_metrics else 0.0,
+            "total_trades": overall_metrics.get("total_trades", 0) if overall_metrics else 0
         }
+        
+        # Create a copy of the parameters for the performance metrics
+        parameter_summary = {}
+        if parameters:
+            parameter_summary = parameters.copy()
+        else:
+            # If no direct parameters, try to get them from the period results
+            for period in period_results:
+                if 'best_params' in period and period['best_params']:
+                    parameter_summary = period['best_params'].copy()
+                    logger.info(f"Using parameters from period results: {parameter_summary}")
+                    break
+        
+        # If still no parameters, check results for parameters
+        if not parameter_summary and hasattr(results, 'get') and results.get('best_params'):
+            parameter_summary = results.get('best_params', {}).copy()
+            logger.info(f"Using best parameters from results: {parameter_summary}")
+            
+        # Ensure parameters are in the proper format for the summary
+        if parameter_summary:
+            logger.info(f"Parameters to include in summary: {parameter_summary}")
         
         # Read performance comparison data if available
         if os.path.exists(os.path.join(output_dir, "performance_comparison.csv")):
@@ -568,7 +592,7 @@ def run_walkforward_workflow(
             "period_results": period_results,
             "overall_metrics": overall_metrics or {},
             "performance_metrics": performance_metrics,
-            "parameters": parameters or {},
+            "parameters": parameter_summary,
             "window_size": window_size,
             "step_size": step_size,
             "output_dir": output_dir,
@@ -583,13 +607,13 @@ def run_walkforward_workflow(
         # Generate and save results summary
         results_for_summary = {
             "strategy_name": strategy_name,
-            "parameters": parameters or {},  # Ensure parameters is a dict even if None
+            "parameters": parameter_summary,  # Use the copied parameters
             "dates": {
                 "start_date": start_date,
                 "end_date": end_date
             },
             "metrics": performance_metrics,
-            "notes": f"Walk-forward analysis with {len(period_results)} periods"
+            "notes": f"Walk-forward analysis with {len(period_results)} periods, {performance_metrics.get('total_trades', 0)} trades"
         }
         
         summary_text = save_results_summary(
@@ -598,6 +622,130 @@ def run_walkforward_workflow(
             title=f"Walk-Forward Analysis: {strategy_name}"
         )
         
+        # Ensure parameters are properly displayed in summary file
+        def update_summary_file(summary_file, parameters, total_trades):
+            """Update summary file to ensure parameters and total trades are properly displayed."""
+            try:
+                if not os.path.exists(summary_file):
+                    logger.error(f"Summary file not found: {summary_file}")
+                    return
+                    
+                with open(summary_file, 'r') as f:
+                    lines = f.readlines()
+                
+                logger.info(f"Updating summary file with parameters: {parameters}")
+                
+                # Update parameter section if empty
+                param_section_start = -1
+                param_section_end = -1
+                for i, line in enumerate(lines):
+                    if "Parameters:" in line:
+                        param_section_start = i
+                        logger.debug(f"Found Parameters section at line {i}")
+                    elif param_section_start > 0 and line.startswith('-' * 10):
+                        param_section_end = i
+                        logger.debug(f"Found end of Parameters section at line {i}")
+                        break
+                
+                if param_section_start > 0 and param_section_end > param_section_start:
+                    # Check if parameter section is empty
+                    empty_param_section = True
+                    for i in range(param_section_start + 1, param_section_end):
+                        if lines[i].strip() and not lines[i].startswith("-"):
+                            empty_param_section = False
+                            break
+                    
+                    # If empty, add parameters
+                    if empty_param_section and parameters:
+                        logger.info(f"Adding {len(parameters)} parameters to summary file")
+                        new_lines = []
+                        for i, line in enumerate(lines):
+                            new_lines.append(line)
+                            if i == param_section_start:
+                                # For safety, check if parameters is a dictionary before iterating
+                                if isinstance(parameters, dict):
+                                    for key, value in parameters.items():
+                                        new_lines.append(f"{key}: {value}\n")
+                                # If it's None or empty, add a default placeholder
+                                elif parameters is None or not parameters:
+                                    new_lines.append("Default strategy parameters\n")
+                        
+                        # Write the updated file
+                        with open(summary_file, 'w') as f:
+                            f.writelines(new_lines)
+                        logger.info(f"Updated summary file with parameters")
+                        return
+                    else:
+                        logger.info(f"Parameter section already has content or no parameters to add")
+                else:
+                    logger.warning(f"Could not find Parameters section in summary file")
+                
+                # Handle total trades section separately if we didn't update parameters
+                # Ensure total trades are shown in metrics section
+                metrics_section_start = -1
+                for i, line in enumerate(lines):
+                    if "Performance Metrics:" in line:
+                        metrics_section_start = i
+                        break
+                
+                if metrics_section_start > 0:
+                    # Check if total_trades is already in metrics
+                    found_total_trades = False
+                    for i in range(metrics_section_start + 1, len(lines)):
+                        if "total_trades:" in lines[i].lower():
+                            found_total_trades = True
+                            break
+                    
+                    # If not found, add it to the metrics section
+                    if not found_total_trades:
+                        new_lines = []
+                        for i, line in enumerate(lines):
+                            new_lines.append(line)
+                            if i == metrics_section_start + 1:  # Add after the section header line
+                                new_lines.append(f"total_trades: {total_trades}\n")
+                        
+                        # Write the updated file
+                        with open(summary_file, 'w') as f:
+                            f.writelines(new_lines)
+                        logger.info(f"Added total_trades to summary file")
+                
+            except Exception as e:
+                logger.error(f"Error updating summary file: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        # Update the summary file to ensure parameters and total trades are displayed
+        update_summary_file(
+            os.path.join(output_dir, "walkforward_summary.txt"),
+            parameter_summary,
+            performance_metrics.get("total_trades", 0)
+        )
+        
+        # Create a direct summary file with parameters if the update didn't work
+        # Always create this file, even if parameter_summary is empty
+        direct_summary_path = os.path.join(output_dir, "parameters_summary.txt")
+        try:
+            with open(direct_summary_path, 'w') as f:
+                f.write("=" * 80 + "\n")
+                f.write(f"Parameters Used in Walk-Forward Analysis: {strategy_name}\n")
+                f.write("=" * 80 + "\n\n")
+                
+                if isinstance(parameter_summary, dict) and parameter_summary:
+                    for key, value in parameter_summary.items():
+                        f.write(f"{key}: {value}\n")
+                else:
+                    # If we don't have parameters, include walkforward settings
+                    f.write("Default strategy parameters were used\n\n")
+                    f.write("Walk-Forward Settings:\n")
+                    f.write(f"window_size: {window_size}\n")
+                    f.write(f"step_size: {step_size}\n")
+                    f.write(f"n_trials: {n_trials}\n")
+                    f.write(f"optimization_metric: {optimization_metric}\n")
+                    
+            logger.info(f"Created direct parameter summary at {direct_summary_path}")
+        except Exception as e:
+            logger.error(f"Error creating direct parameter summary: {e}")
+        
         logger.info(f"\nDetailed results saved to: {output_dir}")
         
         # Reset logging level if it was changed
@@ -605,9 +753,11 @@ def run_walkforward_workflow(
             logging_system.set_level('INFO', 'workflows')
         
         # Log workflow completion
+        total_return_value = overall_metrics.get('total_return', 0.0) if overall_metrics else 0.0
+        win_rate_value = overall_metrics.get('win_rate', 0.0) if overall_metrics else 0.0
         completion_info = {
-            "total_return": f"{overall_metrics.get('total_return', 0.0) if overall_metrics else 0.0:.2%}",
-            "win_rate": f"{overall_metrics.get('win_rate', 0.0) if overall_metrics else 0.0:.2%}",
+            "total_return": f"{total_return_value * 100:.2f}%",
+            "win_rate": f"{win_rate_value * 100:.2f}%",
             "output_dir": output_dir
         }
         print_workflow_log(

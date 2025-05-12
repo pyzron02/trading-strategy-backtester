@@ -193,7 +193,14 @@ class AuctionMarketStrategy(bt.Strategy):
         self.amt_params.price_levels['price_bucket_size'] = params.price_levels['price_bucket_size']
         self.amt_params.volume_profile['lookback_period'] = params.volume_profile['lookback_period']
         self.amt_params.auction_zones['excess_threshold'] = params.auction_zones['excess_threshold']
-        self.amt_params.auction_zones['balance_threshold'] = params.auction_zones['balance_threshold']
+        
+        # Ensure balance_threshold is not zero to avoid division by zero
+        if params.auction_zones['balance_threshold'] <= 0:
+            print("Warning: balance_threshold cannot be zero or negative. Setting to default 0.5")
+            self.amt_params.auction_zones['balance_threshold'] = 0.5
+        else:
+            self.amt_params.auction_zones['balance_threshold'] = params.auction_zones['balance_threshold']
+            
         self.amt_params.auction_zones['rotation_factor'] = params.auction_zones['rotation_factor']
         self.amt_params.position_size['max_position'] = params.position_size['max_position']
         self.amt_params.position_size['initial_size'] = params.position_size['initial_size']
@@ -452,6 +459,10 @@ class AuctionMarketStrategy(bt.Strategy):
         # Check for balanced conditions
             range_today = data.high[0] - data.low[0]
             
+            # Check if balance_threshold is not zero to avoid division by zero
+            if self.amt_params.auction_zones['balance_threshold'] <= 0:
+                return "normal"  # Safety fallback
+
             if range_today < avg_range * self.amt_params.auction_zones['balance_threshold']:
                 return "tight"
             elif range_today > avg_range * (2.0 / self.amt_params.auction_zones['balance_threshold']):
@@ -504,13 +515,15 @@ class AuctionMarketStrategy(bt.Strategy):
             if self.params.use_atr_sizing and self.atr[data][0]:
                 # Calculate risk per share based on ATR
                 risk_per_share = self.atr[data][0] * risk_level
-                if risk_per_share > 0:
-                    pos_size = int(risk_amount / risk_per_share)
-                    # Cap position size for safety
-                    max_size = self.amt_params.position_size['max_position']
-                    return max(1, min(pos_size, max_size))
-                else:
+                # Ensure risk_per_share is not zero to avoid division by zero
+                if risk_per_share <= 0:
+                    print(f"Warning: Invalid risk_per_share value ({risk_per_share}). Using default position size.")
                     return self.amt_params.position_size['initial_size']
+                    
+                pos_size = int(risk_amount / risk_per_share)
+                # Cap position size for safety
+                max_size = self.amt_params.position_size['max_position']
+                return max(1, min(pos_size, max_size))
             else:
                 # Use fixed position size from parameters
                 return self.amt_params.position_size['initial_size']

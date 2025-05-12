@@ -62,8 +62,7 @@ def parse_args():
     parser.add_argument("--output-dir", type=str, help="Output directory for results")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--param-file", type=str, help="Parameter file for the strategy")
-    parser.add_argument("--plot", action="store_true", help="Generate and save plots of backtest results (disabled by default)")
-    parser.add_argument("--enhanced-plots", action="store_true", help="Generate enhanced visualization dashboard for Monte Carlo simulations (disabled by default)")
+    parser.add_argument("--plot", action="store_true", help="Generate and save plots of backtest results (simple workflow only)")
     
     # Optimization parameters
     optimization_group = parser.add_argument_group("Optimization parameters")
@@ -79,6 +78,8 @@ def parse_args():
                         help="Number of Monte Carlo simulations")
     monte_carlo_group.add_argument("--keep-permuted-data", action="store_true", 
                         help="Keep permuted data generated during Monte Carlo simulation")
+    monte_carlo_group.add_argument("--enhanced-plots", action="store_true", 
+                        help="Generate enhanced visualization dashboard for Monte Carlo simulations")
     
     # Walk-forward parameters
     walkforward_group = parser.add_argument_group("Walk-forward parameters")
@@ -249,7 +250,7 @@ def run_cli():
     if args.param_file:
         check_workflow_param_file_compatibility(args.workflow, args.param_file)
     
-    # Prepare parameters dictionary
+    # Prepare parameters dictionary with common parameters
     workflow_params = {
         "strategy_name": args.strategy,
         "tickers": tickers,
@@ -263,8 +264,12 @@ def run_cli():
         "param_file": args.param_file
     }
     
-    # Add workflow-specific parameters
-    if args.workflow in ["optimization", "walkforward", "complete"]:
+    # Add workflow-specific parameters based on workflow type
+    if args.workflow == "simple":
+        workflow_params.update({
+            "plot": args.plot
+        })
+    elif args.workflow == "optimization":
         workflow_params.update({
             "n_trials": args.n_trials,
             "optimization_metric": args.optimization_metric
@@ -273,30 +278,36 @@ def run_cli():
         # Add max_combinations parameter if provided
         if args.max_combinations is not None:
             workflow_params["max_combinations"] = args.max_combinations
-    
-    if args.workflow in ["monte_carlo", "complete"]:
+    elif args.workflow == "monte_carlo":
         workflow_params.update({
             "n_simulations": args.n_simulations,
-            "keep_permuted_data": args.keep_permuted_data
-        })
-    
-    if args.workflow in ["walkforward"]:
-        workflow_params.update({
-            "window_size": args.window_size,
-            "step_size": args.step_size
-        })
-    
-    # Add plot parameter for all workflows that support plotting
-    if args.workflow in ["simple", "monte_carlo", "complete"]:
-        workflow_params.update({
-            "plot": args.plot
-        })
-        
-    # Add enhanced_plots parameter for monte_carlo workflows
-    if args.workflow in ["monte_carlo", "complete"] and args.enhanced_plots:
-        workflow_params.update({
+            "keep_permuted_data": args.keep_permuted_data,
+            "plot": args.plot,  # Monte Carlo also supports plotting
             "enhanced_plots": args.enhanced_plots
         })
+    elif args.workflow == "walkforward":
+        workflow_params.update({
+            "window_size": args.window_size,
+            "step_size": args.step_size,
+            "n_trials": args.n_trials,
+            "optimization_metric": args.optimization_metric,
+            "plot": args.plot,  # Respect the user's plot setting
+            "enhanced_plots": args.enhanced_plots if hasattr(args, 'enhanced_plots') else False  # Respect user's enhanced_plots setting
+        })
+    elif args.workflow == "complete":
+        # For complete workflow, include all applicable parameters
+        workflow_params.update({
+            "n_trials": args.n_trials,
+            "optimization_metric": args.optimization_metric,
+            "n_simulations": args.n_simulations,
+            "keep_permuted_data": args.keep_permuted_data,
+            "plot": args.plot,
+            "enhanced_plots": args.enhanced_plots
+        })
+        
+        # Add max_combinations parameter if provided
+        if args.max_combinations is not None:
+            workflow_params["max_combinations"] = args.max_combinations
     
     # Run workflow with unified parameters
     try:

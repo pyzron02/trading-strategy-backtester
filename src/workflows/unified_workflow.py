@@ -132,20 +132,56 @@ def run_unified_workflow(workflow_type, **kwargs):
     # Get the output directory from kwargs
     output_dir = kwargs.get('output_dir')
     
+    # Filter workflow-specific parameters
+    filtered_kwargs = kwargs.copy()
+    
+    # Define workflow-specific parameters
+    workflow_specific_params = {
+        "simple": ['plot'],
+        "optimization": ['n_trials', 'optimization_metric', 'max_combinations'],
+        "monte_carlo": ['n_simulations', 'keep_permuted_data', 'enhanced_plots', 'plot'],
+        "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric'],
+        "complete": []  # Complete workflow can use all parameters
+    }
+    
+    # Remove parameters that are not supported by the current workflow
+    if workflow_type != "complete":  # Complete workflow accepts all parameters
+        allowed_params = workflow_specific_params.get(workflow_type, [])
+        # Add common parameters that are allowed for all workflows
+        common_params = ['strategy_name', 'strategy', 'tickers', 'start_date', 'end_date', 
+                        'output_dir', 'verbose', 'initial_capital', 'commission', 
+                        'param_file', 'data_dir', '_temp_files_to_cleanup', '_is_nested_workflow']
+        
+        allowed_params.extend(common_params)
+        
+        # Remove parameters that are not in the allowed list
+        parameters_to_remove = []
+        for param in filtered_kwargs:
+            if param not in allowed_params:
+                parameters_to_remove.append(param)
+        
+        for param in parameters_to_remove:
+            logger.debug(f"Removing '{param}' parameter from {workflow_type} workflow")
+            filtered_kwargs.pop(param, None)
+    
     # Add _temp_files_to_cleanup back to kwargs
-    kwargs['_temp_files_to_cleanup'] = temp_files_to_cleanup
+    filtered_kwargs['_temp_files_to_cleanup'] = temp_files_to_cleanup
     
     try:
         if workflow_type == "simple":
-            result = run_simple_workflow(**kwargs)
+            result = run_simple_workflow(**filtered_kwargs)
         elif workflow_type == "optimization":
-            result = run_optimization_workflow(**kwargs)
+            result = run_optimization_workflow(**filtered_kwargs)
         elif workflow_type == "monte_carlo":
-            result = run_monte_carlo_workflow(**kwargs)
+            result = run_monte_carlo_workflow(**filtered_kwargs)
         elif workflow_type == "complete":
-            result = run_complete_workflow(**kwargs)
+            result = run_complete_workflow(**filtered_kwargs)
         elif workflow_type == "walkforward":
-            result = run_walkforward_workflow(**kwargs)
+            # Ensure we're passing the plot parameter correctly
+            if 'plot' not in filtered_kwargs:
+                # Default to False if not provided
+                filtered_kwargs['plot'] = False
+            result = run_walkforward_workflow(**filtered_kwargs)
         else:
             logger.error(f"Unknown workflow type: {workflow_type}")
             return {"status": "error", "message": f"Unknown workflow type: {workflow_type}"}
@@ -248,6 +284,15 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     # Initialize temporary files list to track files that need cleanup
     temp_files_to_cleanup = []
     
+    # Define workflow-specific parameters
+    workflow_specific_params = {
+        "simple": ['plot'],
+        "optimization": ['n_trials', 'optimization_metric', 'max_combinations'],
+        "monte_carlo": ['n_simulations', 'keep_permuted_data', 'enhanced_plots'],
+        "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric'],
+        "complete": []  # Complete workflow can use all parameters
+    }
+    
     workflow_params = {}
     
     for strategy_name, strategy_config in config['strategies'].items():
@@ -312,7 +357,17 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         
         # Add workflow-specific parameters
         if workflow_type in strategy_config:
-            params.update(strategy_config[workflow_type])
+            # Only add parameters that are relevant to this workflow type
+            allowed_params = workflow_specific_params.get('complete', [])  # All params for complete workflow
+            if workflow_type != 'complete':
+                allowed_params = workflow_specific_params.get(workflow_type, [])
+            
+            # Add only the parameters that are allowed for this workflow type
+            for key, value in strategy_config[workflow_type].items():
+                if workflow_type == 'complete' or key in allowed_params:
+                    params[key] = value
+                else:
+                    logger.debug(f"Skipping parameter '{key}' as it's not applicable to {workflow_type} workflow")
             
         # For complete workflow, pass optimization and monte_carlo config if available
         if workflow_type == 'complete':

@@ -316,30 +316,39 @@ def run_monte_carlo_workflow(
                 "output_dir": output_dir
             }
         
-        # Run backtest to get equity curve data
-        print_section("Running Initial Backtest for Monte Carlo Analysis")
+        # Log workflow header
+        print_header(f"Running Initial Backtest for Monte Carlo Analysis")
         
-        # Adapt strategy parameters if needed
+        # Adapt parameters for strategy if needed
         adapted_parameters = adapt_strategy_parameters(strategy_name, parameters)
         
-        # Log the adaptation
-        if adapted_parameters != parameters:
-            logger.info(f"Using adapted parameters for {strategy_name}")
-            print_parameters(adapted_parameters)
+        # Add validation for AuctionMarket strategy parameters to prevent division by zero
+        if strategy_name == "AuctionMarket":
+            # Check if adaptations needed at top level
+            if not adapted_parameters.get("auction_zones") and parameters.get("auction_zones"):
+                adapted_parameters["auction_zones"] = parameters["auction_zones"].copy()
+            
+            # Ensure balance_threshold is valid if it exists
+            if adapted_parameters.get("auction_zones") and "balance_threshold" in adapted_parameters["auction_zones"]:
+                if adapted_parameters["auction_zones"]["balance_threshold"] <= 0:
+                    logger.warning("balance_threshold must be greater than 0. Setting to default value 0.5")
+                    adapted_parameters["auction_zones"]["balance_threshold"] = 0.5
+        
+        logger.info(f"Adapted parameters for {strategy_name} strategy")
         
         # Run backtest
         backtest_result = run_backtest(
             strategy_name=strategy_name,
-            parameters=adapted_parameters,  # These are the optimized parameters from complete_workflow
+            parameters=adapted_parameters,
             tickers=tickers,
             start_date=start_date,
             end_date=end_date,
-            output_dir=os.path.join(output_dir, "backtest"),
-            verbose=verbose,
             initial_capital=initial_capital,
             commission=commission,
             data_dir=data_dir,
-            plot=plot  # Pass the plot flag to control whether charts are generated
+            output_dir=output_dir,
+            verbose=verbose,  # Add verbose parameter back
+            plot=False       # Don't generate plots here, we'll do it in the Monte Carlo analysis
         )
         
         if backtest_result is None or (isinstance(backtest_result, dict) and backtest_result.get("status") != "success"):

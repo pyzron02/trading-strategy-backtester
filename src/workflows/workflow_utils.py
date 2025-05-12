@@ -458,6 +458,28 @@ def adapt_strategy_parameters(strategy_name: str, parameters: Dict[str, Any]) ->
         if config_param in parameters:
             adapted_params[strategy_param] = parameters[config_param]
     
+    # Specific validation for AuctionMarket strategy to prevent division by zero errors
+    if strategy_name == "AuctionMarket":
+        # Handle nested auction zones parameters if present
+        if "auction_zones" in parameters:
+            # Create auction_zones dict if it doesn't exist in adapted_params
+            if "auction_zones" not in adapted_params:
+                adapted_params["auction_zones"] = {}
+                
+            # Ensure balance_threshold is never zero or negative
+            if "balance_threshold" in parameters["auction_zones"]:
+                balance_threshold = parameters["auction_zones"]["balance_threshold"]
+                if balance_threshold <= 0:
+                    logger.warning("AuctionMarket balance_threshold must be > 0. Setting to default 0.5")
+                    adapted_params["auction_zones"]["balance_threshold"] = 0.5
+                else:
+                    adapted_params["auction_zones"]["balance_threshold"] = balance_threshold
+            
+            # Copy other auction zones parameters
+            for key in parameters["auction_zones"]:
+                if key != "balance_threshold" and key not in adapted_params["auction_zones"]:
+                    adapted_params["auction_zones"][key] = parameters["auction_zones"][key]
+    
     # Log the adaptation
     logger.info(f"Adapted parameters for {strategy_name} strategy")
     logger.debug(f"Original parameters: {parameters}")
