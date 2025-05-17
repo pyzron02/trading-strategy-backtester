@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Strategy Backtester</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css" id="flatpickr-dark-css" disabled>
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .parameter-fields {
+            margin-top: 20px;
+        }
+        .card {
+            margin-bottom: 20px;
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+        .alert-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+        }
+        .tab-content {
+            padding-top: 20px;
+        }
+        
+        /* Dark mode toggle button */
+        .mode-toggle {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: var(--bs-primary);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+            transition: background-color 0.3s, transform 0.2s;
+        }
+        
+        .mode-toggle:hover {
+            transform: scale(1.1);
+        }
+        
+        .mode-toggle:active {
+            transform: scale(0.95);
+        }
+        
+        /* Dark mode styles */
+        body.dark-mode {
+            background-color: #121212;
+            color: #e0e0e0;
+        }
+        
+        .dark-mode .card {
+            background-color: #1e1e1e;
+            border-color: #2d2d2d;
+        }
+        
+        .dark-mode .card-header {
+            background-color: #2d2d2d;
+            border-color: #3d3d3d;
+        }
+        
+        .dark-mode .nav-tabs {
+            border-color: #2d2d2d;
+        }
+        
+        .dark-mode .nav-tabs .nav-link {
+            color: #e0e0e0;
+        }
+        
+        .dark-mode .nav-tabs .nav-link.active {
+            background-color: #2d2d2d;
+            border-color: #3d3d3d #3d3d3d #2d2d2d;
+            color: #fff;
+        }
+        
+        .dark-mode .form-control, 
+        .dark-mode .form-select {
+            background-color: #2d2d2d;
+            border-color: #3d3d3d;
+            color: #e0e0e0;
+        }
+        
+        .dark-mode .form-control:focus, 
+        .dark-mode .form-select:focus {
+            background-color: #2d2d2d;
+            border-color: #4d4d4d;
+            color: #e0e0e0;
+        }
+        
+        .dark-mode .text-muted {
+            color: #9e9e9e !important;
+        }
+        
+        .dark-mode .border-bottom {
+            border-color: #2d2d2d !important;
+        }
+        
+        .dark-mode .card-header.bg-primary {
+            background-color: #3d5a80 !important;
+        }
+        
+        .dark-mode .card-header.bg-success {
+            background-color: #3a7563 !important;
+        }
+        
+        .dark-mode .btn-outline-primary {
+            border-color: #3d5a80;
+            color: #3d5a80;
+        }
+        
+        .dark-mode .btn-outline-primary:hover {
+            background-color: #3d5a80;
+            color: white;
+        }
+        
+        .dark-mode .btn-primary {
+            background-color: #3d5a80;
+            border-color: #3d5a80;
+        }
+        
+        .dark-mode .btn-primary:hover {
+            background-color: #2d4a70;
+            border-color: #2d4a70;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="pb-3 mb-4 border-bottom">
+            <div class="d-flex justify-content-between align-items-center">
+            <h1 class="display-5 fw-bold">Trading Strategy Backtester</h1>
+                <a href="{{ url_for('results') }}" class="btn btn-outline-primary">View Results</a>
+            </div>
+        </header>
+
+        <div class="alert-container">
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    {% for message in messages %}
+                        <div class="alert alert-info alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+        </div>
+
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Configure Backtest</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="backtest-form" action="{{ url_for('run_backtest') }}" method="post">
+                            <div class="mb-3">
+                                <label for="strategy" class="form-label">Trading Strategy</label>
+                                <select class="form-select" id="strategy" name="strategy" required>
+                                    <option value="" disabled selected>Select a strategy</option>
+                                    {% for strategy in strategies %}
+                                    <option value="{{ strategy.name }}">{{ strategy.name }} (v{{ strategy.version }})</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="tickers" class="form-label">Tickers (comma-separated)</label>
+                                <input type="text" class="form-control" id="tickers" name="tickers" placeholder="e.g. SPY,MSFT,GOOG" value="SPY" required>
+                            </div>
+
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label for="start_date" class="form-label">Start Date (YYYY-MM-DD)</label>
+                                    <input type="text" class="form-control" id="start_date" name="start_date" value="{{ default_start_date }}" placeholder="YYYY-MM-DD" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="end_date" class="form-label">End Date (YYYY-MM-DD)</label>
+                                    <input type="text" class="form-control" id="end_date" name="end_date" value="{{ default_end_date }}" placeholder="YYYY-MM-DD" required>
+                                </div>
+                            </div>
+
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label for="workflow_type" class="form-label">Workflow Type</label>
+                                    <select class="form-select" id="workflow_type" name="workflow_type">
+                                        <option value="simple" selected>Simple Backtest</option>
+                                        <option value="optimization">Optimization</option>
+                                        <option value="monte_carlo">Monte Carlo</option>
+                                        <option value="walkforward">Walk Forward</option>
+                                        <option value="complete">Complete Workflow</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="initial_capital" class="form-label">Initial Capital</label>
+                                    <input type="number" class="form-control" id="initial_capital" name="initial_capital" value="100000" min="1000" step="1000">
+                                </div>
+                            </div>
+
+                            <div id="optimization-params" class="row mb-3" style="display:none;">
+                                <div class="col-md-6">
+                                    <label for="n_trials" class="form-label">Number of Trials</label>
+                                    <input type="number" class="form-control" id="n_trials" name="n_trials" value="50" min="1" max="1000">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="optimization_metric" class="form-label">Optimization Metric</label>
+                                    <select class="form-select" id="optimization_metric" name="optimization_metric">
+                                        <option value="sharpe_ratio" selected>Sharpe Ratio</option>
+                                        <option value="sortino_ratio">Sortino Ratio</option>
+                                        <option value="calmar_ratio">Calmar Ratio</option>
+                                        <option value="total_return">Total Return</option>
+                                        <option value="profit_factor">Profit Factor</option>
+                                        <option value="max_drawdown">Maximum Drawdown</option>
+                                        <option value="average_trade">Average Trade</option>
+                                        <option value="win_rate">Win Rate</option>
+                                        <option value="ulcer_index">Ulcer Index</option>
+                                        <option value="cagr">CAGR</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div id="monte-carlo-params" class="row mb-3" style="display:none;">
+                                <div class="col-md-6">
+                                    <label for="n_simulations" class="form-label">Number of Simulations</label>
+                                    <input type="number" class="form-control" id="n_simulations" name="n_simulations" value="{{ default_num_simulations }}" min="10" max="1000">
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-check mt-4">
+                                        <input type="checkbox" class="form-check-input" id="keep_permuted_data" name="keep_permuted_data">
+                                        <label class="form-check-label" for="keep_permuted_data">Keep Permuted Data</label>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div id="walk-forward-params" class="row mb-3" style="display:none;">
+                                <div class="col-md-6">
+                                    <label for="n_windows" class="form-label">Number of Windows</label>
+                                    <input type="number" class="form-control" id="n_windows" name="n_windows" value="{{ default_walk_forward_windows }}" min="2" max="20">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="in_sample_pct" class="form-label">In-Sample Percentage</label>
+                                    <input type="number" class="form-control" id="in_sample_pct" name="in_sample_pct" value="{{ default_in_sample_pct }}" min="0.1" max="0.9" step="0.05">
+                                </div>
+                                <div class="col-md-6 mt-2">
+                                    <label for="anchor" class="form-label">Window Type</label>
+                                    <select class="form-select" id="anchor" name="anchor">
+                                        <option value="rolling" selected>Rolling Window</option>
+                                        <option value="anchored">Anchored Window</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6 mt-2">
+                                    <label for="reoptimize" class="form-label">Reoptimization Strategy</label>
+                                    <select class="form-select" id="reoptimize" name="reoptimize">
+                                        <option value="always" selected>Always</option>
+                                        <option value="on_degradation">On Degradation</option>
+                                        <option value="never">Never</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-12 mt-2">
+                                    <div class="form-check">
+                                        <input type="checkbox" class="form-check-input" id="combine_results" name="combine_results" checked>
+                                        <label class="form-check-label" for="combine_results">Combine Results</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input type="checkbox" class="form-check-input" id="plot_comparisons" name="plot_comparisons" checked>
+                                        <label class="form-check-label" for="plot_comparisons">Plot Comparisons</label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="verbose" name="verbose">
+                                <label class="form-check-label" for="verbose">Verbose Output</label>
+                            </div>
+
+                            <h5 class="mt-4">Strategy Parameters</h5>
+                            
+                            <ul class="nav nav-tabs" id="paramTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="single-tab" data-bs-toggle="tab" data-bs-target="#single-params" type="button" role="tab" aria-controls="single-params" aria-selected="true">Single Values</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="grid-tab" data-bs-toggle="tab" data-bs-target="#grid-params" type="button" role="tab" aria-controls="grid-params" aria-selected="false">Parameter Grid</button>
+                                </li>
+                            </ul>
+                            
+                            <div class="tab-content" id="paramTabsContent">
+                                <div class="tab-pane fade show active" id="single-params" role="tabpanel" aria-labelledby="single-tab">
+                                    <div id="parameter-fields" class="parameter-fields">
+                                        <p class="text-muted">Please select a strategy to see available parameters</p>
+                                    </div>
+                                </div>
+                                <div class="tab-pane fade" id="grid-params" role="tabpanel" aria-labelledby="grid-tab">
+                                    <div id="parameter-grid-fields" class="parameter-fields">
+                                        <p class="text-muted">Please select a strategy to see available parameters for optimization</p>
+                                    </div>
+                                    <div class="form-text text-muted mb-3">
+                                        Specify parameter ranges for optimization. Enter comma-separated values for each parameter.
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary mt-3">Run Backtest</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h5>Available Workflows</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>Choose from the following workflow types:</p>
+                        <ul>
+                            <li><strong>Simple Backtest</strong> - Run a basic backtest with your strategy</li>
+                            <li><strong>Optimization</strong> - Find the best parameters for your strategy</li>
+                            <li><strong>Monte Carlo</strong> - Analyze risk with randomized price data</li>
+                            <li><strong>Walk Forward</strong> - Test strategy across multiple time windows</li>
+                            <li><strong>Complete Workflow</strong> - Run optimization, walk forward analysis, and Monte Carlo simulation</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card mt-3">
+                    <div class="card-header bg-success text-white">
+                        <h5>Documentation</h5>
+                    </div>
+                    <div class="card-body">
+                        <h6>Available Strategies:</h6>
+                        <ul>
+                            {% for strategy in strategies %}
+                            <li><strong>{{ strategy.name }}</strong> (v{{ strategy.version }})</li>
+                            {% endfor %}
+                        </ul>
+                        <hr>
+                        <p>The <strong>complete workflow</strong> includes:</p>
+                        <ol>
+                            <li>Parameter optimization</li>
+                            <li>Walk forward analysis</li>
+                            <li>Backtesting with optimal parameters</li>
+                            <li>Monte Carlo simulation</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Dark Mode Toggle Button -->
+    <button id="mode-toggle" class="mode-toggle" title="Toggle dark/light mode">
+        <i class="bi bi-moon-stars-fill" id="dark-mode-icon"></i>
+        <i class="bi bi-sun-fill" id="light-mode-icon" style="display: none;"></i>
+    </button>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script>
+        // Initialize date pickers
+        flatpickr("#start_date", {
+            dateFormat: "Y-m-d"
+        });
+        flatpickr("#end_date", {
+            dateFormat: "Y-m-d"
+        });
+
+        // Show/hide workflow-specific parameters
+        document.getElementById('workflow_type').addEventListener('change', function() {
+            const workflowType = this.value;
+            const optimizationParams = document.getElementById('optimization-params');
+            const monteCarloParams = document.getElementById('monte-carlo-params');
+            const walkForwardParams = document.getElementById('walk-forward-params');
+            
+            // Reset displays
+            optimizationParams.style.display = 'none';
+            monteCarloParams.style.display = 'none';
+            if (walkForwardParams) walkForwardParams.style.display = 'none';
+            
+            // Show relevant params based on workflow type
+            if (workflowType === 'optimization' || workflowType === 'complete' || workflowType === 'walkforward') {
+                optimizationParams.style.display = 'flex';
+            }
+            
+            if (workflowType === 'monte_carlo' || workflowType === 'complete') {
+                monteCarloParams.style.display = 'flex';
+            }
+            
+            if (workflowType === 'walkforward' || workflowType === 'complete') {
+                if (walkForwardParams) walkForwardParams.style.display = 'flex';
+            }
+        });
+
+        // Function to load strategy parameters
+        function loadStrategyParams() {
+            const strategy = document.getElementById('strategy').value;
+            if (!strategy) return;
+            
+            fetch(`/strategy/${strategy}`)
+                .then(response => response.json())
+                .then(data => {
+                    const paramFields = document.getElementById('parameter-fields');
+                    const gridFields = document.getElementById('parameter-grid-fields');
+                    
+                    // Clear existing fields
+                    paramFields.innerHTML = '';
+                    gridFields.innerHTML = '';
+                    
+                    if (data.parameters) {
+                        // Create fields for single parameter values
+                        for (const [param, paramInfo] of Object.entries(data.parameters)) {
+                            // Create field for single value
+                            const singleField = document.createElement('div');
+                            singleField.className = 'mb-3';
+                            
+                            const label = document.createElement('label');
+                            label.className = 'form-label';
+                            label.htmlFor = `param_${param}`;
+                            label.textContent = paramInfo.description || param;
+                            
+                            let input;
+                            if (paramInfo.type === 'bool') {
+                                input = document.createElement('div');
+                                input.className = 'form-check';
+                                
+                                const checkbox = document.createElement('input');
+                                checkbox.type = 'checkbox';
+                                checkbox.className = 'form-check-input';
+                                checkbox.id = `param_${param}`;
+                                checkbox.name = `param_${param}`;
+                                if (paramInfo.default === true) checkbox.checked = true;
+                                
+                                const checkLabel = document.createElement('label');
+                                checkLabel.className = 'form-check-label';
+                                checkLabel.htmlFor = `param_${param}`;
+                                checkLabel.textContent = paramInfo.description || param;
+                                
+                                input.appendChild(checkbox);
+                                input.appendChild(checkLabel);
+                                
+                                // Skip adding the regular label
+                                singleField.appendChild(input);
+                } else {
+                                input = document.createElement('input');
+                                input.type = paramInfo.type === 'float' ? 'number' : 'text';
+                                input.className = 'form-control';
+                                input.id = `param_${param}`;
+                                input.name = `param_${param}`;
+                                input.value = paramInfo.default || '';
+                                
+                                if (paramInfo.type === 'int' || paramInfo.type === 'float') {
+                                    input.type = 'number';
+                                    if (paramInfo.min !== undefined) input.min = paramInfo.min;
+                                    if (paramInfo.max !== undefined) input.max = paramInfo.max;
+                                    input.step = paramInfo.type === 'float' ? '0.01' : '1';
+                                }
+                                
+                                singleField.appendChild(label);
+                                singleField.appendChild(input);
+                            }
+                            
+                            paramFields.appendChild(singleField);
+                            
+                            // Create field for grid values
+                            const gridField = document.createElement('div');
+                            gridField.className = 'mb-3';
+                            
+                            const gridLabel = document.createElement('label');
+                            gridLabel.className = 'form-label';
+                            gridLabel.htmlFor = `grid_${param}`;
+                            gridLabel.textContent = `${paramInfo.description || param} (comma-separated values)`;
+                            
+                            const gridInput = document.createElement('input');
+                            gridInput.type = 'text';
+                            gridInput.className = 'form-control';
+                            gridInput.id = `grid_${param}`;
+                            gridInput.name = `grid_${param}`;
+                            
+                            // Generate default grid values based on parameter type
+                            if (paramInfo.type === 'int') {
+                                const defaultVal = paramInfo.default || 0;
+                                const min = paramInfo.min !== undefined ? paramInfo.min : Math.max(1, defaultVal - 5);
+                                const max = paramInfo.max !== undefined ? paramInfo.max : defaultVal + 5;
+                                gridInput.value = `${min}, ${defaultVal}, ${max}`;
+                            } else if (paramInfo.type === 'float') {
+                                const defaultVal = paramInfo.default || 0;
+                                const min = paramInfo.min !== undefined ? paramInfo.min : Math.max(0.01, defaultVal / 2);
+                                const max = paramInfo.max !== undefined ? paramInfo.max : defaultVal * 2;
+                                gridInput.value = `${min.toFixed(2)}, ${defaultVal.toFixed(2)}, ${max.toFixed(2)}`;
+                            } else if (paramInfo.type === 'bool') {
+                                gridInput.value = 'true, false';
+                            }
+                            
+                            gridField.appendChild(gridLabel);
+                            gridField.appendChild(gridInput);
+                            
+                            gridFields.appendChild(gridField);
+                        }
+                            } else {
+                        paramFields.innerHTML = '<p class="text-danger">No parameters available for this strategy</p>';
+                        gridFields.innerHTML = '<p class="text-danger">No parameters available for this strategy</p>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading strategy parameters:', error);
+                    document.getElementById('parameter-fields').innerHTML = 
+                        `<p class="text-danger">Error loading parameters: ${error.message}</p>`;
+                    document.getElementById('parameter-grid-fields').innerHTML = 
+                        `<p class="text-danger">Error loading parameters: ${error.message}</p>`;
+                });
+        }
+
+        // Load parameters when strategy changes
+        document.getElementById('strategy').addEventListener('change', loadStrategyParams);
+        
+        // Dark mode functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const darkModeToggle = document.getElementById('mode-toggle');
+            const darkModeIcon = document.getElementById('dark-mode-icon');
+            const lightModeIcon = document.getElementById('light-mode-icon');
+            const flatpickrDarkCSS = document.getElementById('flatpickr-dark-css');
+            
+            // Check for saved theme preference or use preferred color scheme
+            const savedTheme = localStorage.getItem('theme');
+            const prefersDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            
+            // Apply theme based on saved preference or system preference
+            if (savedTheme === 'dark' || (!savedTheme && prefersDarkMode)) {
+                enableDarkMode();
+            } else {
+                enableLightMode();
+            }
+            
+            // Toggle between dark and light mode
+            darkModeToggle.addEventListener('click', function() {
+                if (document.body.classList.contains('dark-mode')) {
+                    enableLightMode();
+                } else {
+                    enableDarkMode();
+                }
+            });
+            
+            function enableDarkMode() {
+                document.body.classList.add('dark-mode');
+                darkModeIcon.style.display = 'none';
+                lightModeIcon.style.display = 'block';
+                localStorage.setItem('theme', 'dark');
+                flatpickrDarkCSS.removeAttribute('disabled');
+                
+                // Reinitialize flatpickr with dark theme
+                if (typeof flatpickr === 'function') {
+                    flatpickr("#start_date", {
+                        dateFormat: "Y-m-d",
+                        theme: "dark"
+                    });
+                    flatpickr("#end_date", {
+                        dateFormat: "Y-m-d",
+                        theme: "dark"
+                    });
+                }
+            }
+            
+            function enableLightMode() {
+                document.body.classList.remove('dark-mode');
+                darkModeIcon.style.display = 'block';
+                lightModeIcon.style.display = 'none';
+                localStorage.setItem('theme', 'light');
+                flatpickrDarkCSS.setAttribute('disabled', 'disabled');
+                
+                // Reinitialize flatpickr with light theme
+                if (typeof flatpickr === 'function') {
+                    flatpickr("#start_date", {
+                        dateFormat: "Y-m-d"
+                    });
+                    flatpickr("#end_date", {
+                        dateFormat: "Y-m-d"
+                    });
+                }
+            }
+        });
+    </script>
+</body>
+</html> 

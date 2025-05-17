@@ -1,0 +1,8 @@
+{
+    "progress": 0,
+    "status": "Failed",
+    "current_step": "Error: run_simple_workflow() got an unexpected keyword argument 'keep_permuted_data'",
+    "total_steps": 6,
+    "current_step_progress": 0,
+    "last_update": "2025-04-19 16:40:04"
+}

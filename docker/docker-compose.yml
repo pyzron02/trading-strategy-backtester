@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  trading-backtester:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ../input:/app/trading-strategy-backtester/input
+      - ../output:/app/trading-strategy-backtester/output
+      - ../logs:/app/trading-strategy-backtester/logs
+      - ../cache:/app/trading-strategy-backtester/cache
+      - ../frontend/temp:/app/frontend/temp
+      - ../frontend/output:/app/frontend/output
+      - ../frontend/app.py:/app/frontend/app.py
+    environment:
+      - SECRET_KEY=your_secret_key_change_this_in_production
+      - BACKTESTER_ROOT=/app/trading-strategy-backtester
+      - BASE_DIR=/app/trading-strategy-backtester
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
