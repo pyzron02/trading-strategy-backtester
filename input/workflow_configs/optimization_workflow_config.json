@@ -1,0 +1,27 @@
+{
+  "workflow_type": "optimization",
+  "common_params": {
+    "start_date": "2020-01-01",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["SPY"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": false,
+    "verbose": false
+  },
+  "strategies": {
+    "MultiPosition": {
+      "parameter_grid": {
+        "max_positions": [1, 3, 5, 7, 10],
+        "position_size": [20, 50, 100],
+        "sma_period": [10, 20, 50, 100]
+      },
+      "optimization": {
+        "n_trials": 50,
+        "optimization_metric": "sharpe_ratio",
+        "max_combinations": 100
+      }
+    }
+  }
+}

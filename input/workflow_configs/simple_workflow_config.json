@@ -1,0 +1,23 @@
+{
+  "workflow_type": "simple",
+  "common_params": {
+    "start_date": "2020-01-01",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["SPY", "AAPL"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": false,
+    "verbose": false
+  },
+  "strategies": {
+    "MACrossover": {
+      "param_file": "input/parameters/MACrossover_params.json",
+      "parameters": {
+        "fast_period": 10,
+        "slow_period": 50,
+        "position_size": 100
+      }
+    }
+  }
+}

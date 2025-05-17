@@ -1,0 +1,23 @@
+{
+  "workflow_type": "monte_carlo",
+  "common_params": {
+    "start_date": "2020-01-01",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["AAPL"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": false,
+    "verbose": false
+  },
+  "strategies": {
+    "AuctionMarket": {
+      "param_file": "input/parameters/AuctionMarket_params.json",
+      "monte_carlo": {
+        "n_simulations": 1000,
+        "enhanced_plots": true,
+        "keep_permuted_data": false
+      }
+    }
+  }
+}

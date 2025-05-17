@@ -1,0 +1,28 @@
+{
+  "workflow_type": "walkforward",
+  "common_params": {
+    "start_date": "2020-01-01",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["SPY"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": false,
+    "verbose": false
+  },
+  "strategies": {
+    "SimpleStock": {
+      "parameter_grid": {
+        "sma_period": [5, 10, 15, 20, 25, 30, 40, 50],
+        "position_size": [50, 100, 150, 200]
+      },
+      "walkforward": {
+        "window_size": 252,
+        "step_size": 63,
+        "in_sample_ratio": 0.7,
+        "reoptimize": "on_degradation",
+        "reoptimization_threshold": 0.1
+      }
+    }
+  }
+}
