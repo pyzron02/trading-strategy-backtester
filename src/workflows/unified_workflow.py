@@ -31,6 +31,7 @@ from workflows.optimization_workflow import run_optimization_workflow
 from workflows.monte_carlo_workflow import run_monte_carlo_workflow
 from workflows.walkforward_workflow import run_walkforward_workflow
 from workflows.complete_workflow import run_complete_workflow
+from utils.error_reporting import create_stage_error_report, StageError, StageErrorReport
 # Remove circular import
 # from workflows.cli import run_cli
 
@@ -55,6 +56,18 @@ def is_parameter_grid(param_file: str) -> bool:
         return any(isinstance(value, list) for value in params.values())
     except Exception as e:
         logger.warning(f"Error checking parameter file {param_file}: {str(e)}")
+        
+
+        # Generate stage error report
+
+        try:
+
+            create_stage_error_report(output_dir, 'unified', strategy_name)
+
+        except Exception as report_err:
+
+            logger.error(f"Error generating stage error report: {report_err}")
+            
         return False
 
 def cleanup_duplicate_logs(output_dir: str, strategy_name: str, workflow_type: str):
@@ -140,7 +153,8 @@ def run_unified_workflow(workflow_type, **kwargs):
         "simple": ['plot'],
         "optimization": ['n_trials', 'optimization_metric', 'max_combinations'],
         "monte_carlo": ['n_simulations', 'keep_permuted_data', 'enhanced_plots', 'plot'],
-        "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric'],
+        "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric', 
+                        'reoptimize', 'reoptimization_threshold', 'enhanced_plots', 'plot'],
         "complete": []  # Complete workflow can use all parameters
     }
     
@@ -289,7 +303,7 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         "simple": ['plot'],
         "optimization": ['n_trials', 'optimization_metric', 'max_combinations'],
         "monte_carlo": ['n_simulations', 'keep_permuted_data', 'enhanced_plots'],
-        "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric'],
+        "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric', 'reoptimize', 'reoptimization_threshold'],
         "complete": []  # Complete workflow can use all parameters
     }
     
@@ -507,6 +521,24 @@ def run_unified_workflow_from_config(config_file: str) -> Dict[str, Any]:
         temp_files = params.get('_temp_files_to_cleanup', [])
         if temp_files:
             all_temp_files.extend(temp_files)
+        
+        # Ensure data is available for all tickers before running the workflow
+        tickers = params.get('tickers')
+        start_date = params.get('start_date')
+        end_date = params.get('end_date')
+        data_dir = params.get('data_dir', 'input')
+        
+        if tickers and start_date and end_date:
+            logger.info(f"Ensuring data is available for tickers: {tickers}")
+            try:
+                from workflows.simple_workflow import ensure_data_available
+                stock_data_path = ensure_data_available(tickers, start_date, end_date, data_dir)
+                logger.info(f"Data verified for tickers {tickers} at {stock_data_path}")
+                # Add the verified stock_csv path to params
+                params['stock_csv'] = stock_data_path
+            except Exception as e:
+                logger.error(f"Error ensuring data availability: {e}")
+                # Continue with the workflow, it will handle missing data gracefully
         
         # Update progress with strategy info
         if progress_file:

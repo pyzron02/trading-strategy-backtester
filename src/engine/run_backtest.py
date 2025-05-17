@@ -323,14 +323,44 @@ def run_backtest(
         cerebro.broker.setcash(initial_capital)  # Set initial cash
         cerebro.broker.setcommission(commission)  # Set commission
         
-        # Validate tickers against available data
+        # Check if there are any missing tickers and download them if needed
+        missing_tickers = []
         valid_tickers = []
         for ticker in tickers:
             close_col = f"{ticker}_Close"
             if close_col in columns:
                 valid_tickers.append(ticker)
             else:
-                print(f"Warning: No data for ticker {ticker} in CSV file")
+                missing_tickers.append(ticker)
+                
+        if missing_tickers:
+            print(f"Missing data for tickers: {missing_tickers}. Attempting to download...")
+            try:
+                # Import the data_setup module to fetch missing tickers
+                from data_preprocessing.data_setup import fetch_stock_data
+                # Force refresh to ensure we get all the missing tickers
+                fetch_stock_data(tickers, start_date, end_date, force_refresh=True)
+                print(f"Successfully downloaded data for missing tickers: {missing_tickers}")
+                
+                # Re-read the CSV file to get updated columns
+                df = pd.read_csv(stock_csv)
+                columns = list(df.columns)
+                col_map = {col: i for i, col in enumerate(columns)}
+                
+                # Validate tickers again
+                valid_tickers = []
+                still_missing = []
+                for ticker in tickers:
+                    close_col = f"{ticker}_Close"
+                    if close_col in columns:
+                        valid_tickers.append(ticker)
+                    else:
+                        still_missing.append(ticker)
+                
+                if still_missing:
+                    print(f"Warning: Still unable to get data for tickers: {still_missing}")
+            except Exception as e:
+                print(f"Error downloading ticker data: {e}")
         
         if not valid_tickers:
             error_message = f"No valid tickers found in CSV file: {stock_csv}"

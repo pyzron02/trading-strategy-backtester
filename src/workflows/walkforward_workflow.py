@@ -31,6 +31,7 @@ from workflows.workflow_utils import (
 # Import engine components
 from engine.testing.walk_forward_test import WalkForwardTest
 from workflows.simple_workflow import ensure_data_available
+from utils.error_reporting import create_stage_error_report, StageError, StageErrorReport
 
 @time_execution("walkforward workflow")
 def run_walkforward_workflow(
@@ -46,12 +47,15 @@ def run_walkforward_workflow(
     step_size: int = 63,
     n_trials: int = 50,
     optimization_metric: str = "sharpe_ratio",
+    reoptimize: str = "always",  # Options: always, on_degradation, never
+    reoptimization_threshold: float = 0.05,  # Threshold for on_degradation reoptimization
     verbose: bool = False,
     initial_capital: float = 100000.0,
     commission: float = 0.001,
     _temp_files_to_cleanup: Optional[List[str]] = None,
     data_dir: str = "input",
-    plot: bool = False  # Whether to generate plots during backtests
+    plot: bool = False,  # Whether to generate plots during backtests
+    enhanced_plots: bool = False  # Whether to generate enhanced plots
 ) -> Dict[str, Any]:
     """
     Run a walk-forward analysis workflow for the given strategy.
@@ -69,11 +73,14 @@ def run_walkforward_workflow(
         step_size: Size of the out-of-sample window in trading days
         n_trials: Number of optimization trials for each in-sample period
         optimization_metric: Metric to optimize for
+        reoptimize: Strategy for parameter reoptimization (always, on_degradation, never)
+        reoptimization_threshold: Performance degradation threshold for on_degradation mode
         verbose: Whether to print detailed output
         initial_capital: Initial capital for backtest
         commission: Commission rate for trades
         data_dir: Directory containing input data
-        plot: Whether to generate plots (ignored, included for compatibility)
+        plot: Whether to generate plots during backtests
+        enhanced_plots: Whether to generate enhanced plots with additional metrics
     
     Returns:
         Dict containing the workflow results
@@ -92,7 +99,9 @@ def run_walkforward_workflow(
         "window_size": window_size,
         "step_size": step_size,
         "optimization_metric": optimization_metric,
-        "n_trials": n_trials
+        "n_trials": n_trials,
+        "reoptimize": reoptimize,
+        "reoptimization_threshold": reoptimization_threshold if reoptimize == "on_degradation" else "N/A"
     }
     print_workflow_log(
         workflow_name="Walk-Forward Analysis Workflow",
@@ -187,6 +196,18 @@ def run_walkforward_workflow(
                     _temp_files_to_cleanup.append(param_grid_file)
                 except Exception as e:
                     logger.error(f"Error creating parameter grid: {e}")
+                    
+
+                    # Generate stage error report
+
+                    try:
+
+                        create_stage_error_report(output_dir, 'walkforward', strategy_name)
+
+                    except Exception as report_err:
+
+                        logger.error(f"Error generating stage error report: {report_err}")
+                        
                     return {"status": "error", "message": f"Parameter grid file not found and could not create one: {str(e)}"}
             else:
                 logger.error(f"Error: Parameter grid file not found for {strategy_name} and no default parameters available")
@@ -200,6 +221,9 @@ def run_walkforward_workflow(
     logger.info(f"Step size: {step_size} days")
     logger.info(f"Optimization metric: {optimization_metric}")
     logger.info(f"Trials per window: {n_trials}")
+    logger.info(f"Reoptimization strategy: {reoptimize}")
+    if reoptimize == "on_degradation":
+        logger.info(f"Reoptimization threshold: {reoptimization_threshold * 100:.1f}%")
     
     try:
         # Ensure stock_data.csv is available and contains required tickers
@@ -235,7 +259,9 @@ def run_walkforward_workflow(
             out_sample_end=out_sample_end,
             output_dir=output_dir,
             parameters=parameters,
-            plot=plot  # Respect the plot parameter from user configuration
+            plot=plot,  # Respect the plot parameter from user configuration
+            reoptimize=reoptimize,
+            reoptimization_threshold=reoptimization_threshold
         )
         
         # Run walk-forward analysis
@@ -504,7 +530,9 @@ def run_walkforward_workflow(
                 "window_size": window_size,
                 "step_size": step_size,
                 "n_trials": n_trials,
-                "optimization_metric": optimization_metric
+                "optimization_metric": optimization_metric,
+                "reoptimize": reoptimize,
+                "reoptimization_threshold": reoptimization_threshold
             },
             "overall_metrics": overall_metrics,
             "period_results": period_results,
@@ -512,7 +540,9 @@ def run_walkforward_workflow(
                 "window_size": window_size,
                 "step_size": step_size,
                 "n_trials": n_trials,
-                "optimization_metric": optimization_metric
+                "optimization_metric": optimization_metric,
+                "reoptimize": reoptimize,
+                "reoptimization_threshold": reoptimization_threshold
             },
             "metrics": overall_metrics  # Add metrics to match expected structure in save_results_summary
         }
@@ -741,6 +771,9 @@ def run_walkforward_workflow(
                     f.write(f"step_size: {step_size}\n")
                     f.write(f"n_trials: {n_trials}\n")
                     f.write(f"optimization_metric: {optimization_metric}\n")
+                    f.write(f"reoptimize: {reoptimize}\n")
+                    if reoptimize == "on_degradation":
+                        f.write(f"reoptimization_threshold: {reoptimization_threshold * 100:.1f}%\n")
                     
             logger.info(f"Created direct parameter summary at {direct_summary_path}")
         except Exception as e:

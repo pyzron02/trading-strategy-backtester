@@ -40,7 +40,8 @@ class WalkForwardTest:
     def __init__(self, strategy_name, in_sample_start='2015-01-01', in_sample_end='2019-12-31',
                  out_sample_start='2020-01-01', out_sample_end='2021-12-31', tickers=None,
                  output_dir='output/walk_forward_test', parameters=None, load_optimized=False,
-                 optimized_params_path=None, plot=False, workflow_type=None, enhanced_visuals=True):
+                 optimized_params_path=None, plot=False, workflow_type=None, enhanced_visuals=True,
+                 reoptimize="always", reoptimization_threshold=0.05):
         """
         Initialize the walk-forward test.
         
@@ -58,6 +59,8 @@ class WalkForwardTest:
             plot (bool): Whether to generate plots during backtests. Default is False.
             workflow_type (str): Type of workflow (simple, optimization, monte_carlo, complete).
             enhanced_visuals (bool): Whether to use enhanced visualizations. Default is True.
+            reoptimize (str): Reoptimization strategy, one of "always", "on_degradation", or "never".
+            reoptimization_threshold (float): Performance degradation threshold (as decimal) for on_degradation mode.
         """
         self.strategy_name = strategy_name
         self.tickers = tickers
@@ -71,6 +74,8 @@ class WalkForwardTest:
         self.plot = plot
         self.workflow_type = workflow_type
         self.enhanced_visuals = enhanced_visuals
+        self.reoptimize = reoptimize
+        self.reoptimization_threshold = reoptimization_threshold
         
         # Standard visualization settings
         self.plot_width = 1200
@@ -1005,7 +1010,11 @@ class WalkForwardTest:
             f.write(f"In-Sample Period: {self.in_sample_start.strftime('%Y-%m-%d')} to {self.in_sample_end.strftime('%Y-%m-%d')}\n")
             f.write(f"Out-of-Sample Period: {self.out_sample_start.strftime('%Y-%m-%d')} to {self.out_sample_end.strftime('%Y-%m-%d')}\n")
             f.write(f"Tickers: {self.tickers}\n")
-            f.write(f"Parameters: {self.parameters or 'Default parameters'}\n\n")
+            f.write(f"Parameters: {self.parameters or 'Default parameters'}\n")
+            f.write(f"Reoptimization Strategy: {self.reoptimize}\n")
+            if self.reoptimize == "on_degradation":
+                f.write(f"Reoptimization Threshold: {self.reoptimization_threshold * 100:.1f}%\n")
+            f.write("\n")
         
         # Run in-sample backtest
         in_sample_results = self.run_in_sample_backtest()
@@ -1185,6 +1194,12 @@ def parse_args():
     
     parser.add_argument('--plot', action='store_true', default=False,
                         help='Generate plots during backtests')
+                        
+    parser.add_argument('--reoptimize', type=str, choices=['always', 'on_degradation', 'never'],
+                        default='always', help='Reoptimization strategy for walk-forward analysis')
+                        
+    parser.add_argument('--reoptimization_threshold', type=float, default=0.05,
+                        help='Performance degradation threshold for on_degradation reoptimization')
     
     return parser.parse_args()
 
@@ -1204,7 +1219,9 @@ if __name__ == '__main__':
         optimized_params_path=args.optimized_params_path,
         plot=args.plot,
         workflow_type=args.workflow_type,
-        enhanced_visuals=args.enhanced_visuals
+        enhanced_visuals=args.enhanced_visuals,
+        reoptimize=args.reoptimize,
+        reoptimization_threshold=args.reoptimization_threshold
     )
     
     results = test.run_test()

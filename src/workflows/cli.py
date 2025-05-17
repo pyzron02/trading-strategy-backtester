@@ -87,6 +87,10 @@ def parse_args():
                         help="Window size in trading days")
     walkforward_group.add_argument("--step-size", type=int, default=63, 
                         help="Step size in trading days")
+    walkforward_group.add_argument("--reoptimize", type=str, choices=["always", "on_degradation", "never"], 
+                        default="always", help="Reoptimization strategy for walk-forward analysis")
+    walkforward_group.add_argument("--reoptimization-threshold", type=float, default=0.05,
+                        help="Performance degradation threshold for on_degradation reoptimization")
     
     # Data parameters
     data_group = parser.add_argument_group("Data parameters")
@@ -291,6 +295,8 @@ def run_cli():
             "step_size": args.step_size,
             "n_trials": args.n_trials,
             "optimization_metric": args.optimization_metric,
+            "reoptimize": args.reoptimize,
+            "reoptimization_threshold": args.reoptimization_threshold,
             "plot": args.plot,  # Respect the user's plot setting
             "enhanced_plots": args.enhanced_plots if hasattr(args, 'enhanced_plots') else False  # Respect user's enhanced_plots setting
         })
@@ -302,7 +308,11 @@ def run_cli():
             "n_simulations": args.n_simulations,
             "keep_permuted_data": args.keep_permuted_data,
             "plot": args.plot,
-            "enhanced_plots": args.enhanced_plots
+            "enhanced_plots": args.enhanced_plots,
+            "window_size": args.window_size,
+            "step_size": args.step_size,
+            "reoptimize": args.reoptimize,
+            "reoptimization_threshold": args.reoptimization_threshold
         })
         
         # Add max_combinations parameter if provided

@@ -13,7 +13,7 @@ def fetch_stock_data(tickers, start_date, end_date, output_path='input/stock_dat
     Fetch historical stock data for multiple tickers and S&P 500, saving them into a single CSV file.
     
     Args:
-        tickers (list): List of stock ticker symbols (e.g., ['MSFT', 'AAPL']).
+        tickers (list or str): List of stock ticker symbols (e.g., ['MSFT', 'AAPL']) or comma-separated string.
         start_date (str): Start date in 'YYYY-MM-DD' format.
         end_date (str): End date in 'YYYY-MM-DD' format.
         output_path (str, optional): Path to save the CSV file. Default is 'input/stock_data.csv'.
@@ -22,6 +22,13 @@ def fetch_stock_data(tickers, start_date, end_date, output_path='input/stock_dat
     Returns:
         str: Path to the saved CSV file
     """
+    # Ensure tickers is properly formatted as a list
+    if tickers is None:
+        tickers = ["SPY"]
+    elif isinstance(tickers, str):
+        tickers = [t.strip() for t in tickers.split(',') if t.strip()]
+        
+    print(f"Fetching stock data for tickers: {tickers}")
     # Create input directory if it doesn't exist
     if output_path.startswith('input/'):
         # Use the path relative to the input directory
@@ -92,9 +99,25 @@ def fetch_stock_data(tickers, start_date, end_date, output_path='input/stock_dat
         print("No new tickers to fetch.")
         return full_output_path
     
-    # Fetch data for the tickers
+    # Fetch data for the tickers with retry for rate limiting
     print(f"Fetching data for {', '.join(tickers_to_fetch)}...")
-    new_data = yf.download(tickers_to_fetch, start=start_date, end=end_date)
+    max_retries = 3
+    retry_delay = 10  # seconds
+    
+    for retry in range(max_retries):
+        try:
+            # Add a longer timeout to handle rate limiting
+            new_data = yf.download(tickers_to_fetch, start=start_date, end=end_date, timeout=30)
+            break
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Attempt {retry+1} failed: {e}. Retrying in {retry_delay} seconds...")
+                import time
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                print(f"All {max_retries} attempts failed. Last error: {e}")
+                raise
     
     if new_data.empty:
         print("No data fetched. Please check the tickers or date range.")

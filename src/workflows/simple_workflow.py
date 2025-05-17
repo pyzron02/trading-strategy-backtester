@@ -34,6 +34,8 @@ from workflows.workflow_utils import (
 
 # Import engine components
 from engine.run_backtest import run_backtest
+from engine.parameter_management import ParameterManager
+from utils.error_reporting import create_stage_error_report, StageError, StageErrorReport
 
 def convert_grid_to_single_values(parameters: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -73,6 +75,14 @@ def ensure_data_available(tickers: List[str], start_date: str, end_date: str, da
     Returns:
         Path to the stock data CSV file
     """
+    # Ensure tickers is a list
+    if tickers is None:
+        tickers = ["SPY"]
+    elif isinstance(tickers, str):
+        tickers = [t.strip() for t in tickers.split(',') if t.strip()]
+    
+    logger.info(f"Ensuring data available for tickers: {tickers}")
+    
     # Construct the path to stock_data.csv
     stock_data_path = os.path.join(project_root, data_dir, "stock_data.csv")
     
@@ -81,7 +91,8 @@ def ensure_data_available(tickers: List[str], start_date: str, end_date: str, da
         logger.info(f"stock_data.csv not found at {stock_data_path}. Generating it...")
         try:
             from data_preprocessing.data_setup import fetch_stock_data
-            fetch_stock_data(tickers, start_date, end_date)
+            # Force refresh to ensure all tickers are included
+            fetch_stock_data(tickers, start_date, end_date, force_refresh=True)
             logger.info(f"Generated stock_data.csv at {stock_data_path}")
         except Exception as e:
             logger.error(f"Error generating stock_data.csv: {e}")
@@ -102,7 +113,8 @@ def ensure_data_available(tickers: List[str], start_date: str, end_date: str, da
             if missing_tickers:
                 logger.warning(f"stock_data.csv is missing data for tickers: {missing_tickers}. Regenerating...")
                 from data_preprocessing.data_setup import fetch_stock_data
-                fetch_stock_data(tickers, start_date, end_date)
+                # Force refresh to ensure all tickers are included
+                fetch_stock_data(tickers, start_date, end_date, force_refresh=True)
                 logger.info(f"Regenerated stock_data.csv with all required tickers")
         except Exception as e:
             logger.error(f"Error verifying stock_data.csv: {e}")
@@ -167,6 +179,16 @@ def run_simple_workflow(
     Returns:
         Dict containing the workflow results
     """
+    # Process tickers parameter to ensure it's in the correct format
+    if tickers is None:
+        tickers = ["SPY"]  # Default ticker
+    elif isinstance(tickers, str):
+        # Handle comma-separated string format
+        tickers = [t.strip() for t in tickers.split(',') if t.strip()]
+    
+    # Log the processed tickers for debugging
+    logger.info(f"Processed tickers for simple workflow: {tickers}")
+    
     # Use strategy if provided, otherwise use strategy_name
     if strategy is not None and strategy_name is None:
         strategy_name = strategy
@@ -296,13 +318,15 @@ def run_simple_workflow(
     print_parameters(strategy_params)
     
     try:
-        # Check if stock_data.csv exists but don't regenerate it
+        # Check if we need to download data for our tickers
         stock_data_path = os.path.join(data_dir, "stock_data.csv")
-        if os.path.exists(stock_data_path):
-            stock_csv = stock_data_path
-            logger.info(f"Using existing stock data from: {stock_csv}")
-        else:
-            error_msg = f"Stock data file not found at: {stock_data_path}. Please run data_setup.py first."
+        
+        # Always use ensure_data_available to check if we need to fetch ticker data
+        logger.info(f"Ensuring data is available for tickers: {tickers}")
+        stock_csv = ensure_data_available(tickers, start_date, end_date, data_dir)
+        
+        if not os.path.exists(stock_data_path):
+            error_msg = f"Failed to create or locate stock data file at: {stock_data_path}."
             logger.error(error_msg)
             
             # Log workflow failure
