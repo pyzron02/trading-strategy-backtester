@@ -94,54 +94,40 @@ The trading strategy backtester is built with a modular architecture designed fo
 
 ## Directory Structure
 
+The repository is organized with a new structure:
+
 ```
-.
-├── src/
-│   ├── engine/             # Core backtesting engine components
-│   │   ├── run_backtest.py       # Main backtesting engine
+trading-strategy-backtester/
+├── src/                    # Core backtesting engine components
+│   ├── engine/                 # Core backtesting engine components
+│   │   ├── run_backtest.py         # Main backtesting engine
 │   │   ├── evaluate_performance.py # Performance metric calculations
-│   │   ├── data_management.py    # Data loading and preprocessing
+│   │   ├── data_management.py      # Data loading and preprocessing
 │   │   ├── parameter_management.py # Strategy parameter handling
-│   │   ├── results_management.py # Output and results handling
-│   │   ├── parallel_testing.py   # Parallel execution support
-│   │   ├── smart_cache.py        # Caching system for performance
-│   │   └── logging_system.py     # Logging infrastructure
+│   │   ├── results_management.py   # Output and results handling
+│   │   ├── parallel_testing.py     # Parallel execution support
+│   │   ├── smart_cache.py          # Caching system for performance
+│   │   └── logging_system.py       # Logging infrastructure
 │   │
-│   ├── data_preprocessing/ # Data preparation tools
-│   │   ├── data_setup.py         # Data acquisition and initial setup
-│   │   └── feature_engineering.py # Feature creation for strategies
-│   │
-│   ├── evaluators/         # Performance evaluation utilities
-│   │   ├── check_strategies.py   # Strategy validation
-│   │   ├── test_strategies.py    # Strategy testing
-│   │   └── generate_monte_carlo_plots.py # MC visualization
-│   │
-│   ├── monte_carlo/        # Monte Carlo simulation implementation
-│   │   ├── monte_carlo_analysis.py # Core MC analysis engine
-│   │   ├── trade_based_monte_carlo.py # Trade-based MC implementation
-│   │   ├── visualizations.py    # Enhanced visualization components
-│   │   ├── strategies.py        # MC-specific strategy handling
-│   │   └── utilities.py         # MC helper functions
-│   │
-│   ├── optimizers/         # Parameter optimization components
-│   │   ├── run_parameter_optimization.py # Parameter optimization
-│   │   └── create_optimization_summary.py # Results documentation
-│   │
-│   ├── strategies/         # Trading strategy implementations
-│   │   ├── strategy.py           # Base Strategy class
-│   │   ├── ma_crossover.py       # Moving Average Crossover strategy
-│   │   ├── auction_market_strategy.py # Auction Market strategy
-│   │   ├── multi_position_strategy.py # Multi-position strategy
-│   │   ├── simple_stock_strategy.py # Simple stock trading strategy
-│   │   └── registry.py          # Strategy registration system
-│   │
-│   └── workflows/          # High-level workflow orchestrators
-│       ├── simple_workflow.py    # Single backtest workflow
-│       ├── optimization_workflow.py # Parameter optimization workflow
-│       ├── monte_carlo_workflow.py # Monte Carlo simulation workflow
-│       ├── complete_workflow.py  # Combined workflow (opt + backtest + MC)
-│       ├── unified_workflow.py   # Entry point for all workflows
-│       └── cli.py               # Command line interface
+│   ├── data_preprocessing/     # Data preparation tools
+│   ├── evaluators/             # Performance evaluation utilities
+│   ├── monte_carlo/            # Monte Carlo simulation implementation
+│   ├── optimizers/             # Parameter optimization components
+│   ├── strategies/             # Trading strategy implementations
+│   └── workflows/              # High-level workflow orchestrators
+│
+├── frontend/               # Web interface for the backtester
+│   ├── app.py                  # Flask application for web interface
+│   ├── static/                 # Static assets (CSS, JS)
+│   ├── templates/              # HTML templates for the UI
+│   ├── requirements.txt        # Frontend dependencies
+│   └── config.json             # Frontend configuration
+│
+├── docker/                 # Docker configuration
+│   ├── Dockerfile              # Container definition
+│   ├── docker-compose.yml      # Docker Compose configuration
+│   ├── docker-entrypoint.sh    # Container entrypoint script
+│   └── build-and-run.sh        # Script to build and run the container
 │
 ├── input/                  # Stock data input files
 │   ├── stock_data.csv          # Historical price data
@@ -150,8 +136,9 @@ The trading strategy backtester is built with a modular architecture designed fo
 │   └── workflow_configs/       # Workflow configuration files
 │
 ├── output/                 # Test results and visualizations
+├── logs/                   # Log files
+├── cache/                  # Cache files for faster processing
 ├── tests/                  # Automated tests
-├── run_trade_monte_carlo.py # Monte Carlo workflow entry point
 ├── requirements.txt        # Python dependencies
 └── LICENSE                 # MIT license
 ```
@@ -181,48 +168,73 @@ The trading strategy backtester is built with a modular architecture designed fo
 
 ### Method 2: Docker Installation
 
+The project provides a comprehensive Docker setup that handles all dependencies and configuration automatically. This is the recommended method for most users as it simplifies installation and ensures consistency across different environments.
+
+#### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) (version 19.03 or later)
+- [Docker Compose](https://docs.docker.com/compose/install/) (version 1.27 or later)
+
+#### Installation Steps
+
 1. **Clone the repository:**
    ```bash
    git clone <repository-url>
    cd trading-strategy-backtester
    ```
 
-2. **Build and run using Docker:**
+2. **Build and run the integrated container:**
    ```bash
-   docker build -t trading-backtester .
-   docker run -v $(pwd)/input:/app/trading-strategy-backtester/input \
-              -v $(pwd)/output:/app/trading-strategy-backtester/output \
-              -v $(pwd)/logs:/app/trading-strategy-backtester/logs \
-              trading-backtester
+   # Using the convenience script (recommended)
+   chmod +x docker/build-and-run.sh
+   ./docker/build-and-run.sh
    ```
 
-3. **Or use Docker Compose:**
+   The script automatically:
+   - Creates necessary directories (input, output, logs, cache)
+   - Sets proper permissions
+   - Builds and starts the Docker container
+
+3. **Alternatively, use Docker Compose directly:**
    ```bash
-   docker-compose up
+   # First ensure required directories exist
+   mkdir -p input output logs cache frontend/temp frontend/output
+   
+   # Then build and start the container
+   docker-compose -f docker/docker-compose.yml up --build
    ```
 
-### Method 3: Integration with Frontend
+4. **Access the web interface:**
+   Open your browser to http://localhost:5000 to use the integrated frontend interface.
 
-For integration with a frontend application, see the [Containerization Guide](README_CONTAINER.md).
+#### Docker Configuration Details
 
-1. **Create project directory structure:**
-   ```bash
-   mkdir my-trading-app
-   cd my-trading-app
-   git clone <backtester-repo-url> trading-strategy-backtester
-   git clone <frontend-repo-url> frontend
-   ```
+The Docker setup provides:
 
-2. **Set up Docker Compose:**
-   Copy the parent Docker Compose file to your project root:
-   ```bash
-   cp trading-strategy-backtester/docker-compose.parent.yml docker-compose.yml
-   ```
+- **Volume Mapping:** Your local directories (input, output, logs, cache) are mapped to the container
+- **Live Development:** Frontend files can be edited on your local machine and changes reflect instantly
+- **Automatic Configuration:** The container generates necessary config files on first run
 
-3. **Run both services:**
-   ```bash
-   docker-compose up
-   ```
+#### Environment Variables
+
+You can customize the Docker setup by setting these environment variables:
+
+- `SECRET_KEY`: Custom secret key for the Flask application
+- `BACKTESTER_ROOT`: Custom path to the backtester inside the container
+
+Example with custom environment variables:
+```bash
+SECRET_KEY=my_custom_secret_key docker-compose -f docker/docker-compose.yml up
+```
+
+#### Container Management
+
+Common operations:
+
+- **View logs:** `docker-compose -f docker/docker-compose.yml logs`
+- **Stop container:** `docker-compose -f docker/docker-compose.yml down`
+- **Restart container:** `docker-compose -f docker/docker-compose.yml restart`
+- **Remove container and rebuild:** `docker-compose -f docker/docker-compose.yml down --rmi all`
 
 ## Usage
 
@@ -463,13 +475,21 @@ python src/workflows/cli.py --workflow walkforward \
 
 ## Containerization and Frontend Integration
 
-The system now supports containerization for easy deployment and integration with frontend applications:
+The system now has a fully integrated setup with the frontend application in the same repository:
 
-1. **Centralized Path Management**: All paths are now relative, making the application containerization-friendly
-2. **Docker Configuration**: Ready-to-use Dockerfile and docker-compose.yml files
-3. **Frontend Integration**: Configured for easy integration with a frontend application in a containerized environment
+1. **Single Repository**: Both backtester engine and frontend UI are in one repository
+2. **Unified Docker Setup**: Single Docker configuration that runs both components
+3. **Simplified Configuration**: Streamlined setup and configuration
+4. **Improved Development Workflow**: Live editing of frontend files with volume mounting
 
-For details on containerization and integration with a frontend application, see the [Containerization Guide](README_CONTAINER.md).
+The integrated frontend UI provides:
+- Strategy selection and configuration
+- Workflow management
+- Parameter adjustments
+- Results visualization
+- Performance metrics display
+
+For details on the Docker setup, see the [Docker README](docker/README.md).
 
 ## Key Considerations
 
@@ -483,11 +503,42 @@ For details on containerization and integration with a frontend application, see
 
 ## Common Troubleshooting
 
+### General Issues
+
 - **Missing Data Error**: Ensure you've run `data_setup.py` first to create stock data files
 - **Parameter File Not Found**: Check that your strategy's parameter file exists in `input/parameters/`
 - **Visualization Issues**: Use the `--enhanced-plots` flag for improved visualizations
 - **Multi-dimensional Indexing Error**: May occur with some pandas/numpy operations, ensure data is converted to numpy arrays before advanced indexing
-- **Docker Path Issues**: If using Docker and experiencing path problems, ensure volume mounts are configured correctly and the BASE_DIR environment variable is set
+
+### Docker-Specific Issues
+
+- **Container Won't Start**: 
+  - Check if port 5000 is already in use by another application
+  - Verify Docker service is running with `docker info`
+  - Ensure you have enough disk space with `docker system df`
+
+- **Volume Mount Problems**: 
+  - Ensure your directory structure matches the expected layout
+  - Check file permissions on input/output directories (should be readable/writable)
+  - On Windows, verify path format in docker-compose.yml is correct
+
+- **Frontend Not Loading**: 
+  - Check container logs with `docker-compose -f docker/docker-compose.yml logs`
+  - Verify the container health with `docker ps` (should show "healthy" status)
+  - Try accessing http://localhost:5000 in a different browser
+
+- **Changes Not Reflecting**: 
+  - Some changes require container rebuild - use `docker-compose -f docker/docker-compose.yml up --build`
+  - Verify volume mounts are correctly set up in docker-compose.yml
+  - Check that the BASE_DIR environment variable is correctly set
+
+- **Permission Denied Errors**:
+  - Run `chmod -R 777 input output logs cache frontend/temp frontend/output` to grant full permissions
+  - On Linux/Mac, you may need to run Docker commands with sudo
+
+- **Slow Performance**:
+  - Increase Docker resource allocation (memory/CPU) in Docker Desktop settings
+  - Consider moving volume mounts to fast storage (SSD instead of network drives)
 
 ## License
 
