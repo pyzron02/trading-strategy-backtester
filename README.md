@@ -240,19 +240,80 @@ Common operations:
 
 ### Configuration Files
 
-The most flexible way to use the backtester is with configuration files:
+The most flexible way to use the backtester is with configuration files. The system supports both static and dynamically generated configurations:
+
+#### Dynamically Generated Configurations
+
+When using the web interface, configurations are automatically generated based on your selections:
+
+1. Configure your strategy, parameters, and workflow options in the web interface
+2. The system generates a temporary JSON configuration file when you run the backtest
+3. After execution, results are stored in the output directory while the temporary config is cleaned up
+
+This approach simplifies the process of creating and managing configuration files, especially for new users.
+
+#### Custom Configuration Files
+
+You can also create your own custom configuration files and run them directly:
 
 ```bash
-python src/workflows/cli.py --config input/workflow_configs/simple_backtest_config.json
+python src/workflows/cli.py --config /path/to/your/config.json
 ```
 
 Or directly with the unified workflow runner:
 
 ```bash
-python src/workflows/unified_workflow.py input/workflow_configs/multi_strategy_config.json
+python src/workflows/unified_workflow.py /path/to/your/config.json
 ```
 
-Example configuration files are available in the `input/workflow_configs/` directory.
+#### Configuration Structure
+
+Workflow configuration files use a standardized JSON format:
+
+```json
+{
+  "workflow_type": "simple",           // Type of workflow to run
+  "common_params": {                   // Common parameters for all strategies
+    "start_date": "2020-01-01",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["SPY", "AAPL"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": true,
+    "verbose": false
+  },
+  "strategies": {                      // Strategies to run
+    "MACrossover": {                   // Strategy name
+      "param_file": "input/parameters/MACrossover_params.json",   // Optional: path to parameter file
+      "grid_file": "input/parameter_grids/MACrossover_grid.json", // Optional: path to grid file
+      "parameters": {                  // Optional: inline parameters (if param_file not provided)
+        "fast_period": 10,
+        "slow_period": 50,
+        "signal_period": 9
+      },
+      "parameter_grid": {              // Optional: inline parameter grid (if grid_file not provided)
+        "fast_period": [5, 10, 15, 20],
+        "slow_period": [30, 50, 100, 200],
+        "signal_period": [5, 9, 14]
+      },
+      "optimization": {                // Optional: optimization parameters
+        "n_trials": 50,
+        "optimization_metric": "sharpe_ratio",
+        "max_combinations": 100
+      },
+      "monte_carlo": {                 // Optional: Monte Carlo parameters
+        "n_simulations": 100,
+        "enhanced_plots": true
+      },
+      "walkforward": {                 // Optional: Walk-forward parameters
+        "window_size": 252,
+        "step_size": 63
+      }
+    }
+  }
+}
+```
 
 ### CLI Interface
 
@@ -330,7 +391,7 @@ python src/workflows/cli.py --workflow complete \
 When using Docker, you can run commands inside the container:
 
 ```bash
-docker-compose exec backtester python src/workflows/cli.py --workflow simple \
+docker-compose -f docker/docker-compose.yml exec trading-backtester python src/workflows/cli.py --workflow simple \
     --strategy MACrossover \
     --tickers AAPL \
     --start-date 2020-01-01 \
@@ -341,10 +402,36 @@ Or configure the command in docker-compose.yml:
 
 ```yaml
 services:
-  backtester:
+  trading-backtester:
     # ... other settings ...
     command: python src/workflows/cli.py --workflow simple --strategy MACrossover --tickers AAPL
 ```
+
+### Web Interface
+
+The integrated web interface provides a user-friendly way to configure and run backtests without writing any code or configuration files:
+
+#### Accessing the Web Interface
+
+1. After starting the Docker container, open your browser to http://localhost:5000
+2. The landing page presents a form to configure your backtest
+
+#### Main Features
+
+- **Strategy Selection**: Choose from available built-in strategies
+- **Parameter Configuration**: Configure strategy parameters with appropriate ranges
+- **Multiple Workflow Types**: Run simple backtests, optimizations, Monte Carlo simulations, or complete workflows
+- **Visualization**: View results with interactive charts and performance metrics
+- **Results Management**: Browse and compare results from previous runs
+
+#### Creating and Running a Backtest
+
+1. Select a strategy from the dropdown menu
+2. Enter tickers, date range, and initial capital
+3. Configure strategy-specific parameters
+4. Choose a workflow type (simple, optimization, monte_carlo, walkforward, complete)
+5. Click "Run Backtest" to execute
+6. View results in the Results section once processing is complete
 
 ## Monte Carlo Simulation Process
 
