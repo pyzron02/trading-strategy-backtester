@@ -33,6 +33,7 @@ from workflows.simple_workflow import run_simple_workflow, ensure_data_available
 from workflows.optimization_workflow import run_optimization_workflow
 from workflows.monte_carlo_workflow import run_monte_carlo_workflow
 from workflows.walkforward_workflow import run_walkforward_workflow
+from utils.error_reporting import create_stage_error_report, StageError, StageErrorReport
 
 @time_execution("complete workflow")
 def run_complete_workflow(
@@ -194,6 +195,18 @@ def run_complete_workflow(
             logger.info(f"Using existing stock data from: {stock_csv}")
         else:
             logger.error(f"Stock data file not found at: {stock_data_path}. Please run data_setup.py first.")
+            
+
+            # Generate stage error report
+
+            try:
+
+                create_stage_error_report(output_dir, 'complete', strategy_name)
+
+            except Exception as report_err:
+
+                logger.error(f"Error generating stage error report: {report_err}")
+                
             return {
                 "status": "error",
                 "message": f"Stock data file not found. Please run data_setup.py first.",

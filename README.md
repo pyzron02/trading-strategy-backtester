@@ -588,6 +588,52 @@ For details on the Docker setup, see the [Docker README](docker/README.md).
 6. **Sample Size**: Ensure sufficient data for statistically significant results
 7. **Out-of-Sample Testing**: Validate strategies on data not used during optimization
 
+## Error Reporting System
+
+The backtester includes a comprehensive error reporting system that provides detailed, stage-specific error tracking and analysis across all workflow types.
+
+### Features
+
+- **Stage-Specific Error Tracking**: Errors are tracked by workflow stage (initialization, data_loading, strategy_setup, etc.)
+- **Error Classification**: Errors are classified by severity (CRITICAL, ERROR, WARNING, INFO)
+- **Contextual Information**: Captured errors include file path, line number, and surrounding context
+- **Comprehensive Reports**: Generate detailed text and JSON reports with error analysis
+- **Consolidated Reporting**: Create reports across multiple workflow runs for trend analysis
+- **Error Recommendations**: Automatic recommendations for fixing common error patterns
+
+### Error Reporting Commands
+
+```bash
+# Generate a stage-specific error report for a workflow run
+python src/utils/generate_error_report.py --workflow-dir [output_dir] --stage-report
+
+# Generate a consolidated error report for the last 7 days
+python src/utils/generate_error_report.py --consolidated --days 7
+
+# Test the error reporting system
+python src/utils/test_error_reporting.py --test-all
+
+# Update all workflow modules with stage error reporting
+python src/utils/error_reporting.py --update-modules
+```
+
+### Error Report Structure
+
+Error reports include:
+- Summary statistics (total errors, errors by stage, errors by severity)
+- Detailed error information with context
+- Stage-specific analysis for pinpointing issues
+- Recommendations for common errors
+- Performance impact assessment
+
+### Integration with Workflows
+
+All workflow modules automatically generate stage error reports when errors occur, making it easier to:
+- Identify which stage of the workflow failed
+- Understand the context and severity of errors
+- Get targeted recommendations for fixing issues
+- Track error patterns across multiple runs
+
 ## Common Troubleshooting
 
 ### General Issues

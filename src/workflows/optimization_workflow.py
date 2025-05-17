@@ -35,6 +35,7 @@ from workflows.workflow_utils import (
 from engine.run_backtest import run_backtest
 from engine.testing.in_sample_excellence import InSampleExcellence
 from workflows.simple_workflow import ensure_data_available
+from utils.error_reporting import create_stage_error_report, StageError, StageErrorReport
 
 @time_execution("optimization workflow")
 def run_optimization_workflow(
@@ -199,6 +200,18 @@ def run_optimization_workflow(
                         additional_info={"error": f"Parameter grid file not found and could not create one: {str(e)}"}
                     )
                     
+                    
+
+                    # Generate stage error report
+
+                    try:
+
+                        create_stage_error_report(output_dir, 'optimization', strategy_name)
+
+                    except Exception as report_err:
+
+                        logger.error(f"Error generating stage error report: {report_err}")
+                        
                     return {"status": "error", "message": f"Parameter grid file not found and could not create one: {str(e)}"}
             else:
                 logger.error(f"Error: Parameter grid file not found for {strategy_name} and no default parameters available")

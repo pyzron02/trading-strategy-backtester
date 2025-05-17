@@ -74,6 +74,18 @@ def calculate_trading_days(start_date_str: str, end_date_str: str) -> int:
     except Exception as e:
         logger.warning(f"Error calculating trading days: {e}")
         # Default to 252 (1 year) if calculation fails
+        
+
+        # Generate stage error report
+
+        try:
+
+            create_stage_error_report(output_dir, 'monte_carlo', strategy_name)
+
+        except Exception as report_err:
+
+            logger.error(f"Error generating stage error report: {report_err}")
+            
         return 252
 
 @time_execution("monte carlo workflow")
