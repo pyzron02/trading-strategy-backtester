@@ -127,6 +127,21 @@ class AuctionMarketStrategy(bt.Strategy):
 
     def __init__(self):
         """Initialize the strategy with Auction Market Theory indicators."""
+        # Convert potentially float parameters to appropriate types
+        # This is needed when parameters come from optimization with parameter grid
+        self.p.position_size = int(self.p.position_size) if isinstance(self.p.position_size, (int, float)) else self.p.position_size
+        self.p.atr_period = int(self.p.atr_period) if isinstance(self.p.atr_period, (int, float)) else self.p.atr_period
+        
+        # Handle list parameters that could come from optimization
+        if isinstance(self.p.position_size, list):
+            self.p.position_size = int(self.p.position_size[0])
+        if isinstance(self.p.atr_period, list):
+            self.p.atr_period = int(self.p.atr_period[0])
+        if isinstance(self.p.value_area, list):
+            self.p.value_area = float(self.p.value_area[0])
+        if isinstance(self.p.risk_percent, list):
+            self.p.risk_percent = float(self.p.risk_percent[0])
+            
         # Initialize parameters from AuctionMarketParameters if provided
         if self.params.param_preset == 'default':
             self.amt_params = get_default_parameters()

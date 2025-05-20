@@ -354,6 +354,27 @@ def run_complete_workflow(
             logger.info(f"Using adapted parameters for {strategy_name} optimization")
             logger.debug(f"Original parameters: {parameters}")
             logger.debug(f"Adapted parameters: {adapted_parameters}")
+            
+        # Look for parameter grid file first, ignoring any regular parameter file
+        grid_file = None
+        strategy_snake_case = ''.join(['_'+c.lower() if c.isupper() else c.lower() for c in strategy_name]).lstrip('_')
+        possible_grid_locations = [
+            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name}_grid.json"),
+            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name.lower()}_grid.json"),
+            os.path.join(project_root, "input", "parameter_grids", f"{strategy_snake_case}_grid.json")
+        ]
+        
+        # Check for existing grid file
+        logger.info(f"Searching for parameter grid file for {strategy_name} optimization:")
+        for location in possible_grid_locations:
+            logger.info(f"  Checking: {location} (exists: {os.path.exists(location)})")
+            if os.path.exists(location):
+                grid_file = location
+                logger.info(f"  Found parameter grid file: {location}")
+                break
+                
+        if not grid_file:
+            logger.warning(f"No parameter grid file found for {strategy_name}. Optimization may use regular parameters file instead.")
         
         optimization_kwargs = {
             "strategy": strategy_name,
@@ -362,7 +383,7 @@ def run_complete_workflow(
             "end_date": end_date,
             "output_dir": optimization_output_dir,
             "parameters": adapted_parameters,
-            "param_file": param_file,
+            "param_file": grid_file or param_file,  # Use grid file if found, otherwise use regular param file
             "n_trials": n_trials,
             "optimization_metric": optimization_metric,
             "verbose": verbose,
@@ -633,6 +654,11 @@ def run_complete_workflow(
             "enhanced_plots": enhanced_plots,
             "workflow_type": "complete"
         }
+        
+        # Check if monte_carlo_config is available from kwargs and override n_simulations
+        if kwargs.get('monte_carlo_config') and 'n_simulations' in kwargs['monte_carlo_config']:
+            monte_carlo_kwargs['n_simulations'] = kwargs['monte_carlo_config']['n_simulations']
+            logger.info(f"Using Monte Carlo simulation count from config: {monte_carlo_kwargs['n_simulations']}")
         
         monte_carlo_result = run_monte_carlo_workflow(**monte_carlo_kwargs)
         
