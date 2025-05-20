@@ -23,7 +23,7 @@
         "max_combinations": 100
       },
       "monte_carlo": {
-        "n_simulations": 500,
+        "n_simulations": 5000,
         "enhanced_plots": true
       },
       "walkforward": {

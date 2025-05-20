@@ -194,7 +194,7 @@ def run_monte_carlo_workflow(
     
     # Create a unique output directory if none is provided
     if not output_dir:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_id = str(uuid.uuid4())[:8]  # For uniqueness
         output_dir = os.path.join(project_root, "output", f"{strategy_name}_monte_carlo_{timestamp}_{run_id}")
         logger.info(f"Creating unique output directory: {output_dir}")
@@ -530,12 +530,27 @@ def run_monte_carlo_workflow(
             logger.info(f"Bootstrap percentage: {bootstrap_pct}")
             
             try:
+                # Extract additional Monte Carlo parameters from kwargs or strategy configuration
+                bootstrap_method = kwargs.get('bootstrap_method', 'standard')
+                
+                # Check for strategy-specific Monte Carlo configurations
+                if strategy_name in kwargs.get('strategies', {}):
+                    strategy_config = kwargs['strategies'].get(strategy_name, {})
+                    if 'monte_carlo' in strategy_config:
+                        mc_config = strategy_config['monte_carlo']
+                        bootstrap_method = mc_config.get('bootstrap_method', bootstrap_method)
+                
+                logger.info(f"Monte Carlo bootstrap method: {bootstrap_method}")
+                logger.info("Using log returns for numerical stability")
+                
+                # Initialize Monte Carlo analyzer
                 mc_analyzer = MonteCarloAnalysis(
                     equity_curve=backtest_data,
                     num_simulations=n_simulations,
                     confidence_level=confidence_level,
                     random_seed=random_seed,
-                    bootstrap_pct=bootstrap_pct
+                    bootstrap_pct=bootstrap_pct,
+                    bootstrap_method=bootstrap_method
                 )
             except Exception as e:
                 error_msg = f"Error initializing Monte Carlo analysis: {str(e)}"
@@ -696,8 +711,49 @@ def run_monte_carlo_workflow(
             
             # Save results to file
             results_file = os.path.join(output_dir, f"{strategy_name}_monte_carlo_results.json")
-            with open(results_file, 'w') as f:
-                json.dump(mc_results, f, indent=4, default=lambda x: float(x) if isinstance(x, np.float64) else x)
+            
+            # Custom serialization function to prevent circular references
+            def json_serializer(obj):
+                if isinstance(obj, np.float64):
+                    return float(obj)
+                elif isinstance(obj, np.int64):
+                    return int(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, (pd.DataFrame, pd.Series)):
+                    return obj.to_dict()
+                elif isinstance(obj, datetime):
+                    return obj.isoformat()
+                elif hasattr(obj, '__dict__'):
+                    # Return only the properties for objects with __dict__
+                    return {k: v for k, v in obj.__dict__.items() 
+                            if not k.startswith('_') and not callable(v)}
+                else:
+                    return str(obj)  # Fallback to string representation
+            
+            # Make a clean copy of the results to avoid circular references
+            clean_results = {}
+            try:
+                # Copy primitive types directly, handle complex types separately
+                for k, v in mc_results.items():
+                    if isinstance(v, (int, float, str, bool, type(None))):
+                        clean_results[k] = v
+                    else:
+                        # Use json_serializer for complex types
+                        clean_results[k] = json_serializer(v)
+                        
+                with open(results_file, 'w') as f:
+                    json.dump(clean_results, f, indent=4, default=json_serializer)
+                    
+                logger.info(f"\nDetailed results saved to: {results_file}")
+            except Exception as e:
+                logger.warning(f"Error saving complete Monte Carlo results: {e}")
+                # Fallback to saving only scalar values
+                simple_results = {k: v for k, v in mc_results.items() 
+                                if isinstance(v, (int, float, str, bool, type(None)))}
+                with open(results_file, 'w') as f:
+                    json.dump(simple_results, f, indent=4)
+                logger.info(f"\nSaved simplified results to: {results_file}")                
             
             logger.info(f"\nDetailed results saved to: {results_file}")
             

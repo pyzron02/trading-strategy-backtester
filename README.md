@@ -94,7 +94,7 @@ The trading strategy backtester is built with a modular architecture designed fo
 
 ## Directory Structure
 
-The repository is organized with a new structure:
+The repository is organized as follows:
 
 ```
 trading-strategy-backtester/
@@ -126,8 +126,7 @@ trading-strategy-backtester/
 ├── docker/                 # Docker configuration
 │   ├── Dockerfile              # Container definition
 │   ├── docker-compose.yml      # Docker Compose configuration
-│   ├── docker-entrypoint.sh    # Container entrypoint script
-│   └── build-and-run.sh        # Script to build and run the container
+│   └── docker-entrypoint.sh    # Container entrypoint script
 │
 ├── input/                  # Stock data input files
 │   ├── stock_data.csv          # Historical price data
@@ -185,18 +184,6 @@ The project provides a comprehensive Docker setup that handles all dependencies 
 
 2. **Build and run the integrated container:**
    ```bash
-   # Using the convenience script (recommended)
-   chmod +x docker/build-and-run.sh
-   ./docker/build-and-run.sh
-   ```
-
-   The script automatically:
-   - Creates necessary directories (input, output, logs, cache)
-   - Sets proper permissions
-   - Builds and starts the Docker container
-
-3. **Alternatively, use Docker Compose directly:**
-   ```bash
    # First ensure required directories exist
    mkdir -p input output logs cache frontend/temp frontend/output
    
@@ -204,7 +191,7 @@ The project provides a comprehensive Docker setup that handles all dependencies 
    docker-compose -f docker/docker-compose.yml up --build
    ```
 
-4. **Access the web interface:**
+3. **Access the web interface:**
    Open your browser to http://localhost:5000 to use the integrated frontend interface.
 
 #### Docker Configuration Details
@@ -575,8 +562,6 @@ The integrated frontend UI provides:
 - Parameter adjustments
 - Results visualization
 - Performance metrics display
-
-For details on the Docker setup, see the [Docker README](docker/README.md).
 
 ## Key Considerations
 

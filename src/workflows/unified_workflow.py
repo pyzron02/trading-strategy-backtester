@@ -32,6 +32,8 @@ from workflows.monte_carlo_workflow import run_monte_carlo_workflow
 from workflows.walkforward_workflow import run_walkforward_workflow
 from workflows.complete_workflow import run_complete_workflow
 from utils.error_reporting import create_stage_error_report, StageError, StageErrorReport
+
+# GPU acceleration has been removed
 # Remove circular import
 # from workflows.cli import run_cli
 
@@ -114,6 +116,24 @@ def run_unified_workflow(workflow_type, **kwargs):
     Returns:
         Dictionary with workflow results
     """
+    # Handle GPU acceleration if requested
+    use_gpu = kwargs.pop('use_gpu', False)
+    gpu_library = kwargs.pop('gpu_library', 'cupy')
+    verbose_gpu = kwargs.pop('verbose_gpu', False)
+    
+    # Initialize GPU acceleration if requested and available
+    gpu_manager = None
+    if use_gpu and HAS_GPU_SUPPORT:
+        logger.info(f"Initializing GPU acceleration with {gpu_library}...")
+        gpu_manager = GPUManager(use_gpu=True, gpu_library=gpu_library, verbose=verbose_gpu)
+        
+        if gpu_manager.is_gpu_available():
+            logger.info("GPU acceleration enabled!")
+            kwargs['gpu_manager'] = gpu_manager
+        else:
+            logger.warning("GPU acceleration requested but not available. Falling back to CPU.")
+    elif use_gpu and not HAS_GPU_SUPPORT:
+        logger.warning("GPU acceleration requested but GPU support is not installed. Falling back to CPU.")
     # Initialize temporary files tracking
     temp_files_to_cleanup = kwargs.pop('_temp_files_to_cleanup', [])
     
@@ -282,6 +302,14 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     Returns:
         Dictionary with workflow parameters for each strategy
     """
+    # Check for GPU settings
+    gpu_settings = config.get('gpu_settings', {})
+    use_gpu = gpu_settings.get('use_gpu', False)
+    gpu_library = gpu_settings.get('gpu_library', 'cupy')
+    verbose_gpu = gpu_settings.get('verbose_gpu', False)
+    
+    if use_gpu:
+        logger.info(f"GPU acceleration enabled in config with {gpu_library}")
     if not config or 'strategies' not in config:
         logger.error("Invalid config: 'strategies' section not found")
         return {}
@@ -401,6 +429,12 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         
         # Add temp files list to parameters for cleanup
         params['_temp_files_to_cleanup'] = temp_files_to_cleanup
+        
+        # Add GPU settings if enabled
+        if use_gpu:
+            params['use_gpu'] = use_gpu
+            params['gpu_library'] = gpu_library
+            params['verbose_gpu'] = verbose_gpu
         
         # Store the parameters for this strategy
         workflow_params[strategy_name] = {
@@ -588,6 +622,9 @@ def main():
     parser.add_argument("config_file", nargs="?", help="Path to the workflow config file")
     parser.add_argument("--progress-file", help="Path to a file for tracking progress (for frontend integration)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument("--use-gpu", action="store_true", help="Enable GPU acceleration if available")
+    parser.add_argument("--gpu-library", choices=["cupy", "torch", "numba"], default="cupy", help="GPU library to use")
+    parser.add_argument("--verbose-gpu", action="store_true", help="Print detailed GPU information")
     args = parser.parse_args()
     
     # Set debug logging if requested
@@ -617,6 +654,22 @@ def main():
                     json.dump(progress_data, f, indent=4)
             except Exception as e:
                 logger.error(f"Error updating progress file: {e}")
+        
+        # Run the workflow with GPU if requested
+        if args.use_gpu:
+            logger.info(f"GPU acceleration requested using {args.gpu_library}")
+            # Load config first
+            config = load_config_file(config_file)
+            if not config:
+                logger.error(f"Failed to load config file: {config_file}")
+                return
+                
+            # Add GPU parameters to config
+            config['gpu_settings'] = {
+                'use_gpu': True,
+                'gpu_library': args.gpu_library,
+                'verbose_gpu': args.verbose_gpu
+            }
         
         # Run the workflow
         result = run_unified_workflow_from_config(config_file)

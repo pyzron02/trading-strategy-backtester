@@ -25,7 +25,9 @@ class MonteCarloAnalysis:
         num_simulations: int = 1000,
         confidence_level: float = 0.95,
         random_seed: Optional[int] = None,
-        bootstrap_pct: float = 0.5
+        bootstrap_pct: float = 0.5,
+        bootstrap_method: str = 'standard',
+        block_size: int = 21
     ):
         """
         Initialize the Monte Carlo analysis.
@@ -36,14 +38,24 @@ class MonteCarloAnalysis:
             confidence_level: Confidence level for intervals (e.g., 0.95 for 95% confidence)
             random_seed: Random seed for reproducibility
             bootstrap_pct: Percentage of original data to use in each bootstrap sample
+            bootstrap_method: Method for bootstrapping returns ('standard', 'block', 'stationary')
+            block_size: Size of blocks for block bootstrapping (in trading days)
         """
         self.equity_curve = equity_curve
         self.num_simulations = num_simulations
         self.confidence_level = confidence_level
         self.bootstrap_pct = bootstrap_pct
+        self.bootstrap_method = bootstrap_method
+        self.block_size = block_size
         
-        # Preprocess the equity curve to ensure it's properly formatted
-        self.equity_curve = self._preprocess_equity_curve(equity_curve)
+        # Process equity curve data
+        processed_data = self._preprocess_equity_curve(equity_curve)
+        
+        # Extract single equity values series if needed
+        if len(processed_data.columns) > 1:
+            self.equity_values = processed_data.iloc[:, 0]
+        else:
+            self.equity_values = processed_data.iloc[:, 0]
         
         # Set random seed for reproducibility
         if random_seed is not None:
@@ -55,8 +67,7 @@ class MonteCarloAnalysis:
         self.simulation_results = None
     
     def _preprocess_equity_curve(self, equity_curve: Union[pd.DataFrame, pd.Series]) -> pd.DataFrame:
-        """
-        Preprocess the equity curve to ensure it's properly formatted for Monte Carlo analysis.
+        """Preprocess equity curve data for Monte Carlo analysis.
         
         Args:
             equity_curve: DataFrame or Series with equity curve data
@@ -77,62 +88,51 @@ class MonteCarloAnalysis:
         if date_cols:
             date_col = date_cols[0]
         
-        # Find equity column - look for names containing 'equity', 'value', or 'portfolio'
-        equity_col_keywords = ['equity', 'value', 'portfolio', 'capital']
-        for keyword in equity_col_keywords:
-            equity_cols = [col for col in equity_curve.columns if keyword.lower() in col.lower()]
-            if equity_cols:
-                equity_col = equity_cols[0]
-                break
+        # If data has a date column, set it as index
+        if date_col is not None and date_col in equity_curve.columns:
+            equity_curve = equity_curve.set_index(date_col)
         
-        # If no equity column found, use the first numeric column
-        if equity_col is None:
-            for col in equity_curve.columns:
-                if pd.api.types.is_numeric_dtype(equity_curve[col]):
-                    equity_col = col
-                    break
+        # If no numeric columns, raise error
+        numeric_cols = equity_curve.select_dtypes(include=['number']).columns
+        if len(numeric_cols) == 0:
+            raise ValueError("No numeric columns found in equity curve data")
         
-        # If we found date and equity columns, create a clean DataFrame
-        if date_col and equity_col:
+        # Find equity column (prefer 'equity' column if it exists)
+        equity_col_candidates = [col for col in numeric_cols if col.lower() in ['equity', 'balance', 'portfolio_value', 'value']]
+        if equity_col_candidates:
+            equity_col = equity_col_candidates[0]
+        else:
+            # Otherwise, use the first numeric column
+            equity_col = numeric_cols[0]
+        
+        # Ensure equity column exists
+        if equity_col not in equity_curve.columns:
+            # If not found, try to identify based on content
             try:
-                # Ensure date is in datetime format
-                clean_df = pd.DataFrame()
-                clean_df['date'] = pd.to_datetime(equity_curve[date_col])
-                clean_df['equity'] = equity_curve[equity_col]
-                clean_df = clean_df.set_index('date')
-                
-                # Extract equity values as Series
-                self.equity_values = clean_df['equity']
-                
-                # Calculate returns
-                self.returns = self.equity_values.pct_change().dropna()
-                
-                return clean_df
-            except Exception as e:
-                print(f"Error preprocessing equity curve: {e}")
+                # Select the column with equity values (highest starting value usually)
+                for col in equity_curve.columns:
+                    if pd.api.types.is_numeric_dtype(equity_curve[col]):
+                        equity_col = col
+                        break
+            except:
+                raise ValueError("Could not identify equity column in data")
         
-        # Fallback: try to find usable data in the DataFrame
+        # Return processed data
         try:
-            # If date is already the index, use that
-            if pd.api.types.is_datetime64_any_dtype(equity_curve.index):
-                if equity_col:
-                    self.equity_values = equity_curve[equity_col]
-                else:
-                    # Use the first column
-                    self.equity_values = equity_curve.iloc[:, 0]
-            else:
-                # No date index - use the first column that looks like numeric values
+            # Try to extract equity column
+            result = equity_curve[[equity_col]].copy()
+            return result
+        except Exception as e:
+            # If specific equity column extraction fails, use all numeric data
+            try:
                 for col in equity_curve.columns:
                     if pd.api.types.is_numeric_dtype(equity_curve[col]):
                         self.equity_values = equity_curve[col]
                         break
-            
-            # Calculate returns
-            self.returns = self.equity_values.pct_change().dropna()
-            
-            return equity_curve
-        except Exception as e:
-            raise ValueError(f"Could not preprocess equity curve: {e}")
+                
+                return equity_curve
+            except Exception as e:
+                raise ValueError(f"Could not preprocess equity curve: {e}")
     
     def run(self, progress_file=None) -> Dict[str, Any]:
         """
@@ -155,8 +155,30 @@ class MonteCarloAnalysis:
                     progress_data = json.load(f)
                 
                 progress_data.update({
-                    'current_step': "Monte Carlo: Analyzing results",
+                    'current_step': "Analyzing Monte Carlo results",
                     'progress': 90,
+                    'current_step_progress': 0,
+                    'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                
+                with open(progress_file, 'w') as f:
+                    json.dump(progress_data, f, indent=4)
+            except Exception as e:
+                print(f"Error updating progress file: {e}")
+        
+        # Calculate key metrics
+        results = self._calculate_metrics()
+        
+        # Update progress file to indicate completion
+        if progress_file and os.path.exists(progress_file):
+            try:
+                import json
+                with open(progress_file, 'r') as f:
+                    progress_data = json.load(f)
+                
+                progress_data.update({
+                    'current_step': "Monte Carlo simulation completed",
+                    'progress': 100,
                     'current_step_progress': 100,
                     'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 })
@@ -166,10 +188,10 @@ class MonteCarloAnalysis:
             except Exception as e:
                 print(f"Error updating progress file: {e}")
         
-        # Analyze results
-        self.simulation_results = self._analyze_results()
+        # Store results and return them
+        self.simulation_results = results
         
-        return self.simulation_results
+        return results
     
     def _run_simulations(self, progress_file=None) -> pd.DataFrame:
         """
@@ -189,123 +211,226 @@ class MonteCarloAnalysis:
             initial_equity = 0.01  # Set a minimal positive value instead of zero
             print("Warning: Initial equity was zero. Setting to 0.01 to avoid division by zero.")
         
-        # Calculate bootstrap sample size
-        sample_size = int(len(self.returns) * self.bootstrap_pct)
+        # Get log returns for better numerical stability (log(1+r))
+        # Log returns are more suitable for Monte Carlo simulations as they can be
+        # added rather than multiplied, providing better numerical stability
+        log_returns_array = self.log_returns.values
+        num_returns = len(log_returns_array)
+        
+        # Calculate bootstrap sample size - used for status updates
+        sample_size = int(num_returns * self.bootstrap_pct)
         
         # Pre-allocate a list to store all paths - avoid DataFrame fragmentation
         all_paths = []
         
-        # Run simulations
-        for i in range(self.num_simulations):
-            # Bootstrap returns
-            bootstrap_returns = self.returns.sample(n=len(self.returns), replace=True).values
+        print(f"Running {self.num_simulations} Monte Carlo simulations on CPU with log returns for numerical stability...")
             
-            # Generate path
-            path = [initial_equity]
-            for ret in bootstrap_returns:
-                # Apply the return to the previous value
-                # Safeguard against extreme negative returns that could lead to zero or negative equity
-                next_value = path[-1] * (1 + ret)
-                if next_value <= 0:
-                    next_value = 0.01  # Set a minimal positive value instead of zero or negative
-                path.append(next_value)
-            
-            # Store the path (as a Series with appropriate index)
-            all_paths.append(pd.Series(path, name=f'sim_{i}'))
-            
-            # Update progress file if provided
-            if progress_file and os.path.exists(progress_file) and i % max(1, self.num_simulations//20) == 0:
-                try:
-                    import json
-                    progress_pct = int((i + 1) / self.num_simulations * 100)
-                    with open(progress_file, 'r') as f:
-                        progress_data = json.load(f)
-                    
-                    # Update progress with Monte Carlo progress
-                    # We're assuming Monte Carlo is the last step (70-90% of overall progress)
-                    progress_data.update({
-                        'current_step': f"Monte Carlo: Running simulation {i+1}/{self.num_simulations}",
-                        'progress': max(progress_data.get('progress', 0), 70 + int(20 * (i+1) / self.num_simulations)),
-                        'current_step_progress': progress_pct,
-                        'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    })
-                    
-                    with open(progress_file, 'w') as f:
-                        json.dump(progress_data, f, indent=4)
-                except Exception as e:
-                    print(f"Error updating progress file: {e}")
+        start_time = datetime.now()
         
-        # Efficiently create the DataFrame at once using concat
-        simulated_paths = pd.concat(all_paths, axis=1)
+        # Vectorize CPU implementation for better performance
+        paths_array = np.zeros((num_returns + 1, self.num_simulations), dtype=np.float64)
+        paths_array[0, :] = initial_equity
         
-        return simulated_paths
-    
-    def _analyze_results(self) -> Dict[str, Any]:
+        # Create batches for progress reporting
+        batch_size = min(1000, self.num_simulations)
+        num_batches = (self.num_simulations + batch_size - 1) // batch_size
+        
+        # We're already using log returns for numerical stability
+        
+        # Process in batches
+        for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min((batch_idx + 1) * batch_size, self.num_simulations)
+                batch_count = end_idx - start_idx
+                
+                # Update progress if progress file provided
+                if progress_file and os.path.exists(progress_file):
+                    progress_pct = min(80, int(20 + (batch_idx / num_batches) * 60))
+                    try:
+                        import json
+                        with open(progress_file, 'r') as f:
+                            progress_data = json.load(f)
+                        
+                        progress_data.update({
+                            'current_step': "Monte Carlo CPU Simulation",
+                            'progress': progress_pct,
+                            'current_step_progress': int((batch_idx / num_batches) * 100),
+                            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                        
+                        with open(progress_file, 'w') as f:
+                            json.dump(progress_data, f, indent=4)
+                    except Exception as e:
+                        print(f"Error updating progress file: {e}")
+                
+                # For each simulation in the batch
+                for sim_idx in range(start_idx, end_idx):
+                    # Generate bootstrap sample indices to cover the full simulation length
+                    # We need enough returns for the full paths_array length, not just sample_size
+                    required_returns = num_returns  # Use full path length
+                    
+                    if self.bootstrap_method == 'block' and num_returns > self.block_size:
+                        # Block bootstrap - sample in blocks rather than individual returns
+                        # This preserves some of the time series properties
+                        max_start_idx = num_returns - self.block_size
+                        num_blocks_needed = (required_returns + self.block_size - 1) // self.block_size
+                        block_starts = np.random.randint(0, max_start_idx, size=num_blocks_needed)
+                        indices = []
+                        for start in block_starts:
+                            block_indices = np.arange(start, min(start + self.block_size, num_returns))
+                            indices.extend(block_indices)
+                        
+                        # Make sure we have enough indices (repeat if necessary)
+                        while len(indices) < required_returns:
+                            # Add more blocks if needed
+                            start = np.random.randint(0, max_start_idx)
+                            block_indices = np.arange(start, min(start + self.block_size, num_returns))
+                            indices.extend(block_indices)
+                        
+                        # Trim to the exact size we need
+                        indices = indices[:required_returns]
+                    else:
+                        # Standard bootstrap - randomly sample with replacement
+                        indices = np.random.choice(num_returns, size=required_returns, replace=True)
+                    
+                    # Get the bootstrap sample of log returns
+                    bootstrap_log_returns = log_returns_array[indices]
+                    
+                    # Generate path using cumulative log returns for better numerical stability
+                    cum_log_return = 0.0
+                    paths_array[0, sim_idx] = initial_equity
+                    
+                    # Generate all time steps for this simulation path
+                    # Ensure we don't exceed the paths_array dimensions
+                    for t in range(min(len(bootstrap_log_returns), num_returns)):
+                        # Add the log return to the cumulative sum
+                        cum_log_return += bootstrap_log_returns[t]
+                        
+                        # Calculate the equity using exp of log returns (initial_equity * e^(cum_log_return))
+                        equity = initial_equity * np.exp(cum_log_return)
+                        
+                        # Prevent equity from becoming too small - establish a minimum floor
+                        if equity < 0.01:
+                            equity = 0.01
+                            # Reset the cumulative log return based on the minimum equity
+                            cum_log_return = np.log(equity / initial_equity)
+                        
+                        # Prevent equity from becoming NaN or infinity
+                        if np.isnan(equity) or np.isinf(equity):
+                            equity = paths_array[t, sim_idx]  # Use the previous value
+                            cum_log_return = np.log(equity / initial_equity)
+                        
+                        # Store the result
+                        paths_array[t+1, sim_idx] = equity
+                            
+                    # Ensure all remaining rows have valid values (in case bootstrap returns are shorter)
+                    for t in range(len(bootstrap_log_returns), num_returns):
+                        # If we run out of bootstrapped returns, use the last valid equity value
+                        paths_array[t+1, sim_idx] = paths_array[t, sim_idx]
+                
+                # Update progress file if provided
+                if progress_file and os.path.exists(progress_file) and batch_idx % max(1, num_batches//10) == 0:
+                    try:
+                        import json
+                        with open(progress_file, 'r') as f:
+                            progress_data = json.load(f)
+                        
+                        progress_data.update({
+                            'current_step': "Running Monte Carlo simulations",
+                            'progress': min(80, int(30 + (batch_idx / num_batches) * 50)),
+                            'current_step_progress': int((batch_idx / num_batches) * 100),
+                            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                        
+                        with open(progress_file, 'w') as f:
+                            json.dump(progress_data, f, indent=4)
+                    except Exception as e:
+                        print(f"Error updating progress file: {e}")
+                
+                # End timer
+                end_time = datetime.now()
+                duration = (end_time - start_time).total_seconds()
+                print(f"CPU Monte Carlo completed in {duration:.2f} seconds ({duration/self.num_simulations:.6f} seconds per simulation)")
+                
+                # Convert results to pandas Series
+                for sim_idx in range(self.num_simulations):
+                    all_paths.append(pd.Series(paths_array[:, sim_idx], name=f'sim_{sim_idx}'))
+        
+        # Convert all paths to DataFrame
+        if len(all_paths) == 0:
+            raise ValueError("No simulation paths generated")
+        
+        simulated_df = pd.concat(all_paths, axis=1)
+        
+        # Return the DataFrame with simulated paths
+        return simulated_df
+
+    @property
+    def returns(self):
+        """Get returns from equity values."""
+        return self.equity_values.pct_change().dropna()
+        
+    @property
+    def log_returns(self):
+        """Get log returns from equity values for better numerical stability.
+        
+        Log returns (log(1+r)) provide better numerical stability, especially for
+        Monte Carlo simulations with many iterations or when computing cumulative returns.
         """
-        Analyze simulation results to extract key metrics.
+        return np.log1p(self.returns)
+    
+    def _calculate_metrics(self) -> Dict[str, Any]:
+        """
+        Calculate metrics from the Monte Carlo simulation results.
         
         Returns:
-            Dict containing analysis results
+            Dict containing calculated metrics
         """
-        # Get the initial and final equity from the original curve
+        if self.simulated_paths is None:
+            raise ValueError("No simulation results available. Run the simulation first.")
+        
+        # Get initial and final values for the original equity curve
         initial_equity = self.equity_values.iloc[0]
-        final_equity_original = self.equity_values.iloc[-1]
+        final_equity = self.equity_values.iloc[-1]
+        return_original = final_equity / initial_equity - 1
         
-        # Ensure initial equity is not zero to avoid division by zero
-        if initial_equity == 0:
-            initial_equity = 0.01  # Set a minimal positive value instead of zero
-            print("Warning: Initial equity was zero. Setting to 0.01 to avoid division by zero.")
+        # Calculate key metrics across all simulations
+        final_equities = self.simulated_paths.iloc[-1, :]
         
-        # Calculate return with safety check for division by zero
-        return_original = (final_equity_original / initial_equity) - 1 if initial_equity > 0 else 0
+        # Mean and median final equity
+        mean_final_equity = final_equities.mean()
+        median_final_equity = final_equities.median()
         
-        # Extract final equity values from all simulations and convert to numpy array
-        final_equity_values = np.array(self.simulated_paths.iloc[-1].values)
+        # Mean return
+        mean_return = mean_final_equity / initial_equity - 1
         
-        # Ensure no zeros in final equity values to avoid division by zero
-        final_equity_values = np.maximum(final_equity_values, 0.01)
+        # Confidence interval for final equity
+        ci_lower_pct = (1 - self.confidence_level) / 2
+        ci_upper_pct = 1 - ci_lower_pct
         
-        # Calculate returns with safety check for division by zero
-        returns = (final_equity_values / initial_equity) - 1 if initial_equity > 0 else np.zeros_like(final_equity_values)
+        ci_lower_final_equity = final_equities.quantile(ci_lower_pct)
+        ci_upper_final_equity = final_equities.quantile(ci_upper_pct)
         
-        # Calculate mean and median
-        mean_final_equity = np.mean(final_equity_values)
-        median_final_equity = np.median(final_equity_values)
-        mean_return = np.mean(returns)
+        # Confidence interval for returns
+        returns = final_equities / initial_equity - 1
+        ci_lower_return = returns.quantile(ci_lower_pct)
+        ci_upper_return = returns.quantile(ci_upper_pct)
         
-        # Calculate confidence intervals
-        ci_lower_final_equity, ci_upper_final_equity = np.percentile(
-            final_equity_values, 
-            [(1 - self.confidence_level) * 100 / 2, 100 - (1 - self.confidence_level) * 100 / 2]
-        )
+        # Value at Risk (VaR) and Conditional VaR (CVaR)
+        var_pct = -returns.quantile(ci_lower_pct)  # Negative of the lower CI bound
+        cvar_pct = -returns[returns <= -var_pct].mean()  # Average of losses beyond VaR
         
-        ci_lower_return, ci_upper_return = np.percentile(
-            returns, 
-            [(1 - self.confidence_level) * 100 / 2, 100 - (1 - self.confidence_level) * 100 / 2]
-        )
+        # Worst and best case returns
+        worst_return = returns.min()
+        best_return = returns.max()
         
-        # Calculate VaR and CVaR with safety checks
-        if len(returns) > 0:
-            var_idx = max(0, min(int(np.ceil((1 - self.confidence_level) * len(returns))), len(returns) - 1))
-            sorted_returns = np.sort(returns)
-            var_pct = sorted_returns[var_idx]
-            cvar_pct = np.mean(sorted_returns[:var_idx+1]) if var_idx > 0 else sorted_returns[0]
-        else:
-            var_pct = 0
-            cvar_pct = 0
+        # Probability of profit
+        profit_prob = (returns > 0).mean()
         
-        # Calculate probability of profit (fix multi-dimensional indexing)
-        returns_array = np.array(returns)  # Convert to numpy array before indexing
-        probability_of_profit = np.sum(returns_array > 0) / len(returns_array) if len(returns_array) > 0 else 0
-        
-        # Get best and worst returns
-        worst_return = np.min(returns)
-        best_return = np.max(returns)
-        
-        # Store results
+        # Collect all metrics into a dictionary
         results = {
             'initial_equity': initial_equity,
-            'final_equity_original': final_equity_original,
+            'final_equity_original': final_equity,
             'return_original': return_original,
             'mean_final_equity': mean_final_equity,
             'median_final_equity': median_final_equity,
@@ -316,10 +441,9 @@ class MonteCarloAnalysis:
             'ci_upper_return': ci_upper_return,
             'var_pct': var_pct,
             'cvar_pct': cvar_pct,
-            'probability_of_profit': probability_of_profit,
             'worst_return': worst_return,
             'best_return': best_return,
-            'num_simulations': self.num_simulations,
+            'probability_of_profit': profit_prob,
             'confidence_level': self.confidence_level
         }
         
@@ -376,4 +500,4 @@ class MonteCarloAnalysis:
             plt.close(fig)
         else:
             plt.tight_layout()
-            plt.show() 
+            plt.show()
