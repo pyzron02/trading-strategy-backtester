@@ -1,0 +1,8 @@
+{
+  "lookback_period": 75,
+  "entry_threshold": 2.0,
+  "exit_threshold": 0.5,
+  "position_size": 100,
+  "rebalance_freq": 20,
+  "stop_loss": 0.05
+}

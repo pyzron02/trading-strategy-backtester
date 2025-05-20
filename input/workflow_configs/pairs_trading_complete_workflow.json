@@ -1,0 +1,42 @@
+{
+  "workflow_type": "complete",
+  "common_params": {
+    "start_date": "2020-01-01",
+    "end_date": "2023-12-31",
+    "data_dir": "input",
+    "tickers": ["AAPL", "MSFT"],
+    "initial_capital": 100000.0,
+    "commission": 0.001,
+    "plot": false,
+    "enhanced_plots": true,
+    "verbose": true
+  },
+  "strategies": {
+    "PairsTrading": {
+      "param_file": "input/parameter_grids/PairsTrading_grid.json",
+      "parameters": {
+        "lookback_period": 90,
+        "entry_threshold": 3.0,
+        "exit_threshold": 1.0,
+        "position_size": 100,
+        "rebalance_freq": 10,
+        "stop_loss": 0.03
+      },
+      "optimization": {
+        "n_trials": 30,
+        "optimization_metric": "sharpe_ratio",
+        "max_combinations": 30
+      },
+      "monte_carlo": {
+        "n_simulations": 1000,
+        "enhanced_plots": true
+      },
+      "walkforward": {
+        "window_size": 252,
+        "step_size": 63,
+        "reoptimize": "always",
+        "reoptimization_threshold": 0.05
+      }
+    }
+  }
+}

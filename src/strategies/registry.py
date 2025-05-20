@@ -91,3 +91,14 @@ try:
     register_strategy('MACrossover', MACrossover, version="1.0.0")
 except ImportError:
     print("Could not import MACrossover strategy") 
+    
+try:
+    from strategies.pairs_trading_strategy import PairsTradingStrategy
+    register_strategy('PairsTrading', PairsTradingStrategy, version="1.0.0")
+except ImportError:
+    try:
+        # Alternative import path
+        from src.strategies.pairs_trading_strategy import PairsTradingStrategy
+        register_strategy('PairsTrading', PairsTradingStrategy, version="1.0.0")
+    except ImportError:
+        print("Could not import PairsTradingStrategy strategy")
