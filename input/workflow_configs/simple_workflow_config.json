@@ -4,10 +4,10 @@
     "start_date": "2020-01-01",
     "end_date": "2023-12-31",
     "data_dir": "input",
-    "tickers": ["SPY", "AAPL"],
+    "tickers": ["SPY", "AAPL", "TSLA", "NVDA", "PLTR", "MSFT", "QQQ", "AMZN", "GOOGL", "META"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false,
+    "plot": true,
     "verbose": false
   },
   "strategies": {

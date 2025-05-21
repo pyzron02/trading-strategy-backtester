@@ -16,6 +16,7 @@ ENV BACKTESTER_ROOT=/app/trading-strategy-backtester
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     sed \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy backtester requirements first
@@ -41,7 +42,7 @@ RUN mkdir -p /app/frontend/temp
 RUN mkdir -p /app/frontend/output
 
 # Copy backtester files (excluding frontend and docker directories)
-COPY AWS_DEPLOYMENT.md LICENSE README.md README_CONTAINER.md docker-compose.parent.yml /app/trading-strategy-backtester/
+COPY AWS_DEPLOYMENT.md LICENSE README.md README_CONTAINER.md /app/trading-strategy-backtester/
 COPY src/ /app/trading-strategy-backtester/src/
 COPY input/ /app/trading-strategy-backtester/input/
 COPY tests/ /app/trading-strategy-backtester/tests/

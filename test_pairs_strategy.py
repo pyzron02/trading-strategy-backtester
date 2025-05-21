@@ -13,9 +13,17 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Import strategy
 from src.strategies.pairs_trading_strategy import PairsTradingStrategy
 
-# Register strategy manually
-from src.strategies.registry import register_strategy
-register_strategy('PairsTrading', PairsTradingStrategy, version="1.0.0")
+# Register strategy manually in a way that will work with both the direct test and the framework
+try:
+    from src.strategies.registry import register_strategy, get_registered_strategies
+    # Check if already registered
+    strategies = get_registered_strategies()
+    if not any(s['name'] == 'PairsTrading' for s in strategies):
+        register_strategy('PairsTrading', PairsTradingStrategy, version="1.0.0")
+except Exception as e:
+    # Fallback for direct imports
+    from src.strategies.registry import register_strategy
+    register_strategy('PairsTrading', PairsTradingStrategy, version="1.0.0")
 
 # Import required components for backtest
 from src.engine.run_backtest import run_backtest

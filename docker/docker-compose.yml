@@ -1,26 +1,29 @@
-version: '3.8'
+# Latest Docker Compose specification
 
 services:
   trading-backtester:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
     ports:
       - "5000:5000"
     volumes:
-      - ../input:/app/trading-strategy-backtester/input
-      - ../output:/app/trading-strategy-backtester/output
-      - ../logs:/app/trading-strategy-backtester/logs
-      - ../cache:/app/trading-strategy-backtester/cache
-      - ../frontend/temp:/app/frontend/temp
-      - ../frontend/output:/app/frontend/output
-      - ../frontend/app.py:/app/frontend/app.py
+      - ./input:/app/trading-strategy-backtester/input
+      - ./output:/app/trading-strategy-backtester/output
+      - ./logs:/app/trading-strategy-backtester/logs
+      - ./cache:/app/trading-strategy-backtester/cache
+      - ./frontend/temp:/app/frontend/temp
+      - ./frontend/output:/app/frontend/output
+      - ./frontend/app.py:/app/frontend/app.py
     environment:
-      - SECRET_KEY=your_secret_key_change_this_in_production
+      - SECRET_KEY=trading_strategy_backtester_secret_key
       - BACKTESTER_ROOT=/app/trading-strategy-backtester
       - BASE_DIR=/app/trading-strategy-backtester
+      - FLASK_APP=app.py
+      - FLASK_DEBUG=1
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      test: curl -f http://localhost:5000 || exit 1
       interval: 30s
       timeout: 10s
       retries: 3

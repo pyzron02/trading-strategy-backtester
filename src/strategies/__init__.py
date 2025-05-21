@@ -26,4 +26,4 @@ __all__ = [
     'get_strategy_class',
     'get_strategy_version',
     'get_registered_strategies'
-] 
+]

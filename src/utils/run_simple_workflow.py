@@ -32,7 +32,8 @@ def run_simple_workflow(
     commission: float = 0.001,
     output_dir: Optional[str] = None,
     data_dir: str = "input",
-    verbose: bool = False
+    verbose: bool = False,
+    plot: bool = False
 ) -> Dict[str, Any]:
     """
     Run a complete backtesting workflow with minimal configuration.
@@ -48,6 +49,7 @@ def run_simple_workflow(
         output_dir: Custom output directory (created if not specified)
         data_dir: Directory containing input data
         verbose: Whether to print detailed output
+        plot: Whether to generate plots of backtest results
         
     Returns:
         Dictionary containing backtest results
@@ -79,7 +81,8 @@ def run_simple_workflow(
         commission=commission,
         output_dir=output_dir,
         data_dir=data_dir,
-        verbose=verbose
+        verbose=verbose,
+        plot=plot
     )
     
     if verbose:
@@ -105,6 +108,7 @@ if __name__ == "__main__":
     parser.add_argument("--commission", type=float, default=0.001, help="Commission rate")
     parser.add_argument("--output-dir", help="Output directory")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--plot", action="store_true", help="Generate plots of backtest results")
     
     args = parser.parse_args()
     
@@ -117,5 +121,6 @@ if __name__ == "__main__":
         initial_capital=args.initial_capital,
         commission=args.commission,
         output_dir=args.output_dir,
-        verbose=args.verbose
+        verbose=args.verbose,
+        plot=args.plot
     ) 

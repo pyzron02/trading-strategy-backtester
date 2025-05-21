@@ -62,7 +62,7 @@ def run_backtest():
     cerebro.broker.setcommission(commission=0.001)
     
     # Prepare data for each ticker
-    tickers = ["AAPL", "MSFT"]
+    tickers = ["TSLA", "NVDA"]
     for ticker in tickers:
         df = prepare_data(ticker)
         if df is None:

@@ -424,6 +424,20 @@
                     gridFields.innerHTML = '';
                     
                     if (data.parameters) {
+                        // Check if we need to display a special note for PairsTrading strategy
+                        if (strategy === 'PairsTrading') {
+                            const noteDiv = document.createElement('div');
+                            noteDiv.className = 'alert alert-info mb-3';
+                            noteDiv.innerHTML = '<strong>Note:</strong> Pairs Trading strategy requires exactly two tickers separated by a comma (e.g., "AAPL,MSFT").';
+                            paramFields.appendChild(noteDiv);
+                            
+                            // Also add to grid fields
+                            const gridNoteDiv = document.createElement('div');
+                            gridNoteDiv.className = 'alert alert-info mb-3';
+                            gridNoteDiv.innerHTML = '<strong>Note:</strong> Pairs Trading strategy requires exactly two tickers separated by a comma (e.g., "AAPL,MSFT").';
+                            gridFields.appendChild(gridNoteDiv);
+                        }
+                        
                         // Create fields for single parameter values
                         for (const [param, paramInfo] of Object.entries(data.parameters)) {
                             // Create field for single value
@@ -529,6 +543,21 @@
 
         // Load parameters when strategy changes
         document.getElementById('strategy').addEventListener('change', loadStrategyParams);
+        
+        // Add form validation for PairsTrading strategy
+        document.getElementById('backtest-form').addEventListener('submit', function(event) {
+            const strategy = document.getElementById('strategy').value;
+            const tickers = document.getElementById('tickers').value;
+            
+            if (strategy === 'PairsTrading') {
+                const tickerList = tickers.split(',').map(t => t.trim()).filter(t => t.length > 0);
+                
+                if (tickerList.length !== 2) {
+                    event.preventDefault();
+                    alert('Pairs Trading strategy requires exactly two tickers. Please provide two tickers separated by a comma (e.g., "AAPL,MSFT").');
+                }
+            }
+        });
         
         // Dark mode functionality
         document.addEventListener('DOMContentLoaded', function() {

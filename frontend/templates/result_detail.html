@@ -788,6 +788,7 @@
                                     <div class="card-body">
                                         <ul class="nav nav-tabs mb-3" id="wfVisualizationTabs" role="tablist">
                                             {% for chart in walk_forward_results.charts %}
+                                            {% if 'monte_carlo_dashboard' not in chart.name %}
                                             <li class="nav-item" role="presentation">
                                                 <button class="nav-link {% if loop.first %}active{% endif %}" 
                                                         id="wf-viz-tab-{{ loop.index }}" 
@@ -797,10 +798,12 @@
                                                     {{ chart.name|replace('.html', '')|replace('.png', '')|replace('.jpg', '')|replace('.jpeg', '')|replace('_', ' ')|title }}
                                                 </button>
                                             </li>
+                                            {% endif %}
                                             {% endfor %}
                                         </ul>
                                         <div class="tab-content" id="wfVisualizationTabContent">
                                             {% for chart in walk_forward_results.charts %}
+                                            {% if 'monte_carlo_dashboard' not in chart.name %}
                                             <div class="tab-pane fade {% if loop.first %}show active{% endif %}" 
                                                  id="wf-viz-{{ loop.index }}" 
                                                  role="tabpanel">
@@ -834,6 +837,7 @@
                                                     {% endif %}
                                                 </div>
                                             </div>
+                                            {% endif %}
                                             {% endfor %}
                                         </div>
                                     </div>

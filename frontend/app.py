@@ -127,35 +127,44 @@ def get_output_folders():
     """Get all output folders from the backtester"""
     output_dir = os.path.join(project_root, 'output')
     folders = []
+    
+    # Check if the output directory exists
+    if not os.path.exists(output_dir):
+        print(f"Warning: Output directory does not exist: {output_dir}")
+        return folders
+    
+    try:
+        for folder in os.listdir(output_dir):
+            folder_path = os.path.join(output_dir, folder)
+            if os.path.isdir(folder_path) and not folder.startswith('.'):
+                # Extract strategy and workflow type from folder name
+                folder_parts = folder.split('_')
+                if len(folder_parts) >= 2:
+                    strategy_name = folder_parts[0]
+                    workflow_type = get_workflow_type_from_folder(folder)
 
-    for folder in os.listdir(output_dir):
-        folder_path = os.path.join(output_dir, folder)
-        if os.path.isdir(folder_path) and not folder.startswith('.'):
-            # Extract strategy and workflow type from folder name
-            folder_parts = folder.split('_')
-            if len(folder_parts) >= 2:
-                strategy_name = folder_parts[0]
-                workflow_type = get_workflow_type_from_folder(folder)
+                    # Extract timestamp if available
+                    timestamp_match = re.search(r'(\d{8}_\d{6})', folder)
+                    timestamp = timestamp_match.group(
+                        1) if timestamp_match else None
 
-                # Extract timestamp if available
-                timestamp_match = re.search(r'(\d{8}_\d{6})', folder)
-                timestamp = timestamp_match.group(
-                    1) if timestamp_match else None
+                    # Get creation time as fallback
+                    creation_time = datetime.fromtimestamp(
+                        os.path.getctime(folder_path))
+                    display_time = timestamp if timestamp else creation_time.strftime(
+                        '%Y%m%d_%H%M%S')
 
-                # Get creation time as fallback
-                creation_time = datetime.fromtimestamp(
-                    os.path.getctime(folder_path))
-                display_time = timestamp if timestamp else creation_time.strftime(
-                    '%Y%m%d_%H%M%S')
-
-                folders.append({
-                    'name': folder,
-                    'path': folder_path,
-                    'strategy': strategy_name,
-                    'workflow': workflow_type,
-                    'timestamp': display_time,
-                    'full_path': os.path.abspath(folder_path)
-                })
+                    folders.append({
+                        'name': folder,
+                        'path': folder_path,
+                        'strategy': strategy_name,
+                        'workflow': workflow_type,
+                        'timestamp': display_time,
+                        'full_path': os.path.abspath(folder_path)
+                    })
+    except Exception as e:
+        print(f"Error reading output directory: {str(e)}")
+        return []
 
     # Sort by most recent first
     folders.sort(key=lambda x: x['timestamp'], reverse=True)
@@ -1373,6 +1382,48 @@ def strategy_params(strategy_name):
                         "min": 0.0,
                                 "max": 0.1,
                         "description": "Exit threshold"}}})
+    elif strategy_name == "PairsTrading":
+        return jsonify(
+            {
+                "parameters": {
+                    "lookback_period": {
+                        "type": "int",
+                        "default": 60,
+                        "min": 10,
+                        "max": 120,
+                        "description": "Days to calculate spread statistics"},
+                    "entry_threshold": {
+                        "type": "float",
+                        "default": 2.0,
+                        "min": 0.5,
+                        "max": 4.0,
+                        "description": "Z-score threshold to enter position"},
+                    "exit_threshold": {
+                        "type": "float",
+                        "default": 0.5,
+                        "min": 0.1,
+                        "max": 2.0,
+                        "description": "Z-score threshold to exit position"},
+                    "position_size": {
+                        "type": "int",
+                        "default": 100,
+                        "min": 10,
+                        "max": 1000,
+                        "description": "Base position size"},
+                    "rebalance_freq": {
+                        "type": "int",
+                        "default": 20,
+                        "min": 5,
+                        "max": 60,
+                        "description": "Days between hedge ratio recalculations"},
+                    "stop_loss": {
+                        "type": "float",
+                        "default": 0.05,
+                        "min": 0.01, 
+                        "max": 0.15,
+                        "description": "Stop loss percentage"}
+                }
+            })
     elif strategy_name == "AuctionMarket":
         return jsonify(
             {
@@ -1450,8 +1501,24 @@ def strategy_params(strategy_name):
 @app.route('/results')
 def results():
     """Results page showing all backtest results"""
-    folders = get_output_folders()
-    return render_template('results.html', folders=folders)
+    # Try to create the output directory if it doesn't exist
+    try:
+        output_dir = os.path.join(project_root, 'output')
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+            print(f"Created output directory during results view")
+    except Exception as e:
+        print(f"Error accessing or creating output directory: {str(e)}")
+        # Return a template with an error message instead of failing
+        return render_template('results.html', folders=[], error=f"Output directory error: {str(e)}")
+        
+    # If we reached here, try to get the folders
+    try:
+        folders = get_output_folders()
+        return render_template('results.html', folders=folders)
+    except Exception as e:
+        print(f"Error getting output folders: {str(e)}")
+        return render_template('results.html', folders=[], error=f"Error listing results: {str(e)}")
 
 
 @app.route('/results/<folder_name>')
@@ -1461,6 +1528,12 @@ def view_result(folder_name):
 
     if not os.path.exists(folder_path):
         flash(f"Results folder not found: {folder_name}")
+        # Try to create the output directory if it doesn't exist
+        try:
+            os.makedirs(os.path.join(project_root, 'output'), exist_ok=True)
+            print(f"Created output directory during view_result")
+        except Exception as e:
+            print(f"Error creating output directory during view_result: {str(e)}")
         return redirect(url_for('results'))
 
     try:
@@ -1715,6 +1788,12 @@ def run_backtest():
     strategy = request.form.get('strategy')
     workflow_type = request.form.get('workflow_type', 'simple')
     tickers = request.form.get('tickers', 'SPY').replace(' ', '').split(',')
+    
+    # Validate PairsTrading strategy has exactly two tickers
+    if strategy == 'PairsTrading' and len(tickers) != 2:
+        flash(f"Error: PairsTrading strategy requires exactly 2 tickers, but {len(tickers)} were provided. Please provide exactly two tickers separated by a comma.")
+        return redirect(url_for('index'))
+    
     start_date = request.form.get('start_date', DEFAULT_START_DATE)
     end_date = request.form.get('end_date', DEFAULT_END_DATE)
     initial_capital = float(request.form.get('initial_capital', 100000))
@@ -1989,11 +2068,12 @@ def run_backtest():
             print(
                 f"Backtest process completed with return code: {return_code}")
 
-            # Delete config file after backtest completes
+            # Delete the temporary config file after backtest completes
+            # (only the one we just created, with timestamp in filename)
             try:
-                if os.path.exists(config_file):
+                if os.path.exists(config_file) and re.search(r'\d{8}_\d{6}', config_file):
                     os.remove(config_file)
-                    print(f"Cleaned up config file: {config_file}")
+                    print(f"Cleaned up temporary config file: {config_file}")
             except Exception as e:
                 print(f"Error cleaning up config file: {str(e)}")
 
@@ -2005,11 +2085,11 @@ def run_backtest():
         return redirect(url_for('results'))
 
     except Exception as e:
-        # Clean up config file after error
+        # Clean up temporary config file after error
         try:
-            if os.path.exists(config_file):
+            if os.path.exists(config_file) and re.search(r'\d{8}_\d{6}', config_file):
                 os.remove(config_file)
-                print(f"Cleaned up config file after error: {config_file}")
+                print(f"Cleaned up temporary config file after error: {config_file}")
         except Exception as cleanup_error:
             print(f"Error cleaning up config file after error: {str(cleanup_error)}")
 
@@ -2041,7 +2121,7 @@ def cleanup_configs():
     error_count = 0
     config_files = []
 
-    # List all config files
+    # List all config files (both permanent and temporary)
     for file in os.listdir(config_dir):
         if file.endswith('.json'):
             file_path = os.path.join(config_dir, file)
@@ -2081,20 +2161,45 @@ if __name__ == '__main__':
 
     # Verify output directory exists
     output_dir = os.path.join(project_root, 'output')
+    
+    # Create a relative output directory path if we don't have permissions for the absolute path
     if not os.path.exists(output_dir):
         print(f"WARNING: Output directory not found at {output_dir}")
-        print("Creating output directory...")
+        print("Attempting to create output directory...")
         try:
             os.makedirs(output_dir, exist_ok=True)
             print(f"Created output directory at {output_dir}")
         except Exception as e:
             print(f"Error creating output directory: {str(e)}")
-    else:
-        print(f"Output directory found at {output_dir}")
-        # List all result folders
-        folders = [f for f in os.listdir(output_dir) if os.path.isdir(
-            os.path.join(output_dir, f)) and not f.startswith('.')]
-        print(f"Found {len(folders)} result folders in output directory")
+            
+            # Fallback to local output directory if we can't create in the project root
+            local_output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'output')
+            print(f"Attempting to create local output directory at {local_output_dir}")
+            try:
+                os.makedirs(local_output_dir, exist_ok=True)
+                print(f"Created local output directory at {local_output_dir}")
+                # Update project_root using a function that can modify global variables
+                def update_project_root():
+                    global project_root
+                    project_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+                    return project_root
+                
+                updated_root = update_project_root()
+                print(f"Updated project root to {updated_root}")
+                output_dir = local_output_dir
+            except Exception as local_error:
+                print(f"Error creating local output directory: {str(local_error)}")
+    
+    # Check if we have a valid output directory now
+    if os.path.exists(output_dir):
+        print(f"Output directory confirmed at {output_dir}")
+        try:
+            # List all result folders
+            folders = [f for f in os.listdir(output_dir) if os.path.isdir(
+                os.path.join(output_dir, f)) and not f.startswith('.')]
+            print(f"Found {len(folders)} result folders in output directory")
+        except Exception as e:
+            print(f"Error listing output directory: {str(e)}")
 
     # Clean up old config files on startup
     def cleanup_old_configs():

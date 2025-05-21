@@ -8,6 +8,7 @@ mkdir -p /app/trading-strategy-backtester/input
 mkdir -p /app/trading-strategy-backtester/output
 mkdir -p /app/trading-strategy-backtester/logs
 mkdir -p /app/trading-strategy-backtester/cache
+mkdir -p /app/trading-strategy-backtester/input/workflow_configs
 
 # Set environment variables
 export BACKTESTER_ROOT="/app/trading-strategy-backtester"

@@ -173,14 +173,14 @@ def fetch_stock_data(tickers, start_date, end_date, output_path='input/stock_dat
     
     return full_output_path
 
-def auto_setup(tickers=None, force_refresh=True):
+def auto_setup(tickers=None, force_refresh=False):
     """
     Auto setup function for when this module is imported by others.
     Uses default values if not provided.
     
     Args:
         tickers (str or list, optional): Ticker symbols. Default is ['SPY', 'AAPL', 'MSFT', 'GOOGL'].
-        force_refresh (bool, optional): If True, always fetch fresh data for all tickers. Default is True.
+        force_refresh (bool, optional): If True, always fetch fresh data for all tickers. Default is False.
         
     Returns:
         str: Path to the saved CSV file
