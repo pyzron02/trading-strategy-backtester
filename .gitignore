@@ -72,3 +72,6 @@ rc.*
 # Runtime data
 cache/
 src/output/
+
+# Input csv
+input/*.csv
