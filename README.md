@@ -188,8 +188,10 @@ The project provides a comprehensive Docker setup that handles all dependencies 
    mkdir -p input output logs cache frontend/temp frontend/output
    
    # Then build and start the container
-   docker-compose -f docker/docker-compose.yml up --build
+   docker-compose up --build
    ```
+
+   The main `docker-compose.yml` file in the root directory is configured to use the Dockerfile and other configuration files from the `/docker` directory.
 
 3. **Access the web interface:**
    Open your browser to http://localhost:5000 to use the integrated frontend interface.
@@ -525,12 +527,24 @@ The system generates comprehensive evaluation metrics and visualizations:
 
 ### Enhanced Visualizations
 
-The backtester includes advanced visualization capabilities that can be enabled with the `--enhanced-plots` flag:
+The backtester includes advanced interactive visualization capabilities that can be enabled by setting `"plot": true` in your configuration files or using the `--plot` flag:
 
-- Monte Carlo simulation paths with confidence intervals
-- Return distribution histograms with key statistics
-- Drawdown analysis visualizations
-- Comprehensive dashboard with combined metrics
+- **Interactive Plotly Dashboards**: All backtest results are now visualized with interactive Plotly dashboards
+- **Equity Curve with Drawdowns**: See your strategy performance alongside drawdown visualization
+- **Trade Markers**: View buy/sell points directly on the equity curve
+- **Performance Metrics Table**: Key metrics displayed in a comprehensive table
+- **Moving Averages**: Visualize trend smoothing with moving averages
+- **Monte Carlo Visualizations**: Simulation paths with confidence intervals
+- **Return Distribution Analysis**: Histogram views with statistical overlays
+- **Comprehensive Dashboard**: Combined metrics and charts in a single view
+
+To ensure you have the required visualization packages installed:
+
+```bash
+python src/utils/install_visualization_deps.py
+```
+
+This will install Plotly and Kaleido (for static image export) if they're not already available.
 
 ### Walk-Forward Testing
 

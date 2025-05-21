@@ -119,7 +119,20 @@ services:
 
 ### Docker Integration
 
-The provided Dockerfile already sets up the backend environment:
+All Docker configuration files are maintained in the `/docker` directory:
+
+1. `docker/Dockerfile` - Defines how to build the Docker image
+2. `docker/docker-entrypoint.sh` - Script that runs when the container starts
+
+The main `docker-compose.yml` file in the root directory references these files:
+
+```yaml
+build:
+  context: .
+  dockerfile: docker/Dockerfile
+```
+
+The Dockerfile sets up the backend environment:
 
 1. It uses the BASE_DIR environment variable:
    ```
@@ -183,10 +196,9 @@ networks:
 
 ### Starting the Application
 
-1. From the project root directory (containing both subdirectories):
+1. From the project root directory:
 
 ```bash
-cd trading-strategy-backtester
 docker-compose up
 ```
 
@@ -195,6 +207,8 @@ docker-compose up
 ```bash
 docker-compose up -d
 ```
+
+The docker-compose.yml file in the root directory is configured to reference the Dockerfile in the `/docker` directory, so you don't need to change directories to run Docker.
 
 ### Running Backtests
 
