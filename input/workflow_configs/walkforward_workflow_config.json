@@ -7,11 +7,14 @@
     "tickers": ["SPY"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false,
     "verbose": false
   },
   "strategies": {
     "SimpleStock": {
+      "parameters": {
+        "sma_period": 20,
+        "position_size": 100
+      },
       "parameter_grid": {
         "sma_period": [5, 10, 15, 20, 25, 30, 40, 50],
         "position_size": [50, 100, 150, 200]
@@ -19,7 +22,8 @@
       "walkforward": {
         "window_size": 252,
         "step_size": 63,
-        "in_sample_ratio": 0.7,
+        "n_trials": 50,
+        "optimization_metric": "sharpe_ratio",
         "reoptimize": "on_degradation",
         "reoptimization_threshold": 0.1
       }

@@ -7,8 +7,6 @@
     "tickers": ["AAPL", "MSFT"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false,
-    "enhanced_plots": true,
     "verbose": true
   },
   "strategies": {
@@ -22,14 +20,27 @@
         "rebalance_freq": 10,
         "stop_loss": 0.03
       },
+      "parameter_grid": {
+        "lookback_period": [60, 90, 120],
+        "entry_threshold": [2.0, 2.5, 3.0],
+        "exit_threshold": [0.5, 1.0, 1.5],
+        "position_size": [50, 100, 150],
+        "rebalance_freq": [5, 10, 15],
+        "stop_loss": [0.02, 0.03, 0.05]
+      },
       "optimization": {
         "n_trials": 30,
         "optimization_metric": "sharpe_ratio",
-        "max_combinations": 30
+        "max_combinations": 30,
+        "keep_all_results": false
       },
       "monte_carlo": {
         "n_simulations": 1000,
-        "enhanced_plots": true
+        "enhanced_plots": true,
+        "keep_permuted_data": false,
+        "confidence_level": 0.95,
+        "bootstrap_pct": 0.5,
+        "random_seed": 42
       },
       "walkforward": {
         "window_size": 252,

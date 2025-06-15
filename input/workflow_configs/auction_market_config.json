@@ -7,7 +7,6 @@
     "tickers": ["SPY"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false,
     "verbose": false
   },
   "strategies": {
@@ -30,11 +29,19 @@
       },
       "optimization": {
         "n_trials": 30,
-        "optimization_metric": "sharpe_ratio"
+        "optimization_metric": "sharpe_ratio",
+        "max_combinations": 100
       },
       "monte_carlo": {
         "n_simulations": 500,
-        "enhanced_plots": true
+        "enhanced_plots": true,
+        "keep_permuted_data": false
+      },
+      "walkforward": {
+        "window_size": 252,
+        "step_size": 63,
+        "reoptimize": "always",
+        "reoptimization_threshold": 0.05
       }
     }
   }

@@ -7,16 +7,28 @@
     "tickers": ["AAPL"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false,
     "verbose": false
   },
   "strategies": {
     "AuctionMarket": {
       "param_file": "input/parameters/AuctionMarket_params.json",
+      "parameters": {
+        "param_preset": "default",
+        "value_area": 0.7,
+        "use_vwap": true,
+        "use_volume_profile": true,
+        "position_size": 100,
+        "risk_percent": 0.01,
+        "use_atr_sizing": true,
+        "atr_period": 14
+      },
       "monte_carlo": {
         "n_simulations": 1000,
         "enhanced_plots": true,
-        "keep_permuted_data": false
+        "keep_permuted_data": false,
+        "confidence_level": 0.95,
+        "bootstrap_pct": 0.5,
+        "random_seed": 42
       }
     }
   }

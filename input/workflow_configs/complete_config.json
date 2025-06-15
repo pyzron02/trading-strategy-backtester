@@ -7,11 +7,15 @@
     "tickers": ["AAPL", "MSFT", "GOOG", "AMZN"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": false,
     "verbose": false
   },
   "strategies": {
     "MultiPosition": {
+      "parameters": {
+        "max_positions": 3,
+        "position_size": 50,
+        "sma_period": 20
+      },
       "parameter_grid": {
         "max_positions": [2, 3, 4, 5],
         "position_size": [20, 50, 100],
@@ -24,11 +28,14 @@
       },
       "monte_carlo": {
         "n_simulations": 5000,
-        "enhanced_plots": true
+        "enhanced_plots": true,
+        "keep_permuted_data": false
       },
       "walkforward": {
         "window_size": 252,
-        "step_size": 63
+        "step_size": 63,
+        "reoptimize": "always",
+        "reoptimization_threshold": 0.05
       }
     }
   }

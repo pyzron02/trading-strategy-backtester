@@ -7,7 +7,6 @@
     "tickers": ["SPY", "AAPL", "TSLA", "NVDA", "PLTR", "MSFT", "QQQ", "AMZN", "GOOGL", "META"],
     "initial_capital": 100000.0,
     "commission": 0.001,
-    "plot": true,
     "verbose": false
   },
   "strategies": {
