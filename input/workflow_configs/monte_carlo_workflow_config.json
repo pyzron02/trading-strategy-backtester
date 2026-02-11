@@ -25,7 +25,7 @@
       "monte_carlo": {
         "n_simulations": 1000,
         "enhanced_plots": true,
-        "keep_permuted_data": false,
+        "keep_permuted_data": true,
         "confidence_level": 0.95,
         "bootstrap_pct": 0.5,
         "random_seed": 42

@@ -4,29 +4,23 @@
 Complete workflow module that combines multiple workflow types.
 """
 import os
-import sys
 import json
 import datetime
 import uuid
 import time
 from typing import Dict, List, Any, Optional
-
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
+import pandas as pd
 
 # Import the utilities
 from workflows.workflow_utils import (
     print_header, print_section, time_execution,
     logger, logging_system, adapt_strategy_parameters,
     setup_output_dir_logging, print_workflow_log,
-    check_logs_for_errors, print_error_report
+    check_logs_for_errors, print_error_report,
+    workflow_setup, workflow_teardown
 )
+from workflows.config import WorkflowConfig
+from utils.path_manager import path_manager
 
 # Import individual workflow modules
 from workflows.simple_workflow import run_simple_workflow, ensure_data_available
@@ -45,7 +39,6 @@ def run_complete_workflow(
     output_dir=None,
     parameters=None,
     param_file=None,
-    plot=True,
     n_trials=50,
     n_simulations=100,
     optimization_metric="sharpe_ratio",
@@ -54,7 +47,6 @@ def run_complete_workflow(
     initial_capital=100000.0,
     commission=0.001,
     data_dir="input",
-    enhanced_plots=False,
     _temp_files_to_cleanup=None,
     **kwargs
 ) -> Dict[str, Any]:
@@ -70,7 +62,6 @@ def run_complete_workflow(
         output_dir: Directory to save results
         parameters: Dictionary of strategy parameters (overrides param_file)
         param_file: File with parameter definitions
-        plot: Whether to generate plots
         n_trials: Number of optimization trials
         n_simulations: Number of Monte Carlo simulations
         optimization_metric: Metric to optimize for
@@ -79,63 +70,37 @@ def run_complete_workflow(
         initial_capital: Initial capital for backtest
         commission: Commission rate for trades
         data_dir: Directory containing input data
-        enhanced_plots: Whether to generate enhanced visualization dashboard for Monte Carlo
         _temp_files_to_cleanup: List of temporary files to clean up
         **kwargs: Additional arguments
     
     Returns:
         Dict containing the results from all workflow steps
     """
-    # Use strategy if provided, otherwise use strategy_name
-    if strategy is not None and strategy_name is None:
-        strategy_name = strategy
-    elif strategy is None and strategy_name is None:
-        return {
-            "status": "error",
-            "message": "Either strategy or strategy_name must be provided"
-        }
-    
-    # Track temporary files if not already tracking
-    if _temp_files_to_cleanup is None:
-        _temp_files_to_cleanup = []
-    
-    # Create a unique output directory for this run
-    if not output_dir:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_id = str(uuid.uuid4())[:8]  # For uniqueness
-        output_dir = os.path.join(project_root, "output", f"{strategy_name}_complete_{timestamp}_{run_id}")
-        logger.info(f"Creating unique output directory: {output_dir}")
-    
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Setup logging for this run
-    setup_output_dir_logging(output_dir, strategy_name, "complete")
-    
-    # Log the start of the workflow
-    print_header("COMPLETE WORKFLOW")
-    print_workflow_log("Complete", strategy_name, tickers, start_date, end_date, 
-                      additional_info={"output_dir": output_dir})
-    
-    logger.info(f"Complete workflow started for strategy: {strategy_name}")
-    logger.info(f"Output directory: {output_dir}")
-    
-    # Set up progress file if provided
-    progress_file = None
-    if kwargs.get('progress_file'):
-        progress_file = kwargs['progress_file']
-        with open(progress_file, 'w') as f:
-            json.dump({
-                "progress": 0,
-                "status": "Starting complete workflow",
-                "current_step": "Initializing",
-                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }, f, indent=4)
+    config = WorkflowConfig.from_kwargs(
+        strategy=strategy, strategy_name=strategy_name, tickers=tickers,
+        start_date=start_date, end_date=end_date, output_dir=output_dir,
+        parameters=parameters, param_file=param_file, verbose=verbose,
+        initial_capital=initial_capital, commission=commission, data_dir=data_dir,
+        n_trials=n_trials, n_simulations=n_simulations,
+        optimization_metric=optimization_metric,
+        keep_permuted_data=keep_permuted_data,
+        _temp_files_to_cleanup=_temp_files_to_cleanup or [], **kwargs
+    )
+    try:
+        workflow_setup(config, "complete")
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    # Extract commonly used values from config
+    strategy_name = config.strategy_name
+    tickers = config.tickers
+    output_dir = config.output_dir
 
     # Create parameter file from parameters if provided
     if parameters and not param_file:
         # Create a temporary parameter file
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        param_dir = os.path.join(project_root, "input", "parameters")
+        param_dir = str(path_manager.parameters_dir)
         os.makedirs(param_dir, exist_ok=True)
         param_file = os.path.join(param_dir, f"{strategy_name.lower()}_params_{timestamp}.json")
         
@@ -144,7 +109,7 @@ def run_complete_workflow(
                 json.dump(parameters, f, indent=2)
             logger.info(f"Created temporary parameter file from provided parameters: {param_file}")
             # Track for cleanup
-            _temp_files_to_cleanup.append(param_file)
+            config._temp_files_to_cleanup.append(param_file)
         except Exception as e:
             logger.error(f"Error creating temporary parameter file: {str(e)}")
 
@@ -280,7 +245,6 @@ def run_complete_workflow(
             "end_date": end_date,
             "output_dir": simple_output_dir,
             "parameters": parameters,
-            "plot": plot,
             "verbose": verbose,
             "initial_capital": initial_capital,
             "commission": commission,
@@ -359,9 +323,9 @@ def run_complete_workflow(
         grid_file = None
         strategy_snake_case = ''.join(['_'+c.lower() if c.isupper() else c.lower() for c in strategy_name]).lstrip('_')
         possible_grid_locations = [
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name}_grid.json"),
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name.lower()}_grid.json"),
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_snake_case}_grid.json")
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_name}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_name.lower()}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_snake_case}_grid.json")
         ]
         
         # Check for existing grid file
@@ -390,7 +354,6 @@ def run_complete_workflow(
             "initial_capital": initial_capital,
             "commission": commission,
             "data_dir": data_dir,
-            "plot": plot,
             "keep_all_results": kwargs.get("optimization", {}).get("keep_all_results", False)
         }
         
@@ -446,8 +409,7 @@ def run_complete_workflow(
             "verbose": verbose,
             "initial_capital": initial_capital,
             "commission": commission,
-            "data_dir": data_dir,
-            "plot": plot
+            "data_dir": data_dir
         }
         
         # Add walk forward specific parameters from kwargs if available
@@ -562,7 +524,6 @@ def run_complete_workflow(
             "end_date": end_date,
             "output_dir": optimized_backtest_dir,
             "parameters": adapted_best_params,
-            "plot": plot,
             "verbose": verbose,
             "initial_capital": initial_capital,
             "commission": commission,
@@ -650,15 +611,18 @@ def run_complete_workflow(
             "initial_capital": initial_capital,
             "commission": commission,
             "data_dir": data_dir,
-            "plot": plot,
-            "enhanced_plots": enhanced_plots,
             "workflow_type": "complete"
         }
         
         # Check if monte_carlo_config is available from kwargs and override n_simulations
-        if kwargs.get('monte_carlo_config') and 'n_simulations' in kwargs['monte_carlo_config']:
-            monte_carlo_kwargs['n_simulations'] = kwargs['monte_carlo_config']['n_simulations']
-            logger.info(f"Using Monte Carlo simulation count from config: {monte_carlo_kwargs['n_simulations']}")
+        if kwargs.get('monte_carlo_config'):
+            mc_config = kwargs['monte_carlo_config']
+            if 'n_simulations' in mc_config:
+                monte_carlo_kwargs['n_simulations'] = mc_config['n_simulations']
+                logger.info(f"Using Monte Carlo simulation count from config: {monte_carlo_kwargs['n_simulations']}")
+            if 'monte_carlo_plot_types' in mc_config:
+                monte_carlo_kwargs['monte_carlo_plot_types'] = mc_config['monte_carlo_plot_types']
+                logger.info(f"Using Monte Carlo plot types from config: {mc_config['monte_carlo_plot_types']}")
         
         monte_carlo_result = run_monte_carlo_workflow(**monte_carlo_kwargs)
         
@@ -974,109 +938,25 @@ def run_complete_workflow(
             f.write("=" * 80 + "\n")
         
         logger.info(f"Complete workflow finished. Results saved to: {output_dir}")
-        
-        # Reset logging level if it was changed
-        if verbose:
-            logging_system.set_level('INFO', 'workflows')
-        
-        # Clean up temporary files
-        files_to_delete = []
-        files_skipped = []
-        
-        for temp_file in _temp_files_to_cleanup:
-            if os.path.exists(temp_file):
-                # Skip files in the workflow_configs directory
-                if "workflow_configs" in temp_file:
-                    files_skipped.append(temp_file)
-                else:
-                    files_to_delete.append(temp_file)
-        
-        if files_skipped:
-            logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
-            for file_path in files_skipped:
-                logger.debug(f"Preserved file: {file_path}")
-        
-        for temp_file in files_to_delete:
-            try:
-                os.remove(temp_file)
-                logger.info(f"Cleaned up temporary file: {temp_file}")
-            except Exception as e:
-                logger.warning(f"Error cleaning up temporary file: {str(e)}")
-        
-        # Check logs for errors
-        logger.info("Checking logs for errors...")
-        error_logs = check_logs_for_errors(output_dir)
-        
-        if error_logs:
-            # Add log errors to the results
-            combined_results["log_errors"] = {
-                "count": sum(len(errors) for errors in error_logs.values()),
-                "files": len(error_logs)
-            }
-            
-            # Generate error report and save to file
-            error_report_path = os.path.join(output_dir, "error_report.txt")
-            print_error_report(error_logs, error_report_path)
-            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-        else:
-            logger.info("No errors found in logs.")
-            combined_results["log_errors"] = {"count": 0, "files": 0}
-        
-        # Make sure to return in the format the cli.py expects
+
+        log_errors = workflow_teardown(config, "complete", combined_results)
+        combined_results["log_errors"] = log_errors
+
         return {
             "status": "success",
             "results": combined_results,
             "output_dir": output_dir
         }
+
     except Exception as e:
         logger.error(f"Complete workflow failed with exception: {str(e)}")
         if verbose:
             logger.exception("Full error traceback:")
         combined_results["status"] = "error"
         combined_results["message"] = str(e)
-        logger.info(f"Complete workflow finished. Results saved to: {output_dir}")
-        
-        # Reset logging level if it was changed
-        if verbose:
-            logging_system.set_level('INFO', 'workflows')
-        
-        # Clean up temporary files
-        files_to_delete = []
-        files_skipped = []
-        
-        for temp_file in _temp_files_to_cleanup:
-            if os.path.exists(temp_file):
-                # Skip files in the workflow_configs directory
-                if "workflow_configs" in temp_file:
-                    files_skipped.append(temp_file)
-                else:
-                    files_to_delete.append(temp_file)
-        
-        if files_skipped:
-            logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
-            for file_path in files_skipped:
-                logger.debug(f"Preserved file: {file_path}")
-        
-        for temp_file in files_to_delete:
-            try:
-                os.remove(temp_file)
-                logger.info(f"Cleaned up temporary file: {temp_file}")
-            except Exception as e:
-                logger.warning(f"Error cleaning up temporary file: {str(e)}")
-        
-        # Check logs for errors
-        logger.info("Checking logs for errors...")
-        error_logs = check_logs_for_errors(output_dir)
-        
-        if error_logs:
-            # Generate error report and save to file
-            error_report_path = os.path.join(output_dir, "error_report.txt")
-            print_error_report(error_logs, error_report_path)
-            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-        
-        # Make sure to return in the format the cli.py expects
+        workflow_teardown(config, "complete", combined_results, error=e)
         return {
             "status": "error",
             "message": str(e),
             "output_dir": output_dir
-        } 
+        }

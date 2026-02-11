@@ -4,18 +4,13 @@
 Script to check log files in the output directory for errors.
 """
 import os
-import sys
 import argparse
 import datetime
 
-# Add the parent directory to the path
+# Compute project_root for file path references
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)  # Go up to src directory
 project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
 
 from workflows.workflow_utils import check_logs_for_errors, print_error_report
 

@@ -71,11 +71,6 @@ class LoggingSystem:
         if self._initialized:
             return
             
-        import sys
-        from pathlib import Path
-        
-        # Add parent directory to sys.path
-        sys.path.insert(0, str(Path(__file__).parent.parent))
         from utils.path_manager import path_manager
         
         # Set default log directory
@@ -362,6 +357,20 @@ class LoggingSystem:
         if duration >= self.performance_threshold:
             self.log(component, log_level, f"Performance: {operation} took {duration:.4f} seconds")
     
+    @classmethod
+    def _reset(cls):
+        """Reset the singleton instance so a new one can be created.
+
+        This method is intended **only for testing** to ensure isolation
+        between test cases.  Production code should never call this.
+        """
+        if cls._instance is not None:
+            try:
+                cls._instance.shutdown()
+            except Exception:
+                pass
+        cls._instance = None
+
     def shutdown(self):
         """Shutdown the logging system."""
         if self.async_logging:

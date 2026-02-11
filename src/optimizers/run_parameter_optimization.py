@@ -12,11 +12,8 @@ import matplotlib.pyplot as plt
 import itertools
 from tqdm import tqdm
 
-# Add the src directory to the path
+# Compute current_dir for file path references
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
 
 # Import components
 from engine.parameter_management import ParameterManager

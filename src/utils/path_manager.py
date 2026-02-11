@@ -40,15 +40,33 @@ class PathManager:
         if base_dir is None:
             # First check for environment variable
             env_base_dir = os.environ.get('BASE_DIR')
-            if env_base_dir:
+            if env_base_dir and os.path.exists(env_base_dir):
                 self.base_dir = Path(env_base_dir)
             else:
-                # Default: Use the directory containing the 'src' folder
+                # Try multiple methods to find the project root
                 current_file = Path(__file__)
-                # Navigate up from utils to src to project root
-                self.base_dir = current_file.parent.parent.parent
+                
+                # Method 1: Navigate up from utils to src to project root
+                potential_base = current_file.parent.parent.parent
+                if (potential_base / 'src').exists():
+                    self.base_dir = potential_base
+                else:
+                    # Method 2: Look for common project markers
+                    search_path = current_file
+                    for _ in range(5):  # Search up to 5 levels
+                        search_path = search_path.parent
+                        if (search_path / 'src').exists() and (search_path / 'input').exists():
+                            self.base_dir = search_path
+                            break
+                    else:
+                        # Fallback: use current working directory
+                        self.base_dir = Path.cwd()
         else:
             self.base_dir = Path(base_dir)
+        
+        # Ensure the base directory is valid
+        if not self.base_dir.exists():
+            self.base_dir = Path.cwd()
         
         # Define standard directories relative to base_dir
         self.src_dir = self.base_dir / 'src'
@@ -153,6 +171,15 @@ class PathManager:
         """
         return self.base_dir / rel_path
     
+    @classmethod
+    def _reset(cls):
+        """Reset the singleton instance so a new one can be created.
+
+        This method is intended **only for testing** to ensure isolation
+        between test cases.  Production code should never call this.
+        """
+        cls._instance = None
+
     def __str__(self):
         """String representation showing the base directory."""
         return f"PathManager(base_dir={self.base_dir})"

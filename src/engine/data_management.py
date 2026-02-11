@@ -226,6 +226,15 @@ class DataManager:
         
         return df
     
+    @classmethod
+    def _reset(cls):
+        """Reset the singleton instance so a new one can be created.
+
+        This method is intended **only for testing** to ensure isolation
+        between test cases.  Production code should never call this.
+        """
+        cls._instance = None
+
     def get_available_tickers(self):
         """Get list of available ticker symbols."""
         return list(self.available_tickers)

@@ -2,13 +2,6 @@
 # check_strategies.py - Script to check available strategies
 
 import os
-import sys
-
-# Add the src directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
 
 from strategies import registry
 

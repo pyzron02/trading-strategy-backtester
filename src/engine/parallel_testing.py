@@ -2,7 +2,6 @@
 # parallel_testing.py - Parallel testing framework
 
 import os
-import sys
 import time
 import multiprocessing as mp
 from multiprocessing import Pool, Manager
@@ -13,12 +12,6 @@ from datetime import datetime
 from typing import Dict, List, Any, Tuple, Union, Optional, Callable
 import traceback
 from tqdm import tqdm
-
-# Add the parent directory to the path so we can import from engine
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
 
 from engine.results_management import ResultsManager
 

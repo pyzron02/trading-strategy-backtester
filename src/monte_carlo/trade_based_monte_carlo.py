@@ -19,16 +19,9 @@ from tqdm import tqdm
 import random
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any, Union
-import sys
 import warnings
 import shutil
 import time
-
-# Add the src directory to the path to enable importing from strategies
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
 
 # Import strategy registry
 from strategies import registry
@@ -39,23 +32,8 @@ from scipy import stats
 # Import run_backtest engine
 from engine.run_backtest import run_backtest, run_parallel_backtests
 
-
-# Custom JSON encoder to handle NumPy types and other non-serializable objects
-class CustomJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, pd.Timestamp):
-            return obj.strftime('%Y-%m-%d %H:%M:%S')
-        elif isinstance(obj, datetime):
-            return obj.strftime('%Y-%m-%d %H:%M:%S')
-        elif hasattr(obj, 'dtype'):  # Handle other NumPy types
-            return obj.item()
-        return super(CustomJSONEncoder, self).default(obj)
+# Import shared JSON encoder
+from engine.serialization import CustomJSONEncoder
 
 
 class TradeBasedMonteCarloTest:
@@ -342,10 +320,16 @@ class TradeBasedMonteCarloTest:
                 equity = np.cumsum(sorted_trades['pnl'].values)
                 equity = self.initial_capital + equity
                 
-                # Calculate maximum drawdown
+                # Calculate maximum drawdown in dollars and percentage
                 peak = np.maximum.accumulate(equity)
-                drawdown = (equity - peak) / peak
-                stats['max_drawdown'] = abs(min(drawdown)) if len(drawdown) > 0 else 0
+                
+                # Dollar drawdown
+                drawdown_dollars = peak - equity
+                stats['max_drawdown'] = max(drawdown_dollars) if len(drawdown_dollars) > 0 else 0
+                
+                # Percentage drawdown for backwards compatibility
+                drawdown_pct = (equity - peak) / peak
+                stats['max_drawdown_pct'] = abs(min(drawdown_pct)) if len(drawdown_pct) > 0 else 0
                 
                 # Calculate Sharpe ratio if we have enough trades
                 if len(equity) > 1:
@@ -366,9 +350,23 @@ class TradeBasedMonteCarloTest:
         Returns:
             dict: Simulated performance metrics
         """
+        # Validate trade log
+        if trade_log_df.empty:
+            raise ValueError("Trade log is empty, cannot run simulation")
+        
         # Extract PnL from trades
         if 'pnl' not in trade_log_df.columns:
             raise ValueError("Trade log must contain 'pnl' column for simulation")
+        
+        # Validate PnL data
+        pnl_data = trade_log_df['pnl']
+        if pnl_data.isna().all():
+            raise ValueError("All PnL values are NaN")
+        
+        # Remove NaN values
+        valid_pnl = pnl_data.dropna()
+        if len(valid_pnl) == 0:
+            raise ValueError("No valid PnL values after removing NaN")
         
         # Get number of trades
         n_trades = len(trade_log_df)
@@ -378,9 +376,18 @@ class TradeBasedMonteCarloTest:
         sampled_indices = np.random.choice(n_trades, n_trades, replace=True)
         sampled_trades = trade_log_df.iloc[sampled_indices]
         
-        # Calculate equity curve
-        equity = np.cumsum(sampled_trades['pnl'].values)
-        equity = self.initial_capital + equity
+        # Calculate equity curve with safety checks
+        pnl_values = sampled_trades['pnl'].values
+        
+        # Replace any NaN values with 0
+        pnl_values = np.nan_to_num(pnl_values, nan=0.0)
+        
+        # Calculate cumulative sum
+        cum_pnl = np.cumsum(pnl_values)
+        equity = self.initial_capital + cum_pnl
+        
+        # Ensure equity never goes negative
+        equity = np.maximum(equity, 1.0)  # Minimum equity of $1
         
         # Calculate metrics
         metrics = {}
@@ -389,17 +396,53 @@ class TradeBasedMonteCarloTest:
         metrics['final_equity'] = equity[-1] if len(equity) > 0 else self.initial_capital
         metrics['total_return'] = (equity[-1] - self.initial_capital) / self.initial_capital if len(equity) > 0 else 0
         
-        # Maximum drawdown
-        peak = np.maximum.accumulate(equity)
-        drawdown = (equity - peak) / peak
-        metrics['max_drawdown'] = abs(min(drawdown)) if len(drawdown) > 0 else 0
+        # Maximum drawdown with safety checks
+        if len(equity) > 0:
+            peak = np.maximum.accumulate(equity)
+            # Calculate drawdown in dollar amounts
+            drawdown_dollars = equity - peak
+            metrics['max_drawdown'] = abs(np.min(drawdown_dollars)) if len(drawdown_dollars) > 0 else 0
+            
+            # Also calculate percentage drawdown for backwards compatibility
+            peak_safe = np.where(peak > 0, peak, 1.0)
+            drawdown_pct = (equity - peak_safe) / peak_safe
+            metrics['max_drawdown_pct'] = abs(np.min(drawdown_pct)) if len(drawdown_pct) > 0 else 0
+        else:
+            metrics['max_drawdown'] = 0
+            metrics['max_drawdown_pct'] = 0
         
-        # Sharpe ratio
+        # Sharpe ratio with safety checks
         if len(equity) > 1:
-            returns = np.diff(equity) / equity[:-1]
-            annualized_return = (equity[-1] / equity[0]) ** (252 / len(equity)) - 1
-            annualized_volatility = np.std(returns) * np.sqrt(252)
-            metrics['sharpe_ratio'] = annualized_return / annualized_volatility if annualized_volatility > 0 else 0
+            # Calculate returns safely
+            equity_prev = equity[:-1]
+            equity_curr = equity[1:]
+            
+            # Avoid division by zero
+            safe_mask = equity_prev > 0
+            returns = np.zeros(len(equity_prev))
+            if np.any(safe_mask):
+                returns[safe_mask] = (equity_curr[safe_mask] - equity_prev[safe_mask]) / equity_prev[safe_mask]
+            
+            # Remove extreme returns
+            returns = np.clip(returns, -0.99, 10.0)
+            
+            # Calculate annualized metrics
+            trading_days = len(equity)
+            if equity[0] > 0 and trading_days > 0:
+                total_return = (equity[-1] / equity[0]) - 1
+                annualized_return = (1 + total_return) ** (252 / trading_days) - 1
+                
+                # Calculate volatility
+                returns_std = np.std(returns)
+                annualized_volatility = returns_std * np.sqrt(252)
+                
+                # Calculate Sharpe ratio
+                if annualized_volatility > 0 and not np.isnan(annualized_volatility):
+                    metrics['sharpe_ratio'] = annualized_return / annualized_volatility
+                else:
+                    metrics['sharpe_ratio'] = 0
+            else:
+                metrics['sharpe_ratio'] = 0
         else:
             metrics['sharpe_ratio'] = 0
         
@@ -524,20 +567,50 @@ class TradeBasedMonteCarloTest:
             
             # Calculate daily returns (skip first day which will be NaN)
             returns = np.zeros(len(prices))
-            returns[1:] = (prices[1:] - prices[:-1]) / prices[:-1]
             
-            # Filter out any invalid returns (NaN, inf)
-            valid_returns = returns[~np.isnan(returns) & ~np.isinf(returns) & (returns != 0)]
+            # Safely calculate returns with division by zero protection
+            prev_prices = prices[:-1]
+            curr_prices = prices[1:]
+            
+            # Find where previous prices are zero or very small
+            zero_mask = np.abs(prev_prices) < 1e-10
+            
+            # Calculate returns safely
+            if not np.all(zero_mask):
+                returns[1:][~zero_mask] = (curr_prices[~zero_mask] - prev_prices[~zero_mask]) / prev_prices[~zero_mask]
+            
+            # For zero or near-zero prices, set return to 0
+            returns[1:][zero_mask] = 0.0
+            
+            # Filter out any invalid returns (NaN, inf) and extreme values
+            # Limit returns to reasonable bounds (-99% to +1000%)
+            returns_clipped = np.clip(returns, -0.99, 10.0)
+            
+            # Count how many were clipped
+            clipped_count = np.sum(returns != returns_clipped)
+            if clipped_count > 0 and self.verbose:
+                print(f"Warning: Clipped {clipped_count} extreme returns for {ticker}")
+            
+            # Filter out invalid values
+            valid_mask = ~np.isnan(returns_clipped) & ~np.isinf(returns_clipped) & (returns_clipped != 0)
+            valid_returns = returns_clipped[valid_mask]
             
             # Skip if not enough valid returns
-            if len(valid_returns) < 10:  # Require at least 10 valid returns
-                if self.verbose:
-                    print(f"Not enough valid returns for ticker {ticker}")
-                continue
+            min_required_returns = max(10, int(len(prices) * 0.1))  # At least 10 or 10% of data
+            if len(valid_returns) < min_required_returns:
+                raise ValueError(f"Insufficient valid returns for ticker {ticker}. "
+                               f"Need at least {min_required_returns}, got {len(valid_returns)}. "
+                               f"Check data quality for {ticker}.")
             
             # Bootstrap returns - randomly sample with replacement
-            np.random.seed(permutation_id + hash(ticker) % 10000)  # Ensure reproducibility but different for each ticker
-            sampled_returns = np.random.choice(valid_returns, size=len(prices)-1, replace=True)
+            if hasattr(self, 'seed') and self.seed is not None:
+                # Use deterministic seed based on permutation and ticker
+                ticker_seed = self.seed + permutation_id + hash(ticker) % 10000
+                ticker_rng = np.random.RandomState(ticker_seed)
+                sampled_returns = ticker_rng.choice(valid_returns, size=len(prices)-1, replace=True)
+            else:
+                np.random.seed(permutation_id + hash(ticker) % 10000)  # Ensure reproducibility but different for each ticker
+                sampled_returns = np.random.choice(valid_returns, size=len(prices)-1, replace=True)
             
             # Reconstruct a new price series from bootstrapped returns
             new_prices = np.zeros(len(prices))
@@ -564,7 +637,12 @@ class TradeBasedMonteCarloTest:
                 if col is not None:
                     # Calculate the original ratio with close price
                     orig_df = stock_data_df.copy()
-                    ratio = orig_df[col] / orig_df[close_col].replace(0, np.nan)
+                    
+                    # Replace zeros with NaN to avoid division by zero
+                    close_prices_safe = orig_df[close_col].replace(0, np.nan)
+                    
+                    # Calculate ratio safely
+                    ratio = orig_df[col] / close_prices_safe
                     
                     # Remove NaN and infinite values
                     valid_ratios = ratio.dropna().replace([np.inf, -np.inf], np.nan).dropna()
@@ -700,7 +778,6 @@ class TradeBasedMonteCarloTest:
             start_date=out_of_sample_start,
             end_date=None,  # Use all available data after start_date
             stock_csv=self.original_stock_csv,
-            plot=False,
             warmup_period=50  # Use a standard warmup period
         )
         
@@ -887,7 +964,6 @@ class TradeBasedMonteCarloTest:
                 'start_date': out_of_sample_start,
                 'end_date': None,  # Use all available data after start_date
                 'stock_csv': permuted_csv,
-                'plot': False,
                 'warmup_period': 50  # Use a standard warmup period
             }
             backtest_configs.append(config)
@@ -1130,9 +1206,21 @@ class TradeBasedMonteCarloTest:
             print("\nAnalysis Summary:")
             for metric, stats in analysis_results.items():
                 print(f"\n{metric.replace('_', ' ').title()}:")
-                print(f"  Original: {stats['original']:.4f}")
-                print(f"  Mean: {stats['mean']:.4f} ± {stats['std']:.4f}")
-                print(f"  Range: [{stats['p5']:.4f}, {stats['p95']:.4f}] (90% confidence)")
+                
+                # Format dollar amounts vs percentages/ratios
+                if 'drawdown' in metric and 'pct' not in metric:
+                    print(f"  Original: ${stats['original']:,.2f}")
+                    print(f"  Mean: ${stats['mean']:,.2f} ± ${stats['std']:,.2f}")
+                    print(f"  Range: [${stats['p5']:,.2f}, ${stats['p95']:,.2f}] (90% confidence)")
+                elif 'equity' in metric or 'value' in metric:
+                    print(f"  Original: ${stats['original']:,.2f}")
+                    print(f"  Mean: ${stats['mean']:,.2f} ± ${stats['std']:,.2f}")
+                    print(f"  Range: [${stats['p5']:,.2f}, ${stats['p95']:,.2f}] (90% confidence)")
+                else:
+                    print(f"  Original: {stats['original']:.4f}")
+                    print(f"  Mean: {stats['mean']:.4f} ± {stats['std']:.4f}")
+                    print(f"  Range: [{stats['p5']:.4f}, {stats['p95']:.4f}] (90% confidence)")
+                    
                 print(f"  P-value: {stats['p_value']:.4f}")
         
         return analysis_results
@@ -1223,9 +1311,18 @@ class TradeBasedMonteCarloTest:
                 p_value = float(np.mean(sim_values_array <= original_value))
             
             # Add title and labels with enhanced statistical information
-            plt.title(f'{title} Distribution - Monte Carlo Simulation\n'
-                     f'Mean: {mean_value:.4f}, Std: {std_value:.4f}, P-value: {p_value:.4f}', fontsize=14)
-            plt.xlabel(title, fontsize=12)
+            if 'drawdown' in metric and 'pct' not in metric:
+                plt.title(f'{title} Distribution - Monte Carlo Simulation\n'
+                         f'Mean: ${mean_value:,.2f}, Std: ${std_value:,.2f}, P-value: {p_value:.4f}', fontsize=14)
+                plt.xlabel(f'{title} ($)', fontsize=12)
+            elif 'equity' in metric or 'value' in metric:
+                plt.title(f'{title} Distribution - Monte Carlo Simulation\n'
+                         f'Mean: ${mean_value:,.2f}, Std: ${std_value:,.2f}, P-value: {p_value:.4f}', fontsize=14)
+                plt.xlabel(f'{title} ($)', fontsize=12)
+            else:
+                plt.title(f'{title} Distribution - Monte Carlo Simulation\n'
+                         f'Mean: {mean_value:.4f}, Std: {std_value:.4f}, P-value: {p_value:.4f}', fontsize=14)
+                plt.xlabel(title, fontsize=12)
             plt.ylabel('Density', fontsize=12)
             plt.legend()
             plt.tight_layout()
@@ -1505,12 +1602,19 @@ class TradeBasedMonteCarloTest:
                 else:
                     metrics['sharpe_ratio'] = 0
                 
-                # Calculate max drawdown
+                # Calculate max drawdown in dollars and percentage
                 values = equity_curve['Value'].values
                 peak = np.maximum.accumulate(values)
-                drawdowns = 1 - values / peak
-                max_dd = np.max(drawdowns) if len(drawdowns) > 0 else 0
-                metrics['max_drawdown'] = max_dd * 100  # Convert to percentage
+                
+                # Dollar drawdown
+                drawdowns_dollars = peak - values
+                max_dd_dollars = np.max(drawdowns_dollars) if len(drawdowns_dollars) > 0 else 0
+                metrics['max_drawdown'] = max_dd_dollars
+                
+                # Percentage drawdown for backwards compatibility
+                drawdowns_pct = 1 - values / peak
+                max_dd_pct = np.max(drawdowns_pct) if len(drawdowns_pct) > 0 else 0
+                metrics['max_drawdown_pct'] = max_dd_pct * 100
                 
                 # Calculate total return
                 if len(values) > 0:
@@ -1762,7 +1866,7 @@ class TradeBasedMonteCarloTest:
                         os.makedirs(viz_dir, exist_ok=True)
                         
                         # Import here to avoid circular imports
-                        from monte_carlo.visualizations import MonteCarloVisualizer
+                        from visualization.monte_carlo import MonteCarloVisualizer
                         
                         # Add matplotlib import and configure for non-interactive backend
                         import matplotlib

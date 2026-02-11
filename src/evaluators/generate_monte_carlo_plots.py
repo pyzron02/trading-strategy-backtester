@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# DEPRECATED: This module is dead code (not imported by any other module).
+# Monte Carlo visualizations have been consolidated into visualization.monte_carlo.
+# This file is retained for reference only and may be removed in a future release.
 # generate_monte_carlo_plots.py - Simplified script to generate Monte Carlo stock path plots
 
 import os

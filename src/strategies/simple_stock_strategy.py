@@ -64,6 +64,41 @@ class SimpleStockStrategy(bt.Strategy):
         self.min_bars_required = max(self.params.sma_period + 10, 30)  # Ensure sufficient warmup
         self.bars_processed = 0
 
+    def _is_valid_price_data(self, close, high, low, sma):
+        """
+        Validate that price data is valid for trading.
+        
+        Args:
+            close, high, low: Current price data
+            sma: Simple moving average value
+            
+        Returns:
+            bool: True if data is valid for trading
+        """
+        # Check for zero, None, or NaN values
+        if close is None or high is None or low is None or sma is None:
+            return False
+            
+        # Check for zero prices (indicates missing data)
+        if close <= 0 or high <= 0 or low <= 0:
+            return False
+            
+        # Check for NaN values
+        import math
+        if any(math.isnan(val) if isinstance(val, (int, float)) else False 
+               for val in [close, high, low, sma]):
+            return False
+            
+        # Check basic price logic (high >= low >= 0, close within range)
+        if high < low or close < 0:
+            return False
+            
+        # Check that SMA is reasonable
+        if sma <= 0 or math.isnan(sma) if isinstance(sma, (int, float)) else False:
+            return False
+            
+        return True
+
     def next(self):
         """Define the trading logic executed on each bar."""
         # Increment bars processed counter
@@ -90,6 +125,10 @@ class SimpleStockStrategy(bt.Strategy):
             low = data.low[0]
             sma = self.smas[data][0]
             position = self.getposition(data).size
+            
+            # Validate data before trading
+            if not self._is_valid_price_data(close, high, low, sma):
+                continue
             
             # Calculate thresholds
             buy_threshold = sma * (1 - self.params.threshold_pct)  # Now below SMA

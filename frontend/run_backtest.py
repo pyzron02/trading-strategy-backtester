@@ -38,10 +38,8 @@ except ImportError:
     # Ensure the function is called for consistent behavior
     load_dotenv()
 
-# Add the trading-strategy-backtester to the path
+# Project root for path references (not for sys.path - installed as editable package)
 project_root = os.getenv('BACKTESTER_ROOT', '/home/pyzron02/trading-strategy-backtester')
-sys.path.append(project_root)
-sys.path.append(os.path.join(project_root, 'src'))
 
 # Try to import the workflow modules - we'll try again in main() if this fails
 try:
@@ -342,15 +340,7 @@ def main():
     
     # Check that the strategy exists
     try:
-        # First try with the full path import
-        try:
-            # Try the absolute import path with project_root
-            sys.path.insert(0, project_root)
-            from src.strategies.registry import get_strategy_class
-        except ImportError:
-            # Fall back to the relative import
-            from strategies.registry import get_strategy_class
-            
+        from src.strategies.registry import get_strategy_class
         strategy_class = get_strategy_class(strategy_name)
         print(f"Found strategy class: {strategy_class.__name__}")
     except Exception as e:
@@ -441,14 +431,8 @@ def main():
         if progress_file:
             update_progress(progress_file, 20, "Running", "Starting workflow", 0, 6)
         
-        # Import the run_complete_workflow function here to ensure it's using the correct Python path
-        try:
-            # First try with the full path import with project_root
-            sys.path.insert(0, project_root)
-            from src.workflows.unified_workflow import run_complete_workflow
-        except ImportError:
-            # Fall back to the relative import
-            from workflows.unified_workflow import run_complete_workflow
+        # Import the run_complete_workflow function
+        from src.workflows.unified_workflow import run_complete_workflow
         
         # Create a custom progress reporter wrapper function that includes the progress file
         def progress_reporter(step, progress, message):
@@ -481,6 +465,18 @@ def main():
                 "enhanced_plots": config.get('enhanced_plots', False),
             })
             
+            # Extract monte_carlo configuration if available
+            if 'strategies' in config and strategy_name in config['strategies']:
+                strategy_config = config['strategies'][strategy_name]
+                if 'monte_carlo' in strategy_config:
+                    monte_carlo_config = strategy_config['monte_carlo']
+                    # Update workflow args with monte carlo specific parameters
+                    if 'n_simulations' in monte_carlo_config:
+                        workflow_args['n_simulations'] = monte_carlo_config['n_simulations']
+                    if 'monte_carlo_plot_types' in monte_carlo_config:
+                        workflow_args['monte_carlo_plot_types'] = monte_carlo_config['monte_carlo_plot_types']
+                    print(f"Using Monte Carlo config from strategy: {monte_carlo_config}")
+            
             # Special handling for AuctionMarket parameters
             if strategy_name == 'AuctionMarket':
                 # For AuctionMarket, param_file may not work properly due to nested structure
@@ -506,6 +502,13 @@ def main():
                             'position_size': 100
                         }
             
+            # Pass monte_carlo_config to complete workflow if available
+            if 'strategies' in config and strategy_name in config['strategies']:
+                strategy_config = config['strategies'][strategy_name]
+                if 'monte_carlo' in strategy_config:
+                    workflow_args['monte_carlo_config'] = strategy_config['monte_carlo']
+                    print(f"Passing monte_carlo_config to complete workflow: {strategy_config['monte_carlo']}")
+            
             # Try to create a progress callback for unified/complete workflow
             if 'progress_callback' in inspect.signature(run_complete_workflow).parameters:
                 workflow_args["progress_callback"] = progress_reporter if progress_file else None
@@ -522,6 +525,18 @@ def main():
                     "n_simulations": config.get('num_simulations', 1000),  # Use n_simulations instead of num_simulations
                     "n_trials": 50,  # Set default number of optimization trials
                 })
+                
+                # For monte_carlo workflow, extract monte_carlo specific config
+                if workflow_type == 'monte_carlo' and 'strategies' in config and strategy_name in config['strategies']:
+                    strategy_config = config['strategies'][strategy_name]
+                    if 'monte_carlo' in strategy_config:
+                        monte_carlo_config = strategy_config['monte_carlo']
+                        # Update workflow args with monte carlo specific parameters
+                        if 'n_simulations' in monte_carlo_config:
+                            workflow_args['n_simulations'] = monte_carlo_config['n_simulations']
+                        if 'monte_carlo_plot_types' in monte_carlo_config:
+                            workflow_args['monte_carlo_plot_types'] = monte_carlo_config['monte_carlo_plot_types']
+                        print(f"Using Monte Carlo config from strategy: {monte_carlo_config}")
             else:
                 # For any other workflow (especially unified workflow)
                 workflow_args.update({

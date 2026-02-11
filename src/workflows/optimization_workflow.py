@@ -4,7 +4,6 @@
 Optimization workflow module.
 """
 import os
-import sys
 import json
 import pandas as pd
 import numpy as np
@@ -13,23 +12,17 @@ import datetime
 import uuid
 from tqdm import tqdm
 
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
 # Import the utilities
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
     logger, logging_system, print_workflow_log, adapt_strategy_parameters,
     setup_output_dir_logging, remove_output_dir_logging,
-    check_logs_for_errors, print_error_report
+    check_logs_for_errors, print_error_report,
+    workflow_setup, workflow_teardown
 )
+from workflows.config import WorkflowConfig
+from utils.path_manager import path_manager
 
 # Import engine components
 from engine.run_backtest import run_backtest
@@ -54,7 +47,6 @@ def run_optimization_workflow(
     initial_capital=100000.0,
     commission=0.001,
     data_dir="input",
-    plot=False,
     progress_callback=None,
     progress_file=None,
     stock_csv=None,
@@ -90,42 +82,25 @@ def run_optimization_workflow(
     Returns:
         Dictionary with optimization results
     """
-    # Use strategy if provided, otherwise use strategy_name
-    if strategy is not None and strategy_name is None:
-        strategy_name = strategy
-    elif strategy is None and strategy_name is None:
-        return {
-            "status": "error",
-            "message": "Either strategy or strategy_name must be provided"
-        }
-    
-    # Track temporary files if not already tracking
-    if _temp_files_to_cleanup is None:
-        _temp_files_to_cleanup = []
-    
-    # Create a unique output directory if none is provided
-    if not output_dir:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_id = str(uuid.uuid4())[:8]  # For uniqueness
-        output_dir = os.path.join(project_root, "output", f"{strategy_name}_optimization_{timestamp}_{run_id}")
-        logger.info(f"Creating unique output directory: {output_dir}")
-    
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Set logging level based on verbose flag
-    if verbose:
-        logging_system.set_level('DEBUG', 'workflows')
-    
-    # Set up progress file if provided
-    if progress_file:
-        with open(progress_file, 'w') as f:
-            json.dump({
-                "progress": 0,
-                "status": "Starting optimization",
-                "current_step": "Initializing",
-                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }, f, indent=4)
+    config = WorkflowConfig.from_kwargs(
+        strategy=strategy, strategy_name=strategy_name, tickers=tickers,
+        start_date=start_date, end_date=end_date, output_dir=output_dir,
+        parameters=parameters, param_file=param_file, verbose=verbose,
+        initial_capital=initial_capital, commission=commission, data_dir=data_dir,
+        n_trials=n_trials, optimization_metric=optimization_metric,
+        max_combinations=max_combinations, progress_callback=progress_callback,
+        progress_file=progress_file, stock_csv=stock_csv,
+        _temp_files_to_cleanup=_temp_files_to_cleanup or [], **kwargs
+    )
+    try:
+        workflow_setup(config, "optimization")
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    # Extract commonly used values from config
+    strategy_name = config.strategy_name
+    tickers = config.tickers
+    output_dir = config.output_dir
     
     # Find parameter grid file if not provided
     if not param_file:
@@ -133,12 +108,12 @@ def run_optimization_workflow(
         # Also search for lowercase strategy name and snake_case variation
         strategy_snake_case = ''.join(['_'+c.lower() if c.isupper() else c.lower() for c in strategy_name]).lstrip('_')
         possible_locations = [
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name}_grid.json"),
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name.lower()}_grid.json"),
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_snake_case}_grid.json"),
-            os.path.join(project_root, "input", f"{strategy_name}_grid.json"),
-            os.path.join(project_root, "input", "grids", f"{strategy_name}_grid.json"),
-            os.path.join(project_root, "input", f"{strategy_name.lower()}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_name}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_name.lower()}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_snake_case}_grid.json"),
+            os.path.join(str(path_manager.input_dir), f"{strategy_name}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "grids", f"{strategy_name}_grid.json"),
+            os.path.join(str(path_manager.input_dir), f"{strategy_name.lower()}_grid.json"),
         ]
         
         # Debug all locations we're checking
@@ -185,65 +160,27 @@ def run_optimization_workflow(
                     logger.info(f"Created parameter grid file: {param_file}")
                     
                     # Track for cleanup
-                    _temp_files_to_cleanup.append(param_file)
+                    config._temp_files_to_cleanup.append(param_file)
                 except Exception as e:
                     logger.error(f"Error creating parameter grid: {e}")
-                    
-                    # Log workflow failure
-                    print_workflow_log(
-                        workflow_name="Optimization Workflow",
-                        strategy_name=strategy_name,
-                        tickers=tickers,
-                        start_date=start_date,
-                        end_date=end_date,
-                        status="FAILED",
-                        additional_info={"error": f"Parameter grid file not found and could not create one: {str(e)}"}
-                    )
-                    
-                    
-
-                    # Generate stage error report
-
+                    msg = f"Parameter grid file not found and could not create one: {str(e)}"
+                    workflow_teardown(config, "optimization", None, error=Exception(msg))
                     try:
-
                         create_stage_error_report(output_dir, 'optimization', strategy_name)
-
                     except Exception as report_err:
-
                         logger.error(f"Error generating stage error report: {report_err}")
-                        
-                    return {"status": "error", "message": f"Parameter grid file not found and could not create one: {str(e)}"}
+                    return {"status": "error", "message": msg}
             else:
-                logger.error(f"Error: Parameter grid file not found for {strategy_name} and no default parameters available")
-                
-                # Log workflow failure
-                print_workflow_log(
-                    workflow_name="Optimization Workflow",
-                    strategy_name=strategy_name,
-                    tickers=tickers,
-                    start_date=start_date,
-                    end_date=end_date,
-                    status="FAILED",
-                    additional_info={"error": "Parameter grid file not found and no default parameters available"}
-                )
-                
-                return {"status": "error", "message": "Parameter grid file not found and no default parameters available"}
+                msg = f"Parameter grid file not found for {strategy_name} and no default parameters available"
+                logger.error(f"Error: {msg}")
+                workflow_teardown(config, "optimization", None, error=Exception(msg))
+                return {"status": "error", "message": msg}
     
     if not os.path.exists(param_file):
-        logger.error(f"Error: Parameter grid file does not exist: {param_file}")
-        
-        # Log workflow failure
-        print_workflow_log(
-            workflow_name="Optimization Workflow",
-            strategy_name=strategy_name,
-            tickers=tickers,
-            start_date=start_date,
-            end_date=end_date,
-            status="FAILED",
-            additional_info={"error": f"Parameter grid file does not exist: {param_file}"}
-        )
-        
-        return {"status": "error", "message": f"Parameter grid file does not exist: {param_file}"}
+        msg = f"Parameter grid file does not exist: {param_file}"
+        logger.error(f"Error: {msg}")
+        workflow_teardown(config, "optimization", None, error=Exception(msg))
+        return {"status": "error", "message": msg}
     
     print_section("Running Optimization")
     logger.info(f"Strategy: {strategy_name}")
@@ -257,6 +194,35 @@ def run_optimization_workflow(
         # Extract keep_all_results from kwargs if available
         keep_all_results = kwargs.get("keep_all_results", False)
         logger.info(f"Keep all parameter set results: {keep_all_results}")
+        
+        # Pre-download data once for all optimization runs
+        logger.info("Pre-downloading stock data for optimization...")
+        try:
+            from data_preprocessing.data_setup import fetch_stock_data
+            # Ensure data is available before running optimization
+            stock_data_path = fetch_stock_data(
+                tickers=tickers,
+                start_date=start_date,
+                end_date=end_date,
+                output_path=stock_csv if stock_csv else 'input/stock_data.csv',
+                force_refresh=False  # Don't force refresh, use cached data if available
+            )
+            logger.info(f"Stock data available at: {stock_data_path}")
+        except Exception as data_error:
+            logger.warning(f"Could not pre-download data: {data_error}. Will download during optimization.")
+        
+        # Extract parallel processing parameters from kwargs
+        n_jobs = kwargs.get('n_jobs', None)
+        parallel_backend = kwargs.get('parallel_backend', 'multiprocessing')
+        batch_size = kwargs.get('batch_size', None)
+        
+        # Log parallel processing settings
+        if n_jobs is not None:
+            logger.info(f"Parallel processing: {n_jobs} jobs ({'all cores' if n_jobs == -1 else n_jobs})")
+        else:
+            logger.info("Parallel processing: auto (all available cores)")
+        if batch_size:
+            logger.info(f"Batch size: {batch_size}")
         
         # Initialize optimizer
         optimizer = InSampleExcellence(
@@ -273,8 +239,11 @@ def run_optimization_workflow(
             data_dir=data_dir,
             max_combinations=max_combinations,
             verbose=verbose,
-            plot=plot,  # Pass the plot parameter to control chart generation
-            keep_results=keep_all_results  # Pass keep_all_results as keep_results
+            keep_results=keep_all_results,  # Pass keep_all_results as keep_results
+            stock_csv=stock_csv if stock_csv else 'input/stock_data.csv',  # Pass the stock data path
+            n_jobs=n_jobs,
+            parallel_backend=parallel_backend,
+            batch_size=batch_size
         )
         
         # Run optimization
@@ -300,104 +269,54 @@ def run_optimization_workflow(
             valid_results = False
             
         if not valid_results:
-            logger.error("Optimization failed to produce valid results")
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Optimization Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": "Optimization failed to produce valid results"}
-            )
-            
+            msg = "Optimization failed to produce valid results"
+            logger.error(msg)
+            workflow_teardown(config, "optimization", None, error=Exception(msg))
             return {
-                "status": "error", 
-                "message": "Optimization failed to produce valid results",
+                "status": "error",
+                "message": msg,
                 "output_dir": output_dir
             }
         
         # Check if optimization metric is present in trials_df
         if optimization_metric not in trials_df.columns:
-            logger.error(f"Optimization metric '{optimization_metric}' not found in results")
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Optimization Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": f"Optimization metric '{optimization_metric}' not found in results"}
-            )
-            
+            msg = f"Optimization metric '{optimization_metric}' not found in results"
+            logger.error(msg)
+            workflow_teardown(config, "optimization", None, error=Exception(msg))
             return {
                 "status": "error",
-                "message": f"Optimization metric '{optimization_metric}' not found in results",
+                "message": msg,
                 "output_dir": output_dir
             }
             
         # Ensure we have valid values in the optimization metric
         if not isinstance(trials_df, pd.DataFrame):
-            logger.error(f"trials_df is not a DataFrame, it's a {type(trials_df)}")
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Optimization Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": f"trials_df is not a DataFrame, it's a {type(trials_df)}"}
-            )
-            
+            msg = f"trials_df is not a DataFrame, it's a {type(trials_df)}"
+            logger.error(msg)
+            workflow_teardown(config, "optimization", None, error=Exception(msg))
             return {
                 "status": "error",
-                "message": f"trials_df is not a DataFrame, it's a {type(trials_df)}",
+                "message": msg,
                 "output_dir": output_dir
             }
             
         if optimization_metric not in trials_df.columns:
-            logger.error(f"Optimization metric '{optimization_metric}' not found in results columns: {list(trials_df.columns)}")
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Optimization Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": f"Optimization metric '{optimization_metric}' not found in results columns: {list(trials_df.columns)}"}
-            )
-            
+            msg = f"Optimization metric '{optimization_metric}' not found in results columns: {list(trials_df.columns)}"
+            logger.error(msg)
+            workflow_teardown(config, "optimization", None, error=Exception(msg))
             return {
                 "status": "error",
-                "message": f"Optimization metric '{optimization_metric}' not found in results columns: {list(trials_df.columns)}",
+                "message": msg,
                 "output_dir": output_dir
             }
             
         if trials_df[optimization_metric].isna().all():
-            logger.error(f"All values for optimization metric '{optimization_metric}' are NaN")
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Optimization Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": f"All values for optimization metric '{optimization_metric}' are NaN"}
-            )
-            
+            msg = f"All values for optimization metric '{optimization_metric}' are NaN"
+            logger.error(msg)
+            workflow_teardown(config, "optimization", None, error=Exception(msg))
             return {
                 "status": "error",
-                "message": f"All values for optimization metric '{optimization_metric}' are NaN",
+                "message": msg,
                 "output_dir": output_dir
             }
         
@@ -432,30 +351,20 @@ def run_optimization_workflow(
             end_date=end_date,
             output_dir=output_dir,
             parameters=converted_params,
-            plot=plot,  # Use the plot parameter passed to the function
             initial_capital=initial_capital,
             commission=commission,
             data_dir=data_dir,
+            stock_csv=stock_csv if stock_csv else 'input/stock_data.csv',  # Use cached data
             verbose=verbose
         )
         
         if not backtest_result:
-            logger.error("Backtest with optimized parameters failed")
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Optimization Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": "Backtest with optimized parameters failed"}
-            )
-            
+            msg = "Backtest with optimized parameters failed"
+            logger.error(msg)
+            workflow_teardown(config, "optimization", None, error=Exception(msg))
             return {
-                "status": "error", 
-                "message": "Backtest with optimized parameters failed",
+                "status": "error",
+                "message": msg,
                 "output_dir": output_dir
             }
         
@@ -524,99 +433,22 @@ def run_optimization_workflow(
         logger.error(f"Optimization workflow failed: {str(e)}")
         if verbose:
             logger.exception("Full error traceback:")
-        
-        # Log workflow failure
-        print_workflow_log(
-            workflow_name="Optimization Workflow",
-            strategy_name=strategy_name,
-            tickers=tickers,
-            start_date=start_date,
-            end_date=end_date,
-            status="FAILED",
-            additional_info={"error": f"Optimization workflow failed: {str(e)}"}
-        )
-        
-        # Check logs for errors
-        logger.info("Checking logs for errors...")
-        error_logs = check_logs_for_errors(output_dir)
-        
-        if error_logs:
-            # Generate error report and save to file
-            error_report_path = os.path.join(output_dir, "error_report.txt")
-            print_error_report(error_logs, error_report_path)
-            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-        
+        workflow_teardown(config, "optimization", None, error=e)
         return {
             "status": "error",
             "message": f"Optimization workflow failed: {str(e)}",
             "output_dir": output_dir
         }
     
-    # Reset logging level if it was changed
-    if verbose:
-        logging_system.set_level('INFO', 'workflows')
-    
-    # Log workflow completion
-    completion_info = {
-        "best_value": results["trials_summary"]["best_value"],
-        "total_trials": n_trials,
-        "output_dir": output_dir
-    }
-    print_workflow_log(
-        workflow_name="Optimization Workflow",
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        status="COMPLETED",
-        additional_info=completion_info
-    )
-    
-    # Clean up temporary files
-    files_to_delete = []
-    files_skipped = []
-    
-    for temp_file in _temp_files_to_cleanup:
-        if os.path.exists(temp_file):
-            # Skip files in the workflow_configs directory
-            if "workflow_configs" in temp_file:
-                files_skipped.append(temp_file)
-            else:
-                files_to_delete.append(temp_file)
-    
-    if files_skipped:
-        logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
-        for file_path in files_skipped:
-            logger.debug(f"Preserved file: {file_path}")
-    
-    for temp_file in files_to_delete:
-        try:
-            os.remove(temp_file)
-            logger.info(f"Cleaned up temporary file: {temp_file}")
-        except Exception as e:
-            logger.warning(f"Error cleaning up temporary file: {str(e)}")
-    
-    # Check logs for errors
-    logger.info("Checking logs for errors...")
-    error_logs = check_logs_for_errors(output_dir)
-    
-    if error_logs:
-        # Add log errors to the results
-        results["log_errors"] = {
-            "count": sum(len(errors) for errors in error_logs.values()),
-            "files": len(error_logs)
-        }
-        
-        # Generate error report and save to file
-        error_report_path = os.path.join(output_dir, "error_report.txt")
-        print_error_report(error_logs, error_report_path)
-        logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-    else:
-        logger.info("No errors found in logs.")
-        results["log_errors"] = {"count": 0, "files": 0}
-    
+    log_errors = workflow_teardown(config, "optimization", None,
+                                   additional_info={
+                                       "best_value": results["trials_summary"]["best_value"],
+                                       "total_trials": n_trials,
+                                   })
+    results["log_errors"] = log_errors
+
     return {
         "status": "success",
         "results": results,
         "output_dir": output_dir
-    } 
+    }

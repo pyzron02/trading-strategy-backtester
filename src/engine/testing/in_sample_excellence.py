@@ -2,7 +2,6 @@
 # in_sample_excellence.py - Optimize strategy parameters on historical data
 
 import os
-import sys
 import json
 import pickle
 import argparse
@@ -18,11 +17,6 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
 
-# Add the current directory to the path
-current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
-
 from engine.run_backtest import run_backtest
 from engine.logging_system import logger
 
@@ -34,12 +28,17 @@ def _run_single_backtest(args):
     Args:
         args (tuple): Tuple containing (strategy_name, tickers, params, start_date, 
                       end_date, param_dir, warmup_period, initial_capital, commission, 
-                      data_dir, i)
+                      data_dir, stock_csv, i)
                       
     Returns:
         tuple: (i, results, params) - index, backtest results, and parameters
     """
-    strategy_name, tickers, params, start_date, end_date, param_dir, warmup_period, initial_capital, commission, data_dir, i = args
+    strategy_name, tickers, params, start_date, end_date, param_dir, warmup_period, initial_capital, commission, data_dir, stock_csv, i = args
+    
+    # Add process ID to avoid file conflicts in parallel execution
+    import os
+    pid = os.getpid()
+    param_dir = f"{param_dir}_pid{pid}"
     
     # Create directory if it doesn't exist
     os.makedirs(param_dir, exist_ok=True)
@@ -69,7 +68,8 @@ def _run_single_backtest(args):
             initial_capital=initial_capital,
             commission=commission,
             data_dir=data_dir,
-            plot=False  # Don't generate plots for individual parameter trials
+            stock_csv=stock_csv,  # Pass pre-downloaded stock data path
+            plot=False
         )
         
         # Save results to a file
@@ -117,8 +117,9 @@ class InSampleExcellence:
     def __init__(self, strategy_name, tickers=None, start_date='2015-01-01', end_date='2019-12-31',
                  output_dir='output/in_sample_excellence', parameter_grid=None, param_grid_file=None,
                  n_trials=100, optimization_metric='sharpe_ratio', random_seed=42, initial_capital=100000.0,
-                 commission=0.001, data_dir="input", max_combinations=None, verbose=False, plot=False,
-                 keep_results=False):
+                 commission=0.001, data_dir="input", max_combinations=None, verbose=False,
+                 keep_results=False, stock_csv=None, n_jobs=None, parallel_backend='multiprocessing',
+                 batch_size=None):
         """
         Initialize the InSampleExcellence test.
         
@@ -134,6 +135,11 @@ class InSampleExcellence:
             optimization_metric (str): Metric to optimize (e.g., 'sharpe_ratio')
             random_seed (int): Random seed for reproducibility
             keep_results (bool): Whether to save all parameter configuration results as CSV (default: False)
+            stock_csv (str, optional): Path to pre-downloaded stock data CSV file
+            n_jobs (int, optional): Number of parallel jobs. None = use all CPU cores,
+                                   -1 = use all but one, 1 = no parallelization
+            parallel_backend (str): 'multiprocessing' or 'threading' (default: 'multiprocessing')
+            batch_size (int, optional): Number of tasks per batch for memory management
         """
         self.strategy_name = strategy_name
         self.tickers = tickers if tickers is not None else ['SPY']
@@ -150,8 +156,27 @@ class InSampleExcellence:
         self.data_dir = data_dir
         self.max_combinations = max_combinations
         self.verbose = verbose
-        self.plot = plot  # Whether to generate plots
         self.keep_results = keep_results  # Whether to save all parameter configuration results and individual parameter set directories
+        self.stock_csv = stock_csv  # Path to pre-downloaded stock data
+        
+        # Initialize parallel processing parameters
+        if n_jobs is None:
+            self.n_jobs = mp.cpu_count()
+        elif n_jobs == -1:
+            self.n_jobs = max(1, mp.cpu_count() - 1)
+        else:
+            self.n_jobs = max(1, n_jobs)
+        
+        self.parallel_backend = parallel_backend
+        self.batch_size = batch_size
+        
+        # Get warmup period for the strategy
+        from strategies.registry import get_strategy_class
+        try:
+            strategy_class = get_strategy_class(strategy_name)
+            self.warmup_period = getattr(strategy_class, 'params', {}).get('warmup_period', 100)
+        except Exception:
+            self.warmup_period = 100  # Default warmup period
         
         # Initialize logger
         self.logger = logger.get_logger(__name__)
@@ -177,6 +202,47 @@ class InSampleExcellence:
         
         # Define parameter grid based on strategy
         self.param_grid = self._get_param_grid()
+        
+        # Validate parallel settings
+        self._validate_parallel_settings()
+    
+    def _validate_parallel_settings(self):
+        """Validate and adjust parallel settings based on system resources."""
+        try:
+            # Check if psutil is available for memory checking
+            import psutil
+            
+            # Check available memory
+            available_memory = psutil.virtual_memory().available
+            # Estimate memory per backtest (conservative estimate)
+            estimated_memory_per_backtest = 500 * 1024 * 1024  # 500MB
+            
+            # Calculate max parallel jobs based on memory
+            max_parallel_based_on_memory = max(1, int(available_memory / estimated_memory_per_backtest))
+            
+            if self.n_jobs > max_parallel_based_on_memory:
+                self.logger.warning(
+                    f"Reducing parallel jobs from {self.n_jobs} to {max_parallel_based_on_memory} "
+                    f"based on available memory ({available_memory / (1024**3):.1f} GB)"
+                )
+                self.n_jobs = max_parallel_based_on_memory
+            
+            # Cap at reasonable maximum to avoid system overload
+            max_reasonable_jobs = min(mp.cpu_count() * 2, 16)
+            if self.n_jobs > max_reasonable_jobs:
+                self.logger.warning(
+                    f"Capping parallel jobs at {max_reasonable_jobs} to avoid system overload"
+                )
+                self.n_jobs = max_reasonable_jobs
+                
+        except ImportError:
+            # psutil not available, use conservative defaults
+            self.logger.info("psutil not available, using conservative parallel settings")
+            self.n_jobs = min(self.n_jobs, mp.cpu_count())
+        except Exception as e:
+            self.logger.warning(f"Error validating parallel settings: {e}")
+            # Fall back to conservative setting
+            self.n_jobs = min(self.n_jobs, 4)
     
     def _get_param_grid(self):
         """
@@ -360,56 +426,152 @@ class InSampleExcellence:
         else:
             pbar = None
         
-        # Run backtest for each parameter combination
+        # Prepare arguments for parallel execution
+        backtest_args = []
         for i, params in enumerate(parameter_combinations):
-            try:
-                self.logger.debug(f"Testing combination {i+1}/{total_combinations}: {params}")
+            param_dir = os.path.join(self.output_dir, f"param_set_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i}")
+            args = (
+                self.strategy_name, self.tickers, params, self.start_date,
+                self.end_date, param_dir, self.warmup_period, self.initial_capital,
+                self.commission, self.data_dir, self.stock_csv, i
+            )
+            backtest_args.append(args)
+        
+        # Run backtests either sequentially or in parallel
+        if self.n_jobs == 1:
+            # Sequential execution
+            self.logger.info("Running optimization sequentially (n_jobs=1)")
+            for args in backtest_args:
+                try:
+                    idx, backtest_result, params = _run_single_backtest(args)
+                    
+                    if backtest_result:
+                        # Extract metrics from backtest results
+                        metrics = self._extract_metrics_from_results(backtest_result)
+                        
+                        # Add parameter values to metrics dictionary with param_ prefix
+                        for param_name, param_value in params.items():
+                            metrics[f'param_{param_name}'] = param_value
+                        
+                        # Ensure we have at least one key metric
+                        has_key_metric = any(key_metric in metrics for key_metric in ['total_return', 'sharpe_ratio', 'calmar_ratio'])
+                        
+                        if not has_key_metric:
+                            self.logger.warning(f"No key metrics found for combination {idx+1}, adding default metric")
+                            metrics['total_return'] = 0.0
+                        
+                        results.append(metrics)
+                        successful_combinations += 1
+                        
+                        if self.verbose:
+                            if metric_name in metrics:
+                                self.logger.debug(f"Combination {idx+1} {metric_name}: {metrics.get(metric_name, 'N/A')}")
+                            else:
+                                self.logger.debug(f"Combination {idx+1} metrics: {list(metrics.keys())}")
+                    else:
+                        self.logger.warning(f"No valid results for combination {idx+1}")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error testing combination {idx+1}: {str(e)}")
+                    import traceback
+                    self.logger.debug(traceback.format_exc())
                 
-                # Run backtest with current parameters
-                backtest_result = self._run_single_backtest(params)
-                
-                if backtest_result:
-                    # Extract metrics from backtest results
-                    metrics = self._extract_metrics_from_results(backtest_result)
-                    
-                    # Add parameter values to metrics dictionary with param_ prefix
-                    for param_name, param_value in params.items():
-                        metrics[f'param_{param_name}'] = param_value
-                    
-                    # Make sure we have at least one key metric
-                    has_key_metric = False
-                    for key_metric in ['total_return', 'sharpe_ratio', 'calmar_ratio']:
-                        if key_metric in metrics:
-                            has_key_metric = True
-                            break
-                    
-                    if not has_key_metric:
-                        # If no key metrics, add a default one to prevent failures
-                        self.logger.warning(f"No key metrics found for combination {i+1}, adding default metric")
-                        metrics['total_return'] = 0.0
-                    
-                    # Add to results list
-                    results.append(metrics)
-                    successful_combinations += 1
-                    
-                    if self.verbose:
-                        if metric_name in metrics:
-                            self.logger.debug(f"Combination {i+1} {metric_name}: {metrics.get(metric_name, 'N/A')}")
-                        else:
-                            self.logger.debug(f"Combination {i+1} metrics: {list(metrics.keys())}")
+                finally:
+                    if pbar:
+                        pbar.update(1)
+        else:
+            # Parallel execution
+            self.logger.info(f"Running optimization in parallel with {self.n_jobs} workers")
+            
+            # Import here to avoid import errors when not using parallel processing
+            from concurrent.futures import ProcessPoolExecutor, as_completed
+            
+            with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
+                if self.batch_size:
+                    # Process in batches
+                    for batch_start in range(0, len(backtest_args), self.batch_size):
+                        batch_end = min(batch_start + self.batch_size, len(backtest_args))
+                        batch = backtest_args[batch_start:batch_end]
+                        batch_num = batch_start // self.batch_size + 1
+                        total_batches = (len(backtest_args) + self.batch_size - 1) // self.batch_size
+                        
+                        self.logger.info(f"Processing batch {batch_num}/{total_batches}")
+                        
+                        # Submit batch tasks
+                        futures = {executor.submit(_run_single_backtest, args): args for args in batch}
+                        
+                        # Process completed futures
+                        for future in as_completed(futures):
+                            try:
+                                idx, backtest_result, params = future.result(timeout=300)  # 5 minute timeout
+                                
+                                if backtest_result:
+                                    metrics = self._extract_metrics_from_results(backtest_result)
+                                    
+                                    for param_name, param_value in params.items():
+                                        metrics[f'param_{param_name}'] = param_value
+                                    
+                                    has_key_metric = any(key_metric in metrics for key_metric in ['total_return', 'sharpe_ratio', 'calmar_ratio'])
+                                    
+                                    if not has_key_metric:
+                                        self.logger.warning(f"No key metrics found for combination {idx+1}, adding default metric")
+                                        metrics['total_return'] = 0.0
+                                    
+                                    results.append(metrics)
+                                    successful_combinations += 1
+                                    
+                                    if self.verbose:
+                                        if metric_name in metrics:
+                                            self.logger.debug(f"Combination {idx+1} {metric_name}: {metrics.get(metric_name, 'N/A')}")
+                                else:
+                                    self.logger.warning(f"No valid results for combination {idx+1}")
+                                
+                            except Exception as e:
+                                args = futures[future]
+                                idx = args[-1]
+                                self.logger.error(f"Error in backtest {idx+1}: {str(e)}")
+                            
+                            finally:
+                                if pbar:
+                                    pbar.update(1)
                 else:
-                    self.logger.warning(f"No valid results for combination {i+1}")
+                    # Process all at once
+                    futures = {executor.submit(_run_single_backtest, args): args for args in backtest_args}
                     
-            except Exception as e:
-                self.logger.error(f"Error testing combination {i+1}: {str(e)}")
-                import traceback
-                self.logger.debug(traceback.format_exc())
-                
-            finally:
-                # Update progress bar
-                if pbar:
-                    pbar.update(1)
-                    
+                    for future in as_completed(futures):
+                        try:
+                            idx, backtest_result, params = future.result(timeout=300)
+                            
+                            if backtest_result:
+                                metrics = self._extract_metrics_from_results(backtest_result)
+                                
+                                for param_name, param_value in params.items():
+                                    metrics[f'param_{param_name}'] = param_value
+                                
+                                has_key_metric = any(key_metric in metrics for key_metric in ['total_return', 'sharpe_ratio', 'calmar_ratio'])
+                                
+                                if not has_key_metric:
+                                    self.logger.warning(f"No key metrics found for combination {idx+1}, adding default metric")
+                                    metrics['total_return'] = 0.0
+                                
+                                results.append(metrics)
+                                successful_combinations += 1
+                                
+                                if self.verbose:
+                                    if metric_name in metrics:
+                                        self.logger.debug(f"Combination {idx+1} {metric_name}: {metrics.get(metric_name, 'N/A')}")
+                            else:
+                                self.logger.warning(f"No valid results for combination {idx+1}")
+                            
+                        except Exception as e:
+                            args = futures[future]
+                            idx = args[-1]
+                            self.logger.error(f"Error in backtest {idx+1}: {str(e)}")
+                        
+                        finally:
+                            if pbar:
+                                pbar.update(1)
+        
         # Close progress bar
         if pbar:
             pbar.close()
@@ -460,8 +622,7 @@ class InSampleExcellence:
             return {"error": "Failed to save best parameters", "results": results_df, "successful": successful_combinations, "total": total_combinations}
         
         # Create parameter importance plots
-        if self.plot:
-            self._plot_parameter_importance(results_df, metric_name)
+        self._plot_parameter_importance(results_df, metric_name)
         
         return {
             "results": results_df, 
@@ -1249,7 +1410,8 @@ class InSampleExcellence:
                 initial_capital=self.initial_capital,
                 commission=self.commission,
                 data_dir=self.data_dir,
-                plot=False  # Don't generate plots for individual parameter trials
+                stock_csv=self.stock_csv,  # Pass pre-downloaded stock data path
+                plot=False
             )
             
             # Save parameters to file

@@ -9,27 +9,8 @@ import json
 import pandas as pd
 import numpy as np
 
-
-# Custom JSON encoder to handle pandas Series and other non-serializable objects
-class CustomJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, pd.Series):
-            return obj.to_dict()
-        elif isinstance(obj, pd.DataFrame):
-            return obj.to_dict()
-        elif isinstance(obj, pd.Timestamp):
-            return obj.strftime('%Y-%m-%d %H:%M:%S')
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif hasattr(obj, 'to_json'):
-            return obj.to_json()
-        elif hasattr(obj, '__dict__'):
-            return obj.__dict__
-        return super().default(obj)
+# Import shared JSON encoder
+from engine.serialization import CustomJSONEncoder
 
 
 def save_to_json(data, filepath):

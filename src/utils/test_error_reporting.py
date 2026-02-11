@@ -5,7 +5,6 @@ Test script for the error reporting system.
 This file creates simulated errors and tests the error reporting functionality.
 """
 import os
-import sys
 import json
 import argparse
 import datetime
@@ -13,14 +12,10 @@ import random
 import logging
 from typing import List, Dict, Any, Optional
 
-# Add the parent directory to the path
+# Compute project_root for file path references
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)  # Go up to src directory
 project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
 
 # Import the error reporting module
 from utils.error_reporting import (

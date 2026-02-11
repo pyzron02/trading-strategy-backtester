@@ -2,10 +2,7 @@ import os
 import argparse
 from datetime import datetime
 from pathlib import Path
-import sys
 
-# Add parent directory to sys.path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.path_manager import path_manager
 
 def create_directories(base_dir=None, strategy_name='default_strategy'):

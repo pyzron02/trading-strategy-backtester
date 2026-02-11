@@ -11,18 +11,8 @@ Features:
 - Track and categorize errors by workflow stage and severity
 """
 import os
-import sys
 import argparse
 import datetime
-
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
 
 from utils.error_reporting import (
     generate_consolidated_error_report,

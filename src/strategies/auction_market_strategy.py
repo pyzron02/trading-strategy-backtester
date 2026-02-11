@@ -48,9 +48,9 @@ class AuctionMarketParameters:
         
         # Risk management
         self.risk_params = {
-            'max_loss_percent': 0.02,    # Maximum loss per trade (2%)
+            'max_loss_percent': 0.01,    # Maximum loss per trade (1% - balanced)
             'profit_target_ratio': 2.0,  # Profit target ratio (risk:reward)
-            'max_daily_loss': 0.05,      # Maximum daily loss (5%)
+            'max_daily_loss': 0.03,      # Maximum daily loss (3% - reasonable)
             'position_heat': 0.01        # Maximum heat per position (1%)
         }
         
@@ -173,6 +173,7 @@ class AuctionMarketStrategy(bt.Strategy):
         
         # Keep track of trades for analysis
         self.trades = []
+        self.last_trade_bar = 0  # Track when last trade occurred
         
         # Initialize indicators and variables
         self.value_areas = {}  # Store value areas by date
@@ -181,6 +182,12 @@ class AuctionMarketStrategy(bt.Strategy):
         # Variables to track if we have enough data for trading
         self.bars_processed = 0
         self.min_bars_required = min_period  # Ensure sufficient warmup
+        
+        # Parameter relaxation settings
+        self.param_relaxation_enabled = True
+        self.bars_without_trade = 0
+        self.relaxation_factor = 1.0  # Multiplier for entry conditions
+        self.max_relaxation = 0.5  # Maximum relaxation (50% of original)
         
         # Create indicators for each data feed
         for data in self.datas:
@@ -235,10 +242,36 @@ class AuctionMarketStrategy(bt.Strategy):
         # Increment bars processed counter
         self.bars_processed += 1
         
+        # Update parameter relaxation if enabled
+        if self.param_relaxation_enabled:
+            self._update_parameter_relaxation()
+        
         # Log portfolio value for the equity curve
         try:
             date = self.data.datetime.date(0).isoformat()
             value = self.broker.getvalue()
+            
+            # Detect and handle holiday/missing data issues
+            if len(self.equity_curve) > 0:
+                prev_value = self.equity_curve[-1]['Value']
+                # If portfolio value drops or spikes by more than 5% in one day, it's likely a data issue
+                pct_change = abs((value - prev_value) / prev_value) if prev_value != 0 else 0
+                
+                # Check if current bar has valid price data
+                has_valid_prices = True
+                for data in self.datas:
+                    if (not data.close[0] or data.close[0] <= 0 or 
+                        not data.open[0] or data.open[0] <= 0 or
+                        not data.high[0] or data.high[0] <= 0 or
+                        not data.low[0] or data.low[0] <= 0):
+                        has_valid_prices = False
+                        break
+                
+                if pct_change > 0.05 and not has_valid_prices:
+                    # This is likely a holiday/data issue - use previous value
+                    print(f"WARNING: Detected invalid portfolio value on {date} (change: {pct_change:.1%}). Using previous value.")
+                    value = prev_value
+            
             self.equity_curve.append({'Date': date, 'Value': value})
         except Exception as e:
             print(f"Error logging portfolio value: {e}")
@@ -255,9 +288,26 @@ class AuctionMarketStrategy(bt.Strategy):
                     continue
                 
                 # Safety check to ensure all indicators have valid values
-                if (not self.atr.get(data) or len(self.atr[data]) == 0 or not self.atr[data][0] or 
-                    not self.volume_ma.get(data) or len(self.volume_ma[data]) == 0 or not self.volume_ma[data][0] or
-                    not self.sma50.get(data) or len(self.sma50[data]) == 0 or not self.sma50[data][0]):
+                try:
+                    if (not self.atr.get(data) or len(self.atr[data]) == 0 or 
+                        not self.volume_ma.get(data) or len(self.volume_ma[data]) == 0 or
+                        not self.sma50.get(data) or len(self.sma50[data]) == 0):
+                        continue
+                        
+                    # Check values are valid (not NaN, not zero for ATR)
+                    if (not self.atr[data][0] or self.atr[data][0] <= 0 or
+                        not self.volume_ma[data][0] or self.volume_ma[data][0] <= 0 or  
+                        not self.sma50[data][0] or self.sma50[data][0] <= 0):
+                        continue
+                except (IndexError, TypeError, KeyError):
+                    continue
+                
+                # Validate price data before trading
+                if not self._is_valid_price_data(data):
+                    current_date = data.datetime.date(0)
+                    print(f"WARNING: Skipping trading on {current_date} due to invalid price data")
+                    # Cancel any pending orders to prevent execution on invalid price data
+                    self._cancel_pending_orders()
                     continue
                     
                 # Store the daily bar for value area calculation
@@ -443,13 +493,16 @@ class AuctionMarketStrategy(bt.Strategy):
                 return None
                 
             price_std = self.atr[data][0]
+            
+            # Get relaxed threshold
+            excess_threshold = self._get_relaxed_threshold(self.amt_params.auction_zones['excess_threshold'])
         
             # Check for excess above value area
-            if data.high[0] > value_area['vah'] + (price_std * self.amt_params.auction_zones['excess_threshold']):
+            if data.high[0] > value_area['vah'] + (price_std * excess_threshold):
                 return "up"
         
             # Check for excess below value area
-            if data.low[0] < value_area['val'] - (price_std * self.amt_params.auction_zones['excess_threshold']):
+            if data.low[0] < value_area['val'] - (price_std * excess_threshold):
                 return "down"
             
             return None
@@ -477,10 +530,13 @@ class AuctionMarketStrategy(bt.Strategy):
             # Check if balance_threshold is not zero to avoid division by zero
             if self.amt_params.auction_zones['balance_threshold'] <= 0:
                 return "normal"  # Safety fallback
+            
+            # Get relaxed threshold
+            balance_threshold = self._get_relaxed_threshold(self.amt_params.auction_zones['balance_threshold'])
 
-            if range_today < avg_range * self.amt_params.auction_zones['balance_threshold']:
+            if range_today < avg_range * balance_threshold:
                 return "tight"
-            elif range_today > avg_range * (2.0 / self.amt_params.auction_zones['balance_threshold']):
+            elif range_today > avg_range * (2.0 / balance_threshold):
                 return "wide"
             else:
                 return "normal"
@@ -516,35 +572,71 @@ class AuctionMarketStrategy(bt.Strategy):
             return None
     
     def _calculate_position_size(self, data, risk_level):
-        """Calculate position size based on risk parameters."""
+        """Calculate position size based on risk parameters with improved safety."""
         try:
-            # Base position size on account equity and volatility
+            # Get available cash and current position value
             portfolio_value = self.broker.getvalue()
-            risk_amount = portfolio_value * self.amt_params.risk_params['max_loss_percent']
+            current_position_value = abs(self.broker.getposition(data).size * data.close[0])
+            available_cash = self.broker.getcash()
+            current_price = data.close[0]
             
-            # Safety check for ATR
-            if not self.atr.get(data) or not self.atr[data][0]:
-                return self.amt_params.position_size['initial_size']
+            # Calculate maximum position value (percentage of available cash, not total portfolio)
+            max_position_value = min(available_cash * 0.8, portfolio_value * 0.15)  # Max 15% of total portfolio or 80% of cash
+            
+            # Calculate risk-based position sizing using available cash, not total portfolio
+            risk_amount = available_cash * self.amt_params.risk_params['max_loss_percent']
+            
+            # Safety check for ATR - handle array index errors
+            atr_value = None
+            try:
+                if self.atr.get(data) and len(self.atr[data]) > 0:
+                    atr_value = self.atr[data][0]
+            except (IndexError, TypeError):
+                atr_value = None
+                
+            if not atr_value or atr_value <= 0:
+                # Use conservative fixed position size when ATR unavailable
+                pos_size = min(20, int(max_position_value / current_price))
+                return max(1, pos_size)
             
             # Use ATR for volatility-based position sizing
-            if self.params.use_atr_sizing and self.atr[data][0]:
-                # Calculate risk per share based on ATR
-                risk_per_share = self.atr[data][0] * risk_level
-                # Ensure risk_per_share is not zero to avoid division by zero
-                if risk_per_share <= 0:
-                    print(f"Warning: Invalid risk_per_share value ({risk_per_share}). Using default position size.")
-                    return self.amt_params.position_size['initial_size']
-                    
-                pos_size = int(risk_amount / risk_per_share)
-                # Cap position size for safety
-                max_size = self.amt_params.position_size['max_position']
-                return max(1, min(pos_size, max_size))
+            if self.params.use_atr_sizing and atr_value:
+                # Use a more conservative risk calculation
+                
+                # Calculate stop loss distance (2 * ATR for breathing room)
+                stop_distance = atr_value * 2.0 * risk_level
+                
+                # Ensure stop distance is reasonable (not too small or large)
+                min_stop = current_price * 0.02  # Minimum 2% stop
+                max_stop = current_price * 0.10  # Maximum 10% stop
+                stop_distance = max(min_stop, min(stop_distance, max_stop))
+                
+                # Calculate position size based on risk amount and stop distance
+                pos_size = int(risk_amount / stop_distance)
+                
+                # Apply multiple safety caps
+                max_size_risk = self.amt_params.position_size['max_position']
+                max_size_value = int(max_position_value / current_price)
+                max_size_conservative = min(100, max_size_risk)  # Conservative max 100 shares
+                max_size_cash = int(available_cash * 0.5 / current_price)  # Never use more than 50% of cash
+                
+                final_size = max(1, min(pos_size, max_size_risk, max_size_value, max_size_conservative, max_size_cash))
+                
+                # Log position sizing for debugging
+                if final_size != pos_size:
+                    print(f"Position size capped: calculated={pos_size}, final={final_size} "
+                          f"(price=${current_price:.2f}, cash=${available_cash:.0f}, ATR={atr_value:.2f}, stop=${stop_distance:.2f})")
+                
+                return final_size
             else:
-                # Use fixed position size from parameters
-                return self.amt_params.position_size['initial_size']
+                # Use fixed position size with value cap
+                fixed_size = self.amt_params.position_size['initial_size']
+                max_size_value = int(max_position_value / current_price)
+                return max(1, min(fixed_size, max_size_value))
+                
         except Exception as e:
-            print(f"Error calculating position size: {e}, using default")
-            return 10  # Default safe position size on error
+            print(f"Error calculating position size: {e}, using safe default")
+            return 5  # Very conservative default on error
     
     def _apply_auction_market_logic(self, data, value_area):
         """Apply Auction Market Theory trading logic."""
@@ -586,53 +678,357 @@ class AuctionMarketStrategy(bt.Strategy):
             if not self.sma50.get(data) or not self.sma50[data][0] or not self.volume_ma.get(data) or not self.volume_ma[data][0]:
                 return
             
-            # Trading logic based on auction market principles
+            # Simplified trading logic with fewer conditions
             if position == 0:  # No position
-                if close > vah:  # Price above value area high
-                    if excess == "up":
-                        # Excess above value area - potential reversal
-                        if balance == "tight" and rotation == "down":
-                            # Short when we see excess up, tight balance, and downward rotation
-                            self.sell(data=data, size=pos_size)
-                    else:
-                        # No excess - potential breakout
-                        if rotation == "up" and close > self.sma50[data][0]:
-                            # Go long above value area with upward rotation and above MA
-                            self.buy(data=data, size=pos_size)
+                entry_signal = False
+                entry_size = pos_size
+                entry_action = None
                 
-                elif close < val:  # Price below value area low
+                # Score-based entry system (accumulate signal strength)
+                entry_score = 0
+                
+                # Value area signals (primary)
+                if close > vah:
+                    entry_score += 3  # Strong bullish signal
+                    entry_action = "buy"
+                elif close < val:
+                    entry_score += 3  # Strong bearish signal  
+                    entry_action = "sell"
+                elif close > poc:
+                    entry_score += 1  # Weak bullish signal
+                    entry_action = "buy"
+                elif close < poc:
+                    entry_score += 1  # Weak bearish signal
+                    entry_action = "sell"
+                
+                # Trend confirmation (secondary)
+                if entry_action == "buy" and close > self.sma50[data][0]:
+                    entry_score += 2
+                elif entry_action == "sell" and close < self.sma50[data][0]:
+                    entry_score += 2
+                
+                # Volume confirmation (tertiary)
+                if data.volume[0] > self.volume_ma[data][0]:
+                    entry_score += 1
+                
+                # Rotation confirmation (bonus)
+                if (entry_action == "buy" and rotation == "up") or (entry_action == "sell" and rotation == "down"):
+                    entry_score += 1
+                
+                # Apply relaxation factor to lower threshold
+                required_score = max(1, int(4 * self.relaxation_factor))
+                
+                # Execute trade if score meets threshold
+                if entry_score >= required_score:
+                    # Adjust position size based on signal strength
+                    if entry_score >= 6:
+                        entry_size = pos_size  # Full position
+                    elif entry_score >= 4:
+                        entry_size = int(pos_size * 0.7)  # 70% position
+                    else:
+                        entry_size = int(pos_size * 0.5)  # 50% position
+                    
+                    entry_signal = True
+                
+                # Execute entry signal (with holiday check)
+                if entry_signal and entry_action:
+                    # Check if order can be safely executed (no holiday on next day)
+                    if not self._can_execute_order(data):
+                        print(f"SKIPPED ENTRY: {entry_action.upper()} signal blocked due to upcoming holiday/missing data")
+                        return
+                    
+                    if entry_action == "buy":
+                        self.buy(data=data, size=entry_size)
+                        print(f"ENTRY: Buy {entry_size} shares (score: {entry_score}, threshold: {required_score})")
+                    elif entry_action == "sell":
+                        self.sell(data=data, size=entry_size)
+                        print(f"ENTRY: Sell {entry_size} shares (score: {entry_score}, threshold: {required_score})")
+            
+            elif position > 0:  # Long position - More aggressive exit logic
+                exit_score = 0
+                exit_reasons = []
+                
+                # Critical exits (immediate close)
+                if close < (val - self.atr[data][0]):
+                    exit_score += 10
+                    exit_reasons.append("hard_stop_loss")
+                elif close < val:
+                    exit_score += 6  # Reduced from 8 to make exits easier
+                    exit_reasons.append("value_area_breakdown")
+                
+                # Trend-based exits
+                if close < self.sma50[data][0]:
+                    exit_score += 4  # Increased from 3
+                    exit_reasons.append("trend_reversal")
+                
+                # Volume-based exits
+                if data.volume[0] > self.volume_ma[data][0] * 1.5 and close < poc:
+                    exit_score += 3  # Increased from 2
+                    exit_reasons.append("high_volume_selling")
+                
+                # Time-based exits (more aggressive)
+                bars_held = self.bars_processed - self.last_trade_bar
+                if bars_held > 50:  # Reduced from 100 to 50
+                    exit_score += 8  # Increased from 5
+                    exit_reasons.append("time_limit")
+                elif bars_held > 25:  # Reduced from 50 to 25
+                    exit_score += 4  # Increased from 2
+                    exit_reasons.append("long_hold")
+                elif bars_held > 15:  # New shorter time exit
+                    exit_score += 2
+                    exit_reasons.append("hold_time")
+                
+                # More aggressive profit-taking
+                profit_pct = (close - data.close[-bars_held if bars_held > 0 else -1]) / data.close[-bars_held if bars_held > 0 else -1]
+                if profit_pct > 0.02:  # Reduced from 3% to 2%
+                    if excess == "up":
+                        # Check if partial exit can be safely executed
+                        if self._can_execute_order(data):
+                            self.sell(data=data, size=int(position * 0.5))
+                            print(f"PARTIAL EXIT: Taking 50% profits at {profit_pct:.2%} gain (excess move)")
+                        else:
+                            print(f"SKIPPED PARTIAL EXIT: Holiday/missing data detected")
+                    elif profit_pct > 0.03:  # Reduced from 5% to 3%
+                        exit_score += 4  # Increased from 3
+                        exit_reasons.append("profit_target")
+                
+                # Apply relaxation factor to exit threshold (make exits easier)
+                exit_threshold = max(3, int(6 * self.relaxation_factor))  # Reduced from 5,8 to 3,6
+                
+                if exit_score >= exit_threshold:
+                    # Check if exit can be safely executed
+                    if self._can_execute_order(data):
+                        self.close(data=data)
+                        print(f"LONG EXIT: Score {exit_score} >= {exit_threshold} (reasons: {', '.join(exit_reasons)})")
+                    else:
+                        print(f"SKIPPED LONG EXIT: Holiday/missing data detected (score: {exit_score}, threshold: {exit_threshold})")
+            
+            elif position < 0:  # Short position - More aggressive exit logic
+                exit_score = 0
+                exit_reasons = []
+                
+                # Critical exits (immediate close)
+                if close > (vah + self.atr[data][0]):
+                    exit_score += 10
+                    exit_reasons.append("hard_stop_loss")
+                elif close > vah:
+                    exit_score += 6  # Reduced from 8 to make exits easier
+                    exit_reasons.append("value_area_breakout")
+                
+                # Trend-based exits
+                if close > self.sma50[data][0]:
+                    exit_score += 4  # Increased from 3
+                    exit_reasons.append("trend_reversal")
+                
+                # Volume-based exits
+                if data.volume[0] > self.volume_ma[data][0] * 1.5 and close > poc:
+                    exit_score += 3  # Increased from 2
+                    exit_reasons.append("high_volume_buying")
+                
+                # Time-based exits (more aggressive)
+                bars_held = self.bars_processed - self.last_trade_bar
+                if bars_held > 50:  # Reduced from 100 to 50
+                    exit_score += 8  # Increased from 5
+                    exit_reasons.append("time_limit")
+                elif bars_held > 25:  # Reduced from 50 to 25
+                    exit_score += 4  # Increased from 2
+                    exit_reasons.append("long_hold")
+                elif bars_held > 15:  # New shorter time exit
+                    exit_score += 2
+                    exit_reasons.append("hold_time")
+                
+                # More aggressive profit-taking
+                profit_pct = (data.close[-bars_held if bars_held > 0 else -1] - close) / data.close[-bars_held if bars_held > 0 else -1]
+                if profit_pct > 0.02:  # Reduced from 3% to 2%
                     if excess == "down":
-                        # Excess below value area - potential reversal
-                        if balance == "tight" and rotation == "up":
-                            # Go long when we see excess down, tight balance, and upward rotation
-                            self.buy(data=data, size=pos_size)
-                else:  # Price inside value area
-                    if close > poc and rotation == "up" and self.volume_ma[data][0] < data.volume[0]:
-                        # Go long above POC with upward rotation and above-average volume
-                        self.buy(data=data, size=int(pos_size * 0.7))  # Reduced size in value area
-                    elif close < poc and rotation == "down" and self.volume_ma[data][0] < data.volume[0]:
-                        # Go short below POC with downward rotation and above-average volume
-                        self.sell(data=data, size=int(pos_size * 0.7))  # Reduced size in value area
-            
-            elif position > 0:  # Long position
-                if (close < val and balance != "wide") or close < (val - self.atr[data][0]):
-                    # Exit long if price drops below value area low or too far below
-                    self.close(data=data)
-                elif excess == "up" and balance == "tight":
-                    # Take partial profits on excess above value area
-                    self.sell(data=data, size=int(position * 0.5))
-            
-            elif position < 0:  # Short position
-                if (close > vah and balance != "wide") or close > (vah + self.atr[data][0]):
-                    # Exit short if price rises above value area high or too far above
-                    self.close(data=data)
-                elif excess == "down" and balance == "tight":
-                    # Take partial profits on excess below value area
-                    self.buy(data=data, size=int(abs(position) * 0.5))
+                        # Check if partial exit can be safely executed
+                        if self._can_execute_order(data):
+                            self.buy(data=data, size=int(abs(position) * 0.5))
+                            print(f"PARTIAL EXIT: Taking 50% profits at {profit_pct:.2%} gain (excess move)")
+                        else:
+                            print(f"SKIPPED PARTIAL EXIT: Holiday/missing data detected")
+                    elif profit_pct > 0.03:  # Reduced from 5% to 3%
+                        exit_score += 4  # Increased from 3
+                        exit_reasons.append("profit_target")
+                
+                # Apply relaxation factor to exit threshold (make exits easier)
+                exit_threshold = max(3, int(6 * self.relaxation_factor))  # Reduced from 5,8 to 3,6
+                
+                if exit_score >= exit_threshold:
+                    # Check if exit can be safely executed
+                    if self._can_execute_order(data):
+                        self.close(data=data)
+                        print(f"SHORT EXIT: Score {exit_score} >= {exit_threshold} (reasons: {', '.join(exit_reasons)})")
+                    else:
+                        print(f"SKIPPED SHORT EXIT: Holiday/missing data detected (score: {exit_score}, threshold: {exit_threshold})")
         except Exception as e:
             print(f"Error applying auction market logic: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _is_valid_price_data(self, data, offset=0):
+        """
+        Validate that price data is valid for trading.
+        
+        Args:
+            data: Backtrader data feed
+            offset: Bar offset (0 for current, -1 for next, etc.)
+            
+        Returns:
+            bool: True if data is valid for trading
+        """
+        try:
+            # Get price data at specified offset
+            close = data.close[offset]
+            open_price = data.open[offset]
+            high = data.high[offset] 
+            low = data.low[offset]
+            volume = data.volume[offset]
+            
+            # Check for zero, None, or NaN values
+            if (close is None or open_price is None or high is None or 
+                low is None or volume is None):
+                return False
+                
+            # Check for zero prices (indicates missing data)
+            if (close <= 0 or open_price <= 0 or high <= 0 or low <= 0):
+                return False
+                
+            # Check for NaN values
+            import math
+            if any(math.isnan(val) if isinstance(val, (int, float)) else False 
+                   for val in [close, open_price, high, low, volume]):
+                return False
+                
+            # Check basic price logic (high >= low, close within range)
+            if high < low or close < 0:
+                return False
+                
+            # Check volume is reasonable
+            if volume < 0:
+                return False
+                
+            return True
+            
+        except Exception as e:
+            # If we can't access the data (e.g., future bar doesn't exist), return False
+            return False
+
+    def _can_execute_order(self, data):
+        """
+        Check if an order can be safely executed by validating current and next bar's data.
+        This prevents orders from being executed on holidays/missing data days.
+        
+        Args:
+            data: Backtrader data feed
+            
+        Returns:
+            bool: True if order can be safely executed
+        """
+        try:
+            current_date = data.datetime.date(0)
+            
+            # First check if current bar has valid price data
+            if not self._is_valid_price_data(data, offset=0):
+                print(f"WARNING: Current trading day ({current_date}) has invalid price data. Skipping order to prevent holiday execution.")
+                return False
+            
+            # Check if we have a next bar available
+            if len(data) < 2:  # Need at least current and next bar
+                return True  # Allow trading near the end of data
+            
+            # Check if next bar has valid price data
+            if not self._is_valid_price_data(data, offset=-1):
+                next_date = data.datetime.date(-1) if len(data) > 1 else None
+                print(f"WARNING: Next trading day ({next_date}) has invalid price data. Skipping order on {current_date} to prevent holiday execution.")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            # If in doubt, allow the order (fail open rather than fail closed)
+            return True
+    
+    def _cancel_pending_orders(self):
+        """Cancel all pending orders to prevent execution on invalid price data."""
+        try:
+            # Get all pending orders
+            pending_orders = [order for order in self.broker.orders if order.status in [order.Submitted, order.Accepted]]
+            
+            for order in pending_orders:
+                self.cancel(order)
+                order_date = bt.num2date(order.created.dt).strftime('%Y-%m-%d') if hasattr(order, 'created') else "unknown"
+                print(f"CANCELLED ORDER: {order.ordtype} order from {order_date} to prevent holiday execution")
+                
+        except Exception as e:
+            print(f"Error cancelling pending orders: {e}")
+    
+    def notify_order(self, order):
+        """Override to prevent execution of orders with invalid price data."""
+        if order.status == order.Completed:
+            # Check if the execution price is invalid (zero or negative)
+            exec_price = order.executed.price
+            if exec_price <= 0:
+                exec_date = bt.num2date(order.executed.dt).strftime('%Y-%m-%d')
+                print(f"INVALID ORDER EXECUTION: Order executed with price {exec_price} on {exec_date}")
+                
+                # Try to immediately reverse the invalid trade if possible
+                try:
+                    if order.executed.size > 0:  # Was a buy order
+                        print(f"REVERSING INVALID BUY: Selling {order.executed.size} shares")
+                        self.sell(size=order.executed.size)
+                    else:  # Was a sell order
+                        print(f"REVERSING INVALID SELL: Buying {abs(order.executed.size)} shares")
+                        self.buy(size=abs(order.executed.size))
+                except Exception as e:
+                    print(f"Error reversing invalid order: {e}")
+                
+                return  # Don't process this invalid order further
+        
+        # Call parent implementation for valid orders
+        super().notify_order(order)
+
+    def _update_parameter_relaxation(self):
+        """Enhanced parameter relaxation based on trading frequency and performance."""
+        # Update bars without trade
+        self.bars_without_trade = self.bars_processed - self.last_trade_bar
+        
+        # Progressive relaxation stages
+        if self.bars_without_trade > 20:  # Start relaxing earlier
+            if self.bars_without_trade <= 50:
+                # Stage 1: Light relaxation (20-50 bars)
+                self.relaxation_factor = 0.9
+            elif self.bars_without_trade <= 100:
+                # Stage 2: Moderate relaxation (50-100 bars)
+                self.relaxation_factor = 0.7
+            elif self.bars_without_trade <= 200:
+                # Stage 3: Heavy relaxation (100-200 bars)
+                self.relaxation_factor = 0.5
+            else:
+                # Stage 4: Maximum relaxation (200+ bars)
+                self.relaxation_factor = self.max_relaxation
+            
+            # Log relaxation changes
+            if self.bars_without_trade in [20, 50, 100, 200] or self.bars_without_trade % 100 == 0:
+                print(f"Bar {self.bars_processed}: No trades for {self.bars_without_trade} bars. "
+                      f"Relaxation factor: {self.relaxation_factor:.2f} (Stage {self._get_relaxation_stage()})")
+        else:
+            self.relaxation_factor = 1.0
+    
+    def _get_relaxation_stage(self):
+        """Get current relaxation stage for logging."""
+        if self.bars_without_trade <= 50:
+            return 1
+        elif self.bars_without_trade <= 100:
+            return 2
+        elif self.bars_without_trade <= 200:
+            return 3
+        else:
+            return 4
+    
+    def _get_relaxed_threshold(self, original_threshold):
+        """Apply relaxation factor to a threshold value."""
+        return original_threshold * self.relaxation_factor
     
     def notify_order(self, order):
         """Log order execution information"""
@@ -641,6 +1037,15 @@ class AuctionMarketStrategy(bt.Strategy):
                 action = "BUY"
             else:
                 action = "SELL"
+            
+            # Update last trade bar
+            self.last_trade_bar = self.bars_processed
+            self.bars_without_trade = 0
+            
+            # Reset relaxation factor after successful trade
+            if self.relaxation_factor < 1.0:
+                print(f"Trade executed - resetting relaxation factor from {self.relaxation_factor:.2f} to 1.0")
+                self.relaxation_factor = 1.0
             
             print(f"{self.data.datetime.date(0)} - {action} order executed: "
                   f"Price={order.executed.price:.2f}, Size={order.executed.size}, "

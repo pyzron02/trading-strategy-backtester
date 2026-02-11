@@ -11,12 +11,6 @@ import seaborn as sns
 import glob
 import re
 
-# Add the src directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-
 def parse_results_file(file_path):
     """Parse a results.txt file and extract the key information."""
     results = {}

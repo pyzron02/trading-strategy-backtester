@@ -395,14 +395,24 @@
                                     <div class="col-md-12 mb-4">
                                         <div class="card">
                                             <div class="card-header">
-                                                <h6 class="mb-0">{{ plot.name|replace('.png', '')|replace('.jpg', '')|replace('.jpeg', '')|replace('.svg', '')|replace('.pdf', '')|replace('_', ' ')|title }}</h6>
+                                                <h6 class="mb-0">{{ plot.name|replace('.png', '')|replace('.jpg', '')|replace('.jpeg', '')|replace('.svg', '')|replace('.pdf', '')|replace('.html', '')|replace('_', ' ')|title }}</h6>
                                             </div>
                                             <div class="card-body text-center">
+                                                {% if plot.type == 'html' %}
+                                                <iframe src="{{ url_for('serve_file', file_path=plot.path.replace(project_root, '').lstrip('/')) }}" 
+                                                        title="{{ plot.name }}" 
+                                                        class="w-100"
+                                                        style="height: 600px; border: none; border-radius: 4px; overflow: hidden; background-color: white;"
+                                                        loading="lazy"
+                                                        sandbox="allow-scripts allow-same-origin"
+                                                        allowfullscreen></iframe>
+                                                {% else %}
                                                 <img src="{{ url_for('serve_file', file_path=plot.path.replace(project_root, '').lstrip('/')) }}" 
                                                      alt="{{ plot.name }}" 
                                                      class="img-fluid"
                                                      style="max-height: 500px; max-width: 100%;"
                                                      onerror="this.onerror=null; this.src=''; this.alt='Image not found'; this.parentElement.innerHTML += '<div class=\'alert alert-warning\'>Plot image not found or cannot be displayed</div>'">
+                                                {% endif %}
                                             </div>
                                         </div>
                                     </div>
@@ -410,12 +420,78 @@
                                 </div>
                                 {% endif %}
                                 
+                                <!-- Show ticker-specific plots if available -->
+                                {% if ticker_plots and ticker_plots|length > 0 %}
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <h5 class="mb-0">Ticker-Specific Analysis</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="alert alert-info mb-3">
+                                            <p>These ticker-specific plots show individual price action and trades for each ticker in your strategy. 
+                                               Each plot includes candlestick chart with highlighted entry and exit points.</p>
+                                        </div>
+                                        
+                                        <ul class="nav nav-tabs mb-3" id="tickerPlotTabs" role="tablist">
+                                            {% for plot in ticker_plots %}
+                                            <li class="nav-item" role="presentation">
+                                                <button class="nav-link {% if loop.first %}active{% endif %}" 
+                                                        id="ticker-tab-{{ loop.index }}" 
+                                                        data-bs-toggle="tab" 
+                                                        data-bs-target="#ticker-plot-{{ loop.index }}" 
+                                                        type="button" role="tab">
+                                                    {{ plot.ticker }}
+                                                </button>
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                        
+                                        <div class="tab-content" id="tickerPlotsContent">
+                                            {% for plot in ticker_plots %}
+                                            <div class="tab-pane fade {% if loop.first %}show active{% endif %}" 
+                                                 id="ticker-plot-{{ loop.index }}" 
+                                                 role="tabpanel">
+                                                <div class="text-center position-relative">
+                                                    {% if plot.type == 'html' %}
+                                                    <div class="visualization-frame">
+                                                        <iframe src="{{ url_for('serve_file', file_path=plot.path.replace(project_root, '').lstrip('/')) }}" 
+                                                                title="{{ plot.name }}"
+                                                                class="w-100"
+                                                                style="height: 700px; min-height: 700px; border: none; border-radius: 4px; overflow: hidden; background-color: white;"
+                                                                loading="lazy"
+                                                                sandbox="allow-scripts allow-same-origin"
+                                                                allowfullscreen></iframe>
+                                                        
+                                                        <!-- Fallback link -->
+                                                        <div class="mt-2">
+                                                            <a href="{{ url_for('serve_file', file_path=plot.path.replace(project_root, '').lstrip('/')) }}" 
+                                                               target="_blank" 
+                                                               class="btn btn-sm btn-outline-primary">
+                                                                Open in new tab
+                                                            </a>
+                                                        </div>
+                                                    </div>
+                                                    {% else %}
+                                                    <img src="{{ url_for('serve_file', file_path=plot.path.replace(project_root, '').lstrip('/')) }}" 
+                                                         alt="{{ plot.name }}" 
+                                                         class="img-fluid"
+                                                         style="max-width: 100%; border: 1px solid #ddd; border-radius: 4px;"
+                                                         onerror="this.onerror=null; this.src=''; this.alt='Chart image not found'; this.parentElement.innerHTML += '<div class=\'alert alert-warning\'>Chart image not found</div>'">
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endif %}
+
                                 <!-- Show basic equity curve chart if plots aren't available or as a fallback -->
                                 {% if (not equity_plots or equity_plots|length == 0) and equity_curve.dates and equity_curve.equity and equity_curve.dates|length > 0 and equity_curve.equity|length > 0 %}
                                 <div class="chart-container">
                                     <canvas id="equityCurveChart"></canvas>
                                 </div>
-                                {% elif not equity_plots or equity_plots|length == 0 %}
+                                {% elif not equity_plots or equity_plots|length == 0 and not ticker_plots %}
                                 <div class="alert alert-warning">
                                     <h5>No Equity Curve Data Available</h5>
                                     <p>The equity curve data could not be found or loaded. This might be because:</p>
@@ -787,10 +863,12 @@
                                     </div>
                                     <div class="card-body">
                                         <ul class="nav nav-tabs mb-3" id="wfVisualizationTabs" role="tablist">
+                                            {% set viz_counter = {'count': 0} %}
                                             {% for chart in walk_forward_results.charts %}
-                                            {% if 'monte_carlo_dashboard' not in chart.name %}
+                                            {% if 'monte_carlo_dashboard' not in chart.name and 'ticker_plots' not in chart.path %}
+                                            {% if viz_counter.update({'count': viz_counter.count + 1}) %}{% endif %}
                                             <li class="nav-item" role="presentation">
-                                                <button class="nav-link {% if loop.first %}active{% endif %}" 
+                                                <button class="nav-link {% if viz_counter.count == 1 %}active{% endif %}" 
                                                         id="wf-viz-tab-{{ loop.index }}" 
                                                         data-bs-toggle="tab" 
                                                         data-bs-target="#wf-viz-{{ loop.index }}" 
@@ -802,9 +880,11 @@
                                             {% endfor %}
                                         </ul>
                                         <div class="tab-content" id="wfVisualizationTabContent">
+                                            {% set viz_counter2 = {'count': 0} %}
                                             {% for chart in walk_forward_results.charts %}
-                                            {% if 'monte_carlo_dashboard' not in chart.name %}
-                                            <div class="tab-pane fade {% if loop.first %}show active{% endif %}" 
+                                            {% if 'monte_carlo_dashboard' not in chart.name and 'ticker_plots' not in chart.path %}
+                                            {% if viz_counter2.update({'count': viz_counter2.count + 1}) %}{% endif %}
+                                            <div class="tab-pane fade {% if viz_counter2.count == 1 %}show active{% endif %}" 
                                                  id="wf-viz-{{ loop.index }}" 
                                                  role="tabpanel">
                                                 <div class="text-center">
@@ -1046,20 +1126,15 @@
             // Set up tab activation event listeners for Monte Carlo section
             const mcTab = document.getElementById('monte-carlo-tab');
             if (mcTab) {
-                // Listen for tab activation to ensure iframes are properly loaded
+                // Listen for tab activation to ensure iframes are properly sized
                 mcTab.addEventListener('shown.bs.tab', function () {
-                    // Force reload of all iframes when the Monte Carlo tab becomes visible
                     setTimeout(() => {
-                        console.log("Monte Carlo tab activated - reloading iframes");
-                        const iframes = document.querySelectorAll('.visualization-frame iframe');
+                        console.log("Monte Carlo tab activated - ensuring proper iframe sizing");
+                        const iframes = document.querySelectorAll('#monte-carlo .visualization-frame iframe');
                         iframes.forEach(iframe => {
-                            // Reload the iframe content with a timestamp to avoid caching
-                            const currentSrc = iframe.src;
-                            const refreshUrl = currentSrc.includes('?') 
-                                ? currentSrc + '&_refresh=' + new Date().getTime() 
-                                : currentSrc + '?_refresh=' + new Date().getTime();
-                            console.log("Reloading iframe: " + refreshUrl);
-                            iframe.src = refreshUrl;
+                            // Ensure iframe is properly sized without reloading
+                            iframe.style.height = '700px';
+                            iframe.style.minHeight = '700px';
                         });
                     }, 100);
                 });
@@ -1076,20 +1151,15 @@
             // Set up tab activation event listeners for Walk Forward section
             const wfTab = document.getElementById('walk-forward-tab');
             if (wfTab) {
-                // Listen for tab activation to ensure iframes are properly loaded
+                // Listen for tab activation to ensure iframes are properly sized
                 wfTab.addEventListener('shown.bs.tab', function () {
-                    // Force reload of all iframes when the Walk Forward tab becomes visible
                     setTimeout(() => {
-                        console.log("Walk Forward tab activated - reloading iframes");
+                        console.log("Walk Forward tab activated - ensuring proper iframe sizing");
                         const wfIframes = document.querySelectorAll('#walk-forward .visualization-frame iframe');
                         wfIframes.forEach(iframe => {
-                            // Reload the iframe content with a timestamp to avoid caching
-                            const currentSrc = iframe.src;
-                            const refreshUrl = currentSrc.includes('?') 
-                                ? currentSrc + '&_refresh=' + new Date().getTime() 
-                                : currentSrc + '?_refresh=' + new Date().getTime();
-                            console.log("Reloading iframe: " + refreshUrl);
-                            iframe.src = refreshUrl;
+                            // Ensure iframe is properly sized without reloading
+                            iframe.style.height = '700px';
+                            iframe.style.minHeight = '700px';
                         });
                     }, 100);
                 });
@@ -1113,14 +1183,11 @@
                         if (targetPane) {
                             const iframe = targetPane.querySelector('iframe');
                             if (iframe) {
-                                // Reload iframe content when tab is activated
+                                // Ensure iframe is properly sized when tab is activated
                                 setTimeout(() => {
-                                    console.log("Reloading iframe for visualization tab: " + targetId);
-                                    const currentSrc = iframe.src;
-                                    const refreshUrl = currentSrc.includes('?') 
-                                        ? currentSrc + '&_refresh=' + new Date().getTime() 
-                                        : currentSrc + '?_refresh=' + new Date().getTime();
-                                    iframe.src = refreshUrl;
+                                    console.log("Ensuring proper sizing for visualization tab: " + targetId);
+                                    iframe.style.height = '700px';
+                                    iframe.style.minHeight = '700px';
                                 }, 50);
                             }
                         }
@@ -1273,6 +1340,33 @@
             
             // Initialize the equity curve chart
             initEquityCurve();
+            
+            // Function to ensure proper iframe sizing without interfering with Plotly
+            function ensureIframeSize(iframe) {
+                if (!iframe) return;
+                
+                // Only adjust sizing, don't interfere with Plotly rendering
+                iframe.style.height = '700px';
+                iframe.style.minHeight = '700px';
+                iframe.style.width = '100%';
+            }
+            
+            // Apply sizing to all visualization iframes
+            setTimeout(() => {
+                document.querySelectorAll('.visualization-frame iframe').forEach(ensureIframeSize);
+            }, 1000);
+            
+            // Also ensure proper sizing when tabs are shown
+            document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
+                tab.addEventListener('shown.bs.tab', function() {
+                    setTimeout(() => {
+                        const targetPane = document.querySelector(this.getAttribute('data-bs-target'));
+                        if (targetPane) {
+                            targetPane.querySelectorAll('.visualization-frame iframe').forEach(ensureIframeSize);
+                        }
+                    }, 200);
+                });
+            });
         });
     </script>
 </body>

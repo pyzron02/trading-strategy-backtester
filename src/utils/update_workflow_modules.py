@@ -15,20 +15,15 @@ Options:
     --workflow-dir   Path to the workflow directory (default: src/workflows)
 """
 import os
-import sys
 import re
 import argparse
 import shutil
 from typing import List, Dict, Any, Optional, Tuple
 
-# Add the parent directory to the path
+# Compute directory paths for file references
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)  # Go up to src directory
 project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
 
 # Import the error reporting functionality
 from utils.error_reporting import update_workflow_with_stage_error_reporting

@@ -2,7 +2,6 @@
 # walk_forward_test.py - Evaluate strategy performance on out-of-sample data
 
 import os
-import sys
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,12 +19,6 @@ import re
 # Set Plotly template for consistent styling across all visualizations
 pio.templates.default = "plotly_white"
 
-# Add the parent directory to the path so we can import from engine
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
-
 from engine.run_backtest import run_backtest
 
 class WalkForwardTest:
@@ -40,7 +33,7 @@ class WalkForwardTest:
     def __init__(self, strategy_name, in_sample_start='2015-01-01', in_sample_end='2019-12-31',
                  out_sample_start='2020-01-01', out_sample_end='2021-12-31', tickers=None,
                  output_dir='output/walk_forward_test', parameters=None, load_optimized=False,
-                 optimized_params_path=None, plot=False, workflow_type=None, enhanced_visuals=True,
+                 optimized_params_path=None, workflow_type=None, enhanced_visuals=True,
                  reoptimize="always", reoptimization_threshold=0.05):
         """
         Initialize the walk-forward test.
@@ -56,7 +49,6 @@ class WalkForwardTest:
             parameters (dict): Strategy parameters to use. If None, will use default parameters.
             load_optimized (bool): Whether to load optimized parameters from a previous run.
             optimized_params_path (str): Path to the optimized parameters file.
-            plot (bool): Whether to generate plots during backtests. Default is False.
             workflow_type (str): Type of workflow (simple, optimization, monte_carlo, complete).
             enhanced_visuals (bool): Whether to use enhanced visualizations. Default is True.
             reoptimize (str): Reoptimization strategy, one of "always", "on_degradation", or "never".
@@ -71,7 +63,6 @@ class WalkForwardTest:
         self.parameters = parameters
         self.load_optimized = load_optimized
         self.optimized_params_path = optimized_params_path
-        self.plot = plot
         self.workflow_type = workflow_type
         self.enhanced_visuals = enhanced_visuals
         self.reoptimize = reoptimize
@@ -136,7 +127,6 @@ class WalkForwardTest:
         
         # Run backtest with in-sample date range
         try:
-            # Only plot if explicitly requested by user
             in_sample_results = run_backtest(
                 output_dir=in_sample_dir,
                 strategy_name=self.strategy_name,
@@ -144,7 +134,7 @@ class WalkForwardTest:
                 parameters=self.parameters,
                 start_date=self.in_sample_start.strftime('%Y-%m-%d'),
                 end_date=self.in_sample_end.strftime('%Y-%m-%d'),
-                plot=self.plot
+                plot=True  # Keep plots for walkforward analysis
             )
             if in_sample_results is None:
                 print(f"Warning: In-sample backtest returned None. Using empty results.")
@@ -173,7 +163,6 @@ class WalkForwardTest:
         
         # Run backtest with out-of-sample date range
         try:
-            # Only plot if explicitly requested by user
             out_sample_results = run_backtest(
                 output_dir=out_sample_dir,
                 strategy_name=self.strategy_name,
@@ -181,7 +170,7 @@ class WalkForwardTest:
                 parameters=self.parameters,
                 start_date=self.out_sample_start.strftime('%Y-%m-%d'),
                 end_date=self.out_sample_end.strftime('%Y-%m-%d'),
-                plot=self.plot
+                plot=True  # Keep plots for walkforward analysis
             )
             if out_sample_results is None:
                 print(f"Warning: Out-of-sample backtest returned None. Using empty results.")
@@ -448,7 +437,7 @@ class WalkForwardTest:
                 'modeBarButtons': [['toImage', 'zoom2d', 'pan2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d']]
             }
             try:
-                fig.write_html(plot_file, include_plotlyjs='cdn', config=config, full_html=True)
+                fig.write_html(plot_file, include_plotlyjs=True, config=config, full_html=True)
                 print(f"Interactive equity curves saved to {plot_file}")
             except Exception as e:
                 print(f"Error saving HTML plot: {e}")
@@ -508,16 +497,30 @@ class WalkForwardTest:
             )
         )
         
-        # Format dates
+        # Format dates - handle case where data might need to be loaded from CSV files
         if not isinstance(in_sample_drawdowns.index, pd.DatetimeIndex):
             try:
-                in_sample_drawdowns.index = pd.to_datetime(in_sample_drawdowns.index)
+                # If the data doesn't have proper dates, try to load from CSV file
+                in_sample_csv_path = os.path.join(self.output_dir, 'in_sample', 'drawdowns.csv')
+                if os.path.exists(in_sample_csv_path):
+                    print(f"Loading in-sample drawdowns from CSV: {in_sample_csv_path}")
+                    in_sample_drawdowns = pd.read_csv(in_sample_csv_path, index_col=0, parse_dates=True)
+                else:
+                    # Try to parse existing index
+                    in_sample_drawdowns.index = pd.to_datetime(in_sample_drawdowns.index)
             except Exception as e:
                 print(f"Error converting in-sample dates: {e}")
         
         if not isinstance(out_sample_drawdowns.index, pd.DatetimeIndex):
             try:
-                out_sample_drawdowns.index = pd.to_datetime(out_sample_drawdowns.index)
+                # If the data doesn't have proper dates, try to load from CSV file
+                out_sample_csv_path = os.path.join(self.output_dir, 'out_sample', 'drawdowns.csv')
+                if os.path.exists(out_sample_csv_path):
+                    print(f"Loading out-sample drawdowns from CSV: {out_sample_csv_path}")
+                    out_sample_drawdowns = pd.read_csv(out_sample_csv_path, index_col=0, parse_dates=True)
+                else:
+                    # Try to parse existing index
+                    out_sample_drawdowns.index = pd.to_datetime(out_sample_drawdowns.index)
             except Exception as e:
                 print(f"Error converting out-of-sample dates: {e}")
             
@@ -682,7 +685,7 @@ class WalkForwardTest:
                 'modeBarButtons': [['toImage', 'zoom2d', 'pan2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d']]
             }
             try:
-                fig.write_html(plot_file, include_plotlyjs='cdn', config=config, full_html=True)
+                fig.write_html(plot_file, include_plotlyjs=True, config=config, full_html=True)
                 print(f"Interactive drawdowns comparison saved to {plot_file}")
             except Exception as e:
                 print(f"Error saving HTML plot: {e}")
@@ -742,18 +745,38 @@ class WalkForwardTest:
             )
         )
         
-        # Format data
-        if not isinstance(in_sample_monthly.index, pd.DatetimeIndex):
-            try:
-                in_sample_monthly.index = pd.to_datetime(in_sample_monthly.index)
-            except Exception as e:
-                print(f"Error converting in-sample dates: {e}")
+        # ALWAYS reload from CSV files to ensure proper date parsing
+        # This fixes the 1970-01-01 issue by forcing proper date handling
         
-        if not isinstance(out_sample_monthly.index, pd.DatetimeIndex):
+        # Force load in-sample monthly returns from CSV
+        in_sample_csv_path = os.path.join(self.output_dir, 'in_sample', 'monthly_returns.csv')
+        if os.path.exists(in_sample_csv_path):
             try:
-                out_sample_monthly.index = pd.to_datetime(out_sample_monthly.index)
+                in_sample_monthly = pd.read_csv(in_sample_csv_path, index_col=0, parse_dates=True)
             except Exception as e:
-                print(f"Error converting out-of-sample dates: {e}")
+                print(f"Error loading in-sample CSV: {e}")
+                # Fallback to original data with date conversion
+                if not isinstance(in_sample_monthly.index, pd.DatetimeIndex):
+                    in_sample_monthly.index = pd.to_datetime(in_sample_monthly.index)
+        else:
+            # Ensure dates are properly parsed
+            if not isinstance(in_sample_monthly.index, pd.DatetimeIndex):
+                in_sample_monthly.index = pd.to_datetime(in_sample_monthly.index)
+        
+        # Force load out-sample monthly returns from CSV
+        out_sample_csv_path = os.path.join(self.output_dir, 'out_sample', 'monthly_returns.csv')
+        if os.path.exists(out_sample_csv_path):
+            try:
+                out_sample_monthly = pd.read_csv(out_sample_csv_path, index_col=0, parse_dates=True)
+            except Exception as e:
+                print(f"Error loading out-sample CSV: {e}")
+                # Fallback to original data with date conversion
+                if not isinstance(out_sample_monthly.index, pd.DatetimeIndex):
+                    out_sample_monthly.index = pd.to_datetime(out_sample_monthly.index)
+        else:
+            # Ensure dates are properly parsed
+            if not isinstance(out_sample_monthly.index, pd.DatetimeIndex):
+                out_sample_monthly.index = pd.to_datetime(out_sample_monthly.index)
         
         # Calculate statistics for annotations
         try:
@@ -775,9 +798,34 @@ class WalkForwardTest:
             out_sample_hit_rate = 0
         
         # Add in-sample monthly returns with improved styling
+        # Convert dates to ISO timestamp format for Plotly (to match drawdowns format)
+        
+        # Ensure we always have proper DatetimeIndex
+        if not isinstance(in_sample_monthly.index, pd.DatetimeIndex):
+            in_sample_monthly.index = pd.to_datetime(in_sample_monthly.index)
+        
+        # Filter dates to ensure they are within the in-sample range
+        in_sample_dates = []
+        for date in in_sample_monthly.index:
+            # Ensure the date is a proper datetime object
+            if not isinstance(date, pd.Timestamp):
+                date = pd.to_datetime(date)
+            
+            # Only include dates within the in-sample range
+            if self.in_sample_start <= date <= self.in_sample_end:
+                iso_date = date.isoformat()
+                in_sample_dates.append(iso_date)
+        
+        # Filter the monthly returns data to match the filtered dates
+        in_sample_monthly = in_sample_monthly.loc[
+            (in_sample_monthly.index >= self.in_sample_start) & 
+            (in_sample_monthly.index <= self.in_sample_end)
+        ]
+        
+        
         fig.add_trace(
             go.Bar(
-                x=in_sample_monthly.index,
+                x=in_sample_dates,
                 y=in_sample_monthly.iloc[:, 0].values * 100,  # Convert to percentage
                 name='In-Sample Returns',
                 marker=dict(
@@ -794,9 +842,12 @@ class WalkForwardTest:
         )
         
         # Add average line for in-sample
+        in_sample_min_date = in_sample_dates[0] if in_sample_dates else '2020-01-01T00:00:00'
+        in_sample_max_date = in_sample_dates[-1] if in_sample_dates else '2023-12-31T00:00:00'
+        
         fig.add_trace(
             go.Scatter(
-                x=[in_sample_monthly.index.min(), in_sample_monthly.index.max()],
+                x=[in_sample_min_date, in_sample_max_date],
                 y=[in_sample_avg_return, in_sample_avg_return],
                 mode='lines',
                 name='In-Sample Average',
@@ -807,9 +858,34 @@ class WalkForwardTest:
         )
         
         # Add out-of-sample monthly returns with improved styling
+        # Convert dates to ISO timestamp format for Plotly (to match drawdowns format)
+        
+        # Ensure we always have proper DatetimeIndex
+        if not isinstance(out_sample_monthly.index, pd.DatetimeIndex):
+            out_sample_monthly.index = pd.to_datetime(out_sample_monthly.index)
+        
+        # Filter dates to ensure they are within the out-sample range
+        out_sample_dates = []
+        for date in out_sample_monthly.index:
+            # Ensure the date is a proper datetime object
+            if not isinstance(date, pd.Timestamp):
+                date = pd.to_datetime(date)
+            
+            # Only include dates within the out-sample range
+            if self.out_sample_start <= date <= self.out_sample_end:
+                iso_date = date.isoformat()
+                out_sample_dates.append(iso_date)
+        
+        # Filter the monthly returns data to match the filtered dates
+        out_sample_monthly = out_sample_monthly.loc[
+            (out_sample_monthly.index >= self.out_sample_start) & 
+            (out_sample_monthly.index <= self.out_sample_end)
+        ]
+        
+        
         fig.add_trace(
             go.Bar(
-                x=out_sample_monthly.index,
+                x=out_sample_dates,
                 y=out_sample_monthly.iloc[:, 0].values * 100,  # Convert to percentage
                 name='Out-of-Sample Returns',
                 marker=dict(
@@ -826,9 +902,12 @@ class WalkForwardTest:
         )
         
         # Add average line for out-of-sample
+        out_sample_min_date = out_sample_dates[0] if out_sample_dates else '2023-01-01T00:00:00'
+        out_sample_max_date = out_sample_dates[-1] if out_sample_dates else '2023-12-31T00:00:00'
+        
         fig.add_trace(
             go.Scatter(
-                x=[out_sample_monthly.index.min(), out_sample_monthly.index.max()],
+                x=[out_sample_min_date, out_sample_max_date],
                 y=[out_sample_avg_return, out_sample_avg_return],
                 mode='lines',
                 name='Out-of-Sample Average',
@@ -841,8 +920,8 @@ class WalkForwardTest:
         # Add zero reference lines
         fig.add_shape(
             type="line",
-            x0=in_sample_monthly.index.min(),
-            x1=in_sample_monthly.index.max(),
+            x0=in_sample_min_date,
+            x1=in_sample_max_date,
             y0=0,
             y1=0,
             line=dict(
@@ -855,8 +934,8 @@ class WalkForwardTest:
         
         fig.add_shape(
             type="line",
-            x0=out_sample_monthly.index.min(),
-            x1=out_sample_monthly.index.max(),
+            x0=out_sample_min_date,
+            x1=out_sample_max_date,
             y0=0,
             y1=0,
             line=dict(
@@ -952,6 +1031,8 @@ class WalkForwardTest:
         )
         
         # Update x-axes with better date formatting
+        
+        # Set explicit date ranges to prevent 1970 display issue
         fig.update_xaxes(
             title_text='Month', 
             row=1, 
@@ -959,7 +1040,9 @@ class WalkForwardTest:
             gridwidth=1,
             gridcolor='LightGrey',
             tickformat='%b %Y',
-            tickangle=45
+            tickangle=45,
+            type='date',
+            range=[self.in_sample_start.isoformat(), self.in_sample_end.isoformat()]
         )
         
         fig.update_xaxes(
@@ -969,7 +1052,9 @@ class WalkForwardTest:
             gridwidth=1,
             gridcolor='LightGrey',
             tickformat='%b %Y',
-            tickangle=45
+            tickangle=45,
+            type='date',
+            range=[self.out_sample_start.isoformat(), self.out_sample_end.isoformat()]
         )
         
         try:
@@ -981,7 +1066,7 @@ class WalkForwardTest:
                 'modeBarButtons': [['toImage', 'zoom2d', 'pan2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d']]
             }
             try:
-                fig.write_html(plot_file, include_plotlyjs='cdn', config=config, full_html=True)
+                fig.write_html(plot_file, include_plotlyjs=True, config=config, full_html=True)
                 print(f"Interactive monthly returns comparison saved to {plot_file}")
             except Exception as e:
                 print(f"Error saving HTML plot: {e}")
@@ -1025,8 +1110,8 @@ class WalkForwardTest:
         # Compare performance - ensures result files exist first
         comparison = self.compare_performance(in_sample_results, out_sample_results)
         
-        # Only generate visualizations if plotting is enabled
-        if self.plot or self.enhanced_visuals:
+        # Only generate visualizations if enhanced visuals are enabled
+        if self.enhanced_visuals:
             try:
                 # Plot equity curves
                 equity_curves_file = self.plot_equity_curves(in_sample_results, out_sample_results)
@@ -1090,8 +1175,8 @@ class WalkForwardTest:
             # Add a note about disabled visualizations to the summary file
             with open(os.path.join(self.output_dir, 'walkforward_summary.txt'), 'a') as f:
                 f.write("\nVisualizations:\n")
-                f.write("Visualizations were not generated because plotting is disabled.\n")
-                f.write("To generate visualizations, run with the --plot flag.\n")
+                f.write("Visualizations were not generated because enhanced visuals are disabled.\n")
+                f.write("To generate visualizations, run with the --enhanced_visuals flag.\n")
         
         # Extract key metrics from both results files for summary
         in_sample_metrics = self._extract_metrics_from_file(os.path.join(self.output_dir, 'in_sample', 'results.txt'))
@@ -1192,8 +1277,6 @@ def parse_args():
     parser.add_argument('--enhanced_visuals', action='store_true', default=True,
                         help='Use enhanced visualization styling and features')
     
-    parser.add_argument('--plot', action='store_true', default=False,
-                        help='Generate plots during backtests')
                         
     parser.add_argument('--reoptimize', type=str, choices=['always', 'on_degradation', 'never'],
                         default='always', help='Reoptimization strategy for walk-forward analysis')
@@ -1217,7 +1300,6 @@ if __name__ == '__main__':
         output_dir=args.output_dir,
         load_optimized=args.load_optimized,
         optimized_params_path=args.optimized_params_path,
-        plot=args.plot,
         workflow_type=args.workflow_type,
         enhanced_visuals=args.enhanced_visuals,
         reoptimize=args.reoptimize,

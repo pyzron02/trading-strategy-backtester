@@ -40,6 +40,15 @@ class ParameterManager:
         
         self._initialized = True
     
+    @classmethod
+    def _reset(cls):
+        """Reset the singleton instance so a new one can be created.
+
+        This method is intended **only for testing** to ensure isolation
+        between test cases.  Production code should never call this.
+        """
+        cls._instance = None
+
     def define_parameter(self, strategy_name: str, param_name: str, param_type: type,
                         default_value: Any, min_value: Optional[Any] = None, 
                         max_value: Optional[Any] = None, choices: Optional[List[Any]] = None,

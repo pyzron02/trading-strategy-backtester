@@ -8,14 +8,7 @@ implemented and work with the complete workflow.
 """
 
 import os
-import sys
 from datetime import datetime
-
-# Add the src directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
 
 # Import the run_backtest function
 from engine.run_backtest import run_backtest

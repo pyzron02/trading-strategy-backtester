@@ -214,7 +214,10 @@
                                 </div>
                             </div>
 
-                            <div id="optimization-params" class="row mb-3" style="display:none;">
+                            <div id="optimization-params" style="display:none;">
+                                <hr class="my-4">
+                                <h5 class="mb-3">Optimization Parameters</h5>
+                                <div class="row mb-3">
                                 <div class="col-md-6">
                                     <label for="n_trials" class="form-label">Number of Trials</label>
                                     <input type="number" class="form-control" id="n_trials" name="n_trials" value="50" min="1" max="1000">
@@ -234,22 +237,82 @@
                                         <option value="cagr">CAGR</option>
                                     </select>
                                 </div>
+                                </div>
                             </div>
 
-                            <div id="monte-carlo-params" class="row mb-3" style="display:none;">
-                                <div class="col-md-6">
-                                    <label for="n_simulations" class="form-label">Number of Simulations</label>
-                                    <input type="number" class="form-control" id="n_simulations" name="n_simulations" value="{{ default_num_simulations }}" min="10" max="1000">
+                            <div id="monte-carlo-params" style="display:none;">
+                                <hr class="my-4">
+                                <h5 class="mb-3">Monte Carlo Simulation Parameters</h5>
+                                <div class="row mb-3">
+                                    <div class="col-md-4">
+                                        <label for="n_simulations" class="form-label">Number of Simulations</label>
+                                        <input type="number" class="form-control" id="n_simulations" name="n_simulations" value="{{ default_num_simulations }}" min="10" max="10000">
+                                        <small class="text-muted">Number of Monte Carlo simulations to run</small>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="bootstrap_pct" class="form-label">Bootstrap Percentage</label>
+                                        <input type="number" class="form-control" id="bootstrap_pct" name="bootstrap_pct" value="0.5" min="0.1" max="1.0" step="0.1">
+                                        <small class="text-muted">Fraction of data to sample in each simulation</small>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="confidence_level" class="form-label">Confidence Level</label>
+                                        <input type="number" class="form-control" id="confidence_level" name="confidence_level" value="0.95" min="0.8" max="0.99" step="0.01">
+                                        <small class="text-muted">Confidence level for intervals (e.g., 0.95 = 95%)</small>
+                                    </div>
                                 </div>
-                                <div class="col-md-6">
-                                    <div class="form-check mt-4">
-                                        <input type="checkbox" class="form-check-input" id="keep_permuted_data" name="keep_permuted_data">
-                                        <label class="form-check-label" for="keep_permuted_data">Keep Permuted Data</label>
+                                <div class="row mb-3">
+                                    <div class="col-md-4">
+                                        <label for="bootstrap_method" class="form-label">Bootstrap Method</label>
+                                        <select class="form-select" id="bootstrap_method" name="bootstrap_method">
+                                            <option value="standard" selected>Standard</option>
+                                            <option value="block">Block Bootstrap</option>
+                                        </select>
+                                        <small class="text-muted">Method for resampling returns</small>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="block_size" class="form-label">Block Size (days)</label>
+                                        <input type="number" class="form-control" id="block_size" name="block_size" value="21" min="5" max="252">
+                                        <small class="text-muted">For block bootstrap only</small>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="random_seed" class="form-label">Random Seed</label>
+                                        <input type="number" class="form-control" id="random_seed" name="random_seed" value="42" min="0">
+                                        <small class="text-muted">For reproducible results</small>
+                                    </div>
+                                </div>
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="keep_permuted_data" name="keep_permuted_data">
+                                            <label class="form-check-label" for="keep_permuted_data">Keep Permuted Data</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Plot Types</label>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input monte-plot-type" id="plot_simulation_paths" name="monte_carlo_plot_types" value="simulation_paths" checked>
+                                            <label class="form-check-label" for="plot_simulation_paths">Simulation Paths</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input monte-plot-type" id="plot_return_distribution" name="monte_carlo_plot_types" value="return_distribution" checked>
+                                            <label class="form-check-label" for="plot_return_distribution">Return Distribution</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input monte-plot-type" id="plot_drawdown_analysis" name="monte_carlo_plot_types" value="drawdown_analysis" checked>
+                                            <label class="form-check-label" for="plot_drawdown_analysis">Drawdown Analysis</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input monte-plot-type" id="plot_dashboard" name="monte_carlo_plot_types" value="dashboard" checked>
+                                            <label class="form-check-label" for="plot_dashboard">Dashboard</label>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                             
-                            <div id="walk-forward-params" class="row mb-3" style="display:none;">
+                            <div id="walk-forward-params" style="display:none;">
+                                <hr class="my-4">
+                                <h5 class="mb-3">Walk Forward Analysis Parameters</h5>
+                                <div class="row mb-3">
                                 <div class="col-md-6">
                                     <label for="n_windows" class="form-label">Number of Windows</label>
                                     <input type="number" class="form-control" id="n_windows" name="n_windows" value="{{ default_walk_forward_windows }}" min="2" max="20">
@@ -282,6 +345,7 @@
                                         <input type="checkbox" class="form-check-input" id="plot_comparisons" name="plot_comparisons" checked>
                                         <label class="form-check-label" for="plot_comparisons">Plot Comparisons</label>
                                     </div>
+                                </div>
                                 </div>
                             </div>
 
@@ -396,15 +460,15 @@
             
             // Show relevant params based on workflow type
             if (workflowType === 'optimization' || workflowType === 'complete' || workflowType === 'walkforward') {
-                optimizationParams.style.display = 'flex';
+                optimizationParams.style.display = 'block';
             }
             
             if (workflowType === 'monte_carlo' || workflowType === 'complete') {
-                monteCarloParams.style.display = 'flex';
+                monteCarloParams.style.display = 'block';
             }
             
             if (workflowType === 'walkforward' || workflowType === 'complete') {
-                if (walkForwardParams) walkForwardParams.style.display = 'flex';
+                if (walkForwardParams) walkForwardParams.style.display = 'block';
             }
         });
 
@@ -471,7 +535,7 @@
                                 
                                 // Skip adding the regular label
                                 singleField.appendChild(input);
-                } else {
+                            } else {
                                 input = document.createElement('input');
                                 input.type = paramInfo.type === 'float' ? 'number' : 'text';
                                 input.className = 'form-control';
@@ -527,7 +591,7 @@
                             
                             gridFields.appendChild(gridField);
                         }
-                            } else {
+                    } else {
                         paramFields.innerHTML = '<p class="text-danger">No parameters available for this strategy</p>';
                         gridFields.innerHTML = '<p class="text-danger">No parameters available for this strategy</p>';
                     }

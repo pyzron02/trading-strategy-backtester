@@ -4,29 +4,22 @@
 Walk-forward analysis workflow module.
 """
 import os
-import sys
 import json
 import pandas as pd
 import numpy as np
 import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
 # Import the utilities
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
     logger, logging_system, print_workflow_log,
-    check_logs_for_errors, print_error_report
+    check_logs_for_errors, print_error_report,
+    workflow_setup, workflow_teardown
 )
+from workflows.config import WorkflowConfig
+from utils.path_manager import path_manager
 
 # Import engine components
 from engine.testing.walk_forward_test import WalkForwardTest
@@ -54,8 +47,6 @@ def run_walkforward_workflow(
     commission: float = 0.001,
     _temp_files_to_cleanup: Optional[List[str]] = None,
     data_dir: str = "input",
-    plot: bool = False,  # Whether to generate plots during backtests
-    enhanced_plots: bool = False  # Whether to generate enhanced plots
 ) -> Dict[str, Any]:
     """
     Run a walk-forward analysis workflow for the given strategy.
@@ -80,47 +71,29 @@ def run_walkforward_workflow(
         commission: Commission rate for trades
         data_dir: Directory containing input data
         plot: Whether to generate plots during backtests
-        enhanced_plots: Whether to generate enhanced plots with additional metrics
     
     Returns:
         Dict containing the workflow results
     """
-    # Allow strategy parameter as alternative to strategy_name for compatibility
-    if strategy_name is None and strategy is not None:
-        strategy_name = strategy
-        
-    # Track temporary files if not already tracking
-    if _temp_files_to_cleanup is None:
-        _temp_files_to_cleanup = []
-        
-    # Log workflow start
-    additional_info = {
-        "output_dir": output_dir,
-        "window_size": window_size,
-        "step_size": step_size,
-        "optimization_metric": optimization_metric,
-        "n_trials": n_trials,
-        "reoptimize": reoptimize,
-        "reoptimization_threshold": reoptimization_threshold if reoptimize == "on_degradation" else "N/A"
-    }
-    print_workflow_log(
-        workflow_name="Walk-Forward Analysis Workflow",
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        status="STARTED",
-        additional_info=additional_info
+    config = WorkflowConfig.from_kwargs(
+        strategy_name=strategy_name, strategy=strategy, tickers=tickers,
+        start_date=start_date, end_date=end_date, output_dir=output_dir,
+        parameters=parameters, param_file=param_file, verbose=verbose,
+        initial_capital=initial_capital, commission=commission, data_dir=data_dir,
+        window_size=window_size, step_size=step_size, n_trials=n_trials,
+        optimization_metric=optimization_metric, reoptimize=reoptimize,
+        reoptimization_threshold=reoptimization_threshold,
+        _temp_files_to_cleanup=_temp_files_to_cleanup or [],
     )
-    
-    print_header(f"Walk-Forward Analysis: {strategy_name}")
-    
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Set logging level based on verbose flag
-    if verbose:
-        logging_system.set_level('DEBUG', 'workflows')
+    try:
+        workflow_setup(config, "walkforward")
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    # Extract commonly used values from config
+    strategy_name = config.strategy_name
+    tickers = config.tickers
+    output_dir = config.output_dir
     
     # Use param_file if provided, otherwise look for default grid file
     if param_file and os.path.exists(param_file):
@@ -133,18 +106,18 @@ def run_walkforward_workflow(
         
         # List of possible locations to search
         possible_locations = [
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name.lower()}_grid.json"),
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_name}_grid.json"),
-            os.path.join(project_root, "input", "parameter_grids", f"{strategy_snake_case}_grid.json"),
-            os.path.join(project_root, "input", f"{strategy_name.lower()}_grid.json"),
-            os.path.join(project_root, "input", f"{strategy_name}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_name.lower()}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_name}_grid.json"),
+            os.path.join(str(path_manager.input_dir), "parameter_grids", f"{strategy_snake_case}_grid.json"),
+            os.path.join(str(path_manager.input_dir), f"{strategy_name.lower()}_grid.json"),
+            os.path.join(str(path_manager.input_dir), f"{strategy_name}_grid.json"),
         ]
         
         # Add special case paths for specific strategies
         if strategy_name == "MACrossover":
             possible_locations.extend([
-                os.path.join(project_root, "input", "parameter_grids", "ma_crossover_grid.json"),
-                os.path.join(project_root, "input", "ma_crossover_grid.json"),
+                os.path.join(str(path_manager.input_dir), "parameter_grids", "ma_crossover_grid.json"),
+                os.path.join(str(path_manager.input_dir), "ma_crossover_grid.json"),
             ])
         
         # Try to find the grid file
@@ -183,10 +156,10 @@ def run_walkforward_workflow(
                                 ]
                     
                     # Ensure directory exists
-                    os.makedirs(os.path.join(project_root, "input", "parameter_grids"), exist_ok=True)
-                    
+                    os.makedirs(str(path_manager.input_dir / "parameter_grids"), exist_ok=True)
+
                     # Save the grid to a file
-                    param_grid_file = os.path.join(project_root, "input", "parameter_grids", f"{strategy_name.lower()}_grid_{timestamp}.json")
+                    param_grid_file = os.path.join(str(path_manager.input_dir / "parameter_grids"), f"{strategy_name.lower()}_grid_{timestamp}.json")
                     with open(param_grid_file, 'w') as f:
                         json.dump(param_grid, f, indent=4)
                     
@@ -259,7 +232,6 @@ def run_walkforward_workflow(
             out_sample_end=out_sample_end,
             output_dir=output_dir,
             parameters=parameters,
-            plot=plot,  # Respect the plot parameter from user configuration
             reoptimize=reoptimize,
             reoptimization_threshold=reoptimization_threshold
         )
@@ -781,71 +753,15 @@ def run_walkforward_workflow(
         
         logger.info(f"\nDetailed results saved to: {output_dir}")
         
-        # Reset logging level if it was changed
-        if verbose:
-            logging_system.set_level('INFO', 'workflows')
-        
-        # Log workflow completion
         total_return_value = overall_metrics.get('total_return', 0.0) if overall_metrics else 0.0
         win_rate_value = overall_metrics.get('win_rate', 0.0) if overall_metrics else 0.0
-        completion_info = {
-            "total_return": f"{total_return_value * 100:.2f}%",
-            "win_rate": f"{win_rate_value * 100:.2f}%",
-            "output_dir": output_dir
-        }
-        print_workflow_log(
-            workflow_name="Walk-Forward Analysis Workflow",
-            strategy_name=strategy_name,
-            tickers=tickers,
-            start_date=start_date,
-            end_date=end_date,
-            status="COMPLETED",
-            additional_info=completion_info
-        )
-        
-        # Clean up temporary files
-        files_to_delete = []
-        files_skipped = []
-        
-        for temp_file in _temp_files_to_cleanup:
-            if os.path.exists(temp_file):
-                # Skip files in the workflow_configs directory
-                if "workflow_configs" in temp_file:
-                    files_skipped.append(temp_file)
-                else:
-                    files_to_delete.append(temp_file)
-        
-        if files_skipped:
-            logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
-            for file_path in files_skipped:
-                logger.debug(f"Preserved file: {file_path}")
-        
-        for temp_file in files_to_delete:
-            try:
-                os.remove(temp_file)
-                logger.info(f"Cleaned up temporary file: {temp_file}")
-            except Exception as e:
-                logger.warning(f"Error cleaning up temporary file {temp_file}: {str(e)}")
-        
-        # Check logs for errors
-        logger.info("Checking logs for errors...")
-        error_logs = check_logs_for_errors(output_dir)
-        
-        if error_logs:
-            # Add log errors to the results
-            summary["log_errors"] = {
-                "count": sum(len(errors) for errors in error_logs.values()),
-                "files": len(error_logs)
-            }
-            
-            # Generate error report and save to file
-            error_report_path = os.path.join(output_dir, "error_report.txt")
-            print_error_report(error_logs, error_report_path)
-            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-        else:
-            logger.info("No errors found in logs.")
-            summary["log_errors"] = {"count": 0, "files": 0}
-        
+        log_errors = workflow_teardown(config, "walkforward", None,
+                                       additional_info={
+                                           "total_return": f"{total_return_value * 100:.2f}%",
+                                           "win_rate": f"{win_rate_value * 100:.2f}%",
+                                       })
+        summary["log_errors"] = log_errors
+
         return {
             "status": "success",
             "results": results,
@@ -856,24 +772,5 @@ def run_walkforward_workflow(
         error_trace = traceback.format_exc()
         logger.error(f"Error in run_walkforward_workflow: {e}")
         logger.error(f"Traceback: {error_trace}")
-        
-        # Clean up temporary files even on error
-        for temp_file in _temp_files_to_cleanup:
-            try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-                    logger.info(f"Cleaned up temporary file: {temp_file}")
-            except Exception as cleanup_error:
-                logger.warning(f"Error cleaning up temporary file {temp_file}: {str(cleanup_error)}")
-        
-        # Check logs for errors
-        logger.info("Checking logs for errors...")
-        error_logs = check_logs_for_errors(output_dir)
-        
-        if error_logs:
-            # Generate error report and save to file
-            error_report_path = os.path.join(output_dir, "error_report.txt")
-            print_error_report(error_logs, error_report_path)
-            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-        
-        return {"status": "error", "message": str(e)} 
+        workflow_teardown(config, "walkforward", None, error=e)
+        return {"status": "error", "message": str(e)}

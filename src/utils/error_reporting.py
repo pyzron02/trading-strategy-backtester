@@ -5,7 +5,6 @@ Enhanced error reporting module for all workflows.
 Creates detailed, stage-specific error reports across workflow runs.
 """
 import os
-import sys
 import json
 import re
 import logging
@@ -13,15 +12,6 @@ import datetime
 import traceback
 from collections import defaultdict
 from typing import Dict, List, Any, Optional, Union, Set, Tuple
-
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
 
 # Import the logging system
 from engine.logging_system import LoggingSystem

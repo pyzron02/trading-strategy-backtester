@@ -5,10 +5,6 @@ Test script for the pairs trading strategy.
 """
 
 import os
-import sys
-
-# Add project root to path to enable imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Import strategy
 from src.strategies.pairs_trading_strategy import PairsTradingStrategy

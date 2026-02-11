@@ -11,15 +11,13 @@ from datetime import datetime
 import uuid
 import numpy as np
 import pandas as pd
+import glob
+import re
 
-# Add the parent directory to the path
+# Compute project_root for file path references
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)  # Go up to src directory
 project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
 
 # Import the utilities
 from workflows.workflow_utils import logger, logging_system
@@ -62,7 +60,6 @@ def parse_args():
     parser.add_argument("--output-dir", type=str, help="Output directory for results")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--param-file", type=str, help="Parameter file for the strategy")
-    parser.add_argument("--plot", action="store_true", help="Generate and save plots of backtest results (simple workflow only)")
     
     # Optimization parameters
     optimization_group = parser.add_argument_group("Optimization parameters")
@@ -78,8 +75,6 @@ def parse_args():
                         help="Number of Monte Carlo simulations")
     monte_carlo_group.add_argument("--keep-permuted-data", action="store_true", 
                         help="Keep permuted data generated during Monte Carlo simulation")
-    monte_carlo_group.add_argument("--enhanced-plots", action="store_true", 
-                        help="Generate enhanced visualization dashboard for Monte Carlo simulations")
     
     # Walk-forward parameters
     walkforward_group = parser.add_argument_group("Walk-forward parameters")
@@ -96,11 +91,16 @@ def parse_args():
     data_group = parser.add_argument_group("Data parameters")
     data_group.add_argument("--stock-csv", type=str, help="Path to CSV file with stock data")
     data_group.add_argument("--data-dir", type=str, default="input", help="Directory containing input data")
+    data_group.add_argument("--force-download", action="store_true", 
+                           help="Force downloading data from yfinance instead of using CSV files")
     
     # Capital parameters
     capital_group = parser.add_argument_group("Capital parameters")
     capital_group.add_argument("--initial-capital", type=float, default=100000.0, help="Initial capital")
     capital_group.add_argument("--commission", type=float, default=0.001, help="Commission rate")
+    
+    # Visualization parameters
+    parser.add_argument("--plot", action="store_true", help="Generate plots for visualization")
     
     return parser.parse_args()
 
@@ -133,6 +133,56 @@ def process_tickers(ticker_args):
         return ["SPY"]
     
     return tickers
+
+def cleanup_timestamped_configs():
+    """
+    Delete timestamped config files from parameter_grids and parameters folders.
+    Only deletes files with timestamp pattern in the filename.
+    """
+    try:
+        # Define the directories to clean
+        param_grids_dir = os.path.join(project_root, "input", "parameter_grids")
+        params_dir = os.path.join(project_root, "input", "parameters")
+        
+        # Pattern to match timestamped files (format: name_YYYYMMDD_HHMMSS.json)
+        timestamp_pattern = re.compile(r'.*_\d{8}_\d{6}\.json$')
+        
+        deleted_files = []
+        
+        # Clean parameter_grids directory
+        if os.path.exists(param_grids_dir):
+            for filename in os.listdir(param_grids_dir):
+                if timestamp_pattern.match(filename):
+                    file_path = os.path.join(param_grids_dir, filename)
+                    try:
+                        os.remove(file_path)
+                        deleted_files.append(file_path)
+                        logger.debug(f"Deleted timestamped file: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {file_path}: {str(e)}")
+        
+        # Clean parameters directory
+        if os.path.exists(params_dir):
+            for filename in os.listdir(params_dir):
+                if timestamp_pattern.match(filename):
+                    file_path = os.path.join(params_dir, filename)
+                    try:
+                        os.remove(file_path)
+                        deleted_files.append(file_path)
+                        logger.debug(f"Deleted timestamped file: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {file_path}: {str(e)}")
+        
+        if deleted_files:
+            logger.info(f"Cleaned up {len(deleted_files)} timestamped config files")
+        else:
+            logger.debug("No timestamped config files found to clean up")
+            
+        return deleted_files
+        
+    except Exception as e:
+        logger.error(f"Error during cleanup of timestamped configs: {str(e)}")
+        return []
 
 def check_workflow_param_file_compatibility(workflow_type, param_file):
     """
@@ -209,6 +259,9 @@ def run_cli():
                     else:
                         logger.warning(f"Output directory doesn't exist: {output_dir}")
                 
+            # Cleanup timestamped config files after workflow completion
+            cleanup_timestamped_configs()
+            
             # Exit with error if the workflow failed
             if result["status"] != "success":
                 sys.exit(1)
@@ -217,6 +270,8 @@ def run_cli():
             logger.error(f"\nError during workflow execution with config file: {str(e)}")
             if args.verbose:
                 logger.exception("Full traceback:")
+            # Still try to cleanup even if workflow failed
+            cleanup_timestamped_configs()
             sys.exit(1)
         
         return
@@ -265,14 +320,13 @@ def run_cli():
         "initial_capital": args.initial_capital,
         "commission": args.commission,
         "data_dir": args.data_dir,
-        "param_file": args.param_file
+        "param_file": args.param_file,
+        "force_download": args.force_download
     }
     
     # Add workflow-specific parameters based on workflow type
     if args.workflow == "simple":
-        workflow_params.update({
-            "plot": args.plot
-        })
+        pass  # No additional parameters needed for simple workflow
     elif args.workflow == "optimization":
         workflow_params.update({
             "n_trials": args.n_trials,
@@ -287,7 +341,6 @@ def run_cli():
             "n_simulations": args.n_simulations,
             "keep_permuted_data": args.keep_permuted_data,
             "plot": args.plot,  # Monte Carlo also supports plotting
-            "enhanced_plots": args.enhanced_plots
         })
     elif args.workflow == "walkforward":
         workflow_params.update({
@@ -298,7 +351,6 @@ def run_cli():
             "reoptimize": args.reoptimize,
             "reoptimization_threshold": args.reoptimization_threshold,
             "plot": args.plot,  # Respect the user's plot setting
-            "enhanced_plots": args.enhanced_plots if hasattr(args, 'enhanced_plots') else False  # Respect user's enhanced_plots setting
         })
     elif args.workflow == "complete":
         # For complete workflow, include all applicable parameters
@@ -308,7 +360,6 @@ def run_cli():
             "n_simulations": args.n_simulations,
             "keep_permuted_data": args.keep_permuted_data,
             "plot": args.plot,
-            "enhanced_plots": args.enhanced_plots,
             "window_size": args.window_size,
             "step_size": args.step_size,
             "reoptimize": args.reoptimize,
@@ -365,6 +416,9 @@ def run_cli():
             else:
                 logger.error(f"Cannot find valid output directory for summary file")
         
+        # Cleanup timestamped config files after workflow completion
+        cleanup_timestamped_configs()
+        
         # Exit with error if the workflow failed
         if result["status"] != "success":
             sys.exit(1)
@@ -373,6 +427,8 @@ def run_cli():
         logger.error(f"\nError during workflow execution: {str(e)}")
         if args.verbose:
             logger.exception("Full traceback:")
+        # Still try to cleanup even if workflow failed
+        cleanup_timestamped_configs()
         sys.exit(1)
     
     # Reset logging level if it was changed

@@ -8,15 +8,8 @@ backtesting workflow with minimal configuration.
 """
 
 import os
-import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
-
-# Add parent directory to path to enable importing
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
 
 from engine.run_backtest import run_backtest
 from utils.ensure_directories import ensure_output_directory
@@ -32,8 +25,7 @@ def run_simple_workflow(
     commission: float = 0.001,
     output_dir: Optional[str] = None,
     data_dir: str = "input",
-    verbose: bool = False,
-    plot: bool = False
+    verbose: bool = False
 ) -> Dict[str, Any]:
     """
     Run a complete backtesting workflow with minimal configuration.
@@ -49,7 +41,6 @@ def run_simple_workflow(
         output_dir: Custom output directory (created if not specified)
         data_dir: Directory containing input data
         verbose: Whether to print detailed output
-        plot: Whether to generate plots of backtest results
         
     Returns:
         Dictionary containing backtest results
@@ -81,8 +72,7 @@ def run_simple_workflow(
         commission=commission,
         output_dir=output_dir,
         data_dir=data_dir,
-        verbose=verbose,
-        plot=plot
+        verbose=verbose
     )
     
     if verbose:
@@ -108,7 +98,6 @@ if __name__ == "__main__":
     parser.add_argument("--commission", type=float, default=0.001, help="Commission rate")
     parser.add_argument("--output-dir", help="Output directory")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--plot", action="store_true", help="Generate plots of backtest results")
     
     args = parser.parse_args()
     
@@ -121,6 +110,5 @@ if __name__ == "__main__":
         initial_capital=args.initial_capital,
         commission=args.commission,
         output_dir=args.output_dir,
-        verbose=args.verbose,
-        plot=args.plot
+        verbose=args.verbose
     ) 

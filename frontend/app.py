@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file
 import pandas as pd
+import logging
 
 try:
     from dotenv import load_dotenv
@@ -24,33 +25,99 @@ except ImportError:
 
 # Add the trading-strategy-backtester to the path
 # Support both Docker and local development paths
-project_root = os.getenv(
-    'BACKTESTER_ROOT',
-    '/home/pyzron02/trading-strategy-backtester')
+# First, try to detect the correct path automatically
+current_script_dir = os.path.dirname(os.path.abspath(__file__))
+auto_detected_root = os.path.dirname(current_script_dir)
 
-# In Docker environment, the backtester will be mounted at
-# /trading-strategy-backtester
-if os.path.exists(
-        '/trading-strategy-backtester') and not os.path.exists(project_root):
-    project_root = '/trading-strategy-backtester'
-    print(f"Using Docker project root: {project_root}")
+# Use environment variable only if it points to a valid directory
+env_root = os.getenv('BACKTESTER_ROOT')
+if env_root and os.path.exists(os.path.join(env_root, 'src', 'strategies')):
+    project_root = env_root
+elif os.path.exists(os.path.join(auto_detected_root, 'src', 'strategies')):
+    project_root = auto_detected_root
+else:
+    # Fallback to the local development path
+    project_root = '/home/pyzron02/trading-strategy-backtester'
 
-sys.path.append(project_root)
-sys.path.append(os.path.join(project_root, 'src'))
+# Additional check for Docker environment paths if auto-detection failed
+if not os.path.exists(os.path.join(project_root, 'src', 'strategies')):
+    docker_paths = ['/app/trading-strategy-backtester', '/trading-strategy-backtester', '/app']
+    for docker_path in docker_paths:
+        if os.path.exists(os.path.join(docker_path, 'src', 'strategies')):
+            project_root = docker_path
+            print(f"Found Docker project root: {project_root}")
+            break
 
-# Import the registry directly from its file to avoid module resolution issues
-try:
-    from src.strategies.registry import get_registered_strategies
-except ImportError:
+print(f"Using project root: {project_root}")
+
+# Project is installed as an editable package - no sys.path manipulation needed
+
+# Reference directories for file operations
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+
+# Import the registry - try multiple paths to handle different environments
+imported_successfully = False
+get_registered_strategies = None
+
+# Try importing from various possible paths
+import_attempts = [
+    ("src.strategies.registry", "src.strategies.registry"),
+    ("strategies.registry", "strategies.registry"),
+    ("src.strategies", "src.strategies.registry (direct file)"),
+]
+
+for module_path, description in import_attempts:
+    try:
+        if module_path == "src.strategies.registry":
+            from src.strategies.registry import get_registered_strategies
+        elif module_path == "strategies.registry":
+            from strategies.registry import get_registered_strategies
+        elif module_path == "src.strategies":
+            # Try importing from the file directly
+            import importlib.util
+            registry_file = os.path.join(project_root, 'src', 'strategies', 'registry.py')
+            if os.path.exists(registry_file):
+                spec = importlib.util.spec_from_file_location("registry", registry_file)
+                registry_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(registry_module)
+                get_registered_strategies = registry_module.get_registered_strategies
+            else:
+                continue
+        
+        imported_successfully = True
+        print(f"Successfully imported strategies from {description}")
+        break
+    except (ImportError, Exception) as e:
+        print(f"Failed to import from {description}: {e}")
+        continue
+
+# Final fallback if all imports failed
+if not imported_successfully or get_registered_strategies is None:
     def get_registered_strategies():
-        return [{"name": "MACrossover", "version": "1.0"},
-                {"name": "AuctionMarket", "version": "1.0"},
-                {"name": "MultiPosition", "version": "1.0"}]
+        return [
+            {"name": "SimpleStock", "version": "1.0.1"},
+            {"name": "MultiPosition", "version": "1.0.1"},
+            {"name": "AuctionMarket", "version": "1.0.1"},
+            {"name": "MACrossover", "version": "1.0.0"},
+            {"name": "PairsTrading", "version": "1.0.0"}
+        ]
+    print("Using fallback strategy list")
+
+# Log the loaded strategies
+if imported_successfully:
+    strategies = get_registered_strategies()
+    print(f"Loaded {len(strategies)} strategies from registry:")
+    for s in strategies:
+        print(f"  - {s['name']} (v{s['version']})")
 
 app = Flask(__name__)
 app.secret_key = os.getenv(
     'SECRET_KEY',
     'trading_strategy_backtester_secret_key')
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 
 # Default parameters from environment variables
 DEFAULT_START_DATE = os.getenv('DEFAULT_START_DATE', '2020-01-01')
@@ -65,6 +132,58 @@ app.template_folder = os.path.join(
     os.path.dirname(
         os.path.abspath(__file__)),
     'templates')
+
+
+def cleanup_timestamped_parameter_files():
+    """
+    Delete timestamped config files from parameter_grids and parameters folders.
+    Only deletes files with timestamp pattern in the filename.
+    """
+    try:
+        # Define the directories to clean
+        param_grids_dir = os.path.join(project_root, "input", "parameter_grids")
+        params_dir = os.path.join(project_root, "input", "parameters")
+        
+        # Pattern to match timestamped files (format: name_YYYYMMDD_HHMMSS.json)
+        timestamp_pattern = re.compile(r'.*_\d{8}_\d{6}\.json$')
+        
+        deleted_files = []
+        
+        # Clean parameter_grids directory
+        if os.path.exists(param_grids_dir):
+            for filename in os.listdir(param_grids_dir):
+                if timestamp_pattern.match(filename):
+                    file_path = os.path.join(param_grids_dir, filename)
+                    try:
+                        os.remove(file_path)
+                        deleted_files.append(file_path)
+                        logging.debug(f"Deleted timestamped file: {file_path}")
+                    except Exception as e:
+                        logging.warning(f"Failed to delete {file_path}: {str(e)}")
+        
+        # Clean parameters directory
+        if os.path.exists(params_dir):
+            for filename in os.listdir(params_dir):
+                if timestamp_pattern.match(filename):
+                    file_path = os.path.join(params_dir, filename)
+                    try:
+                        os.remove(file_path)
+                        deleted_files.append(file_path)
+                        logging.debug(f"Deleted timestamped file: {file_path}")
+                    except Exception as e:
+                        logging.warning(f"Failed to delete {file_path}: {str(e)}")
+        
+        if deleted_files:
+            logging.info(f"Cleaned up {len(deleted_files)} timestamped parameter files")
+            print(f"Cleaned up {len(deleted_files)} timestamped parameter files")
+        else:
+            logging.debug("No timestamped parameter files found to clean up")
+            
+        return deleted_files
+        
+    except Exception as e:
+        logging.error(f"Error during cleanup of timestamped parameter files: {str(e)}")
+        return []
 
 
 def get_workflow_type_from_folder(folder_name):
@@ -278,6 +397,97 @@ def read_summary_files(folder_path):
     return summaries
 
 
+def get_equity_curve_plots(output_path):
+    """
+    Get ticker-specific plot files from the output folder's ticker_plots directory.
+    These plots are generated by run_backtest.py and include candlestick charts with trades.
+
+    Args:
+        output_path: Path to the output folder
+
+    Returns:
+        list: List of dictionaries with plot info (name, path, type [html/png])
+    """
+    plots = []
+    ticker_plots_dir = os.path.join(output_path, 'ticker_plots')
+    
+    # First check the main ticker_plots directory
+    if os.path.exists(ticker_plots_dir) and os.path.isdir(ticker_plots_dir):
+        # First look for HTML plots (interactive)
+        html_files = [f for f in os.listdir(ticker_plots_dir) if f.endswith('.html')]
+        for file in html_files:
+            plots.append({
+                'name': file,
+                'path': os.path.join(ticker_plots_dir, file),
+                'type': 'html',
+                'ticker': file.split('_')[0]  # Extract ticker symbol from filename
+            })
+            print(f"Found HTML ticker plot: {file}")
+        
+        # If no HTML plots, look for static image plots
+        if not plots:
+            image_files = [f for f in os.listdir(ticker_plots_dir) 
+                          if f.endswith(('.png', '.jpg', '.jpeg'))]
+            for file in image_files:
+                plots.append({
+                    'name': file,
+                    'path': os.path.join(ticker_plots_dir, file),
+                    'type': 'image',
+                    'ticker': file.split('_')[0]  # Extract ticker symbol from filename
+                })
+                print(f"Found image ticker plot: {file}")
+    
+    # If no plots found in main directory, check subdirectories
+    if not plots:
+        # For complex workflows, ticker plots might be in subdirectories
+        # Explicitly prioritize in_sample over out_sample for walk-forward analysis
+        priority_subdirs = ['in_sample']  # Always check in_sample first
+        other_subdirs = ['01_simple_backtest', '02_optimization', '03_walkforward', 
+                        '04_monte_carlo', '05_optimized_backtest', 'out_sample']
+        subdirs_to_check = priority_subdirs + other_subdirs
+        
+        for subdir in subdirs_to_check:
+            subdir_path = os.path.join(output_path, subdir)
+            if os.path.exists(subdir_path):
+                ticker_plots_subdir = os.path.join(subdir_path, 'ticker_plots')
+                if os.path.exists(ticker_plots_subdir) and os.path.isdir(ticker_plots_subdir):
+                    # First look for HTML plots
+                    html_files = [f for f in os.listdir(ticker_plots_subdir) if f.endswith('.html')]
+                    for file in html_files:
+                        plots.append({
+                            'name': file,
+                            'path': os.path.join(ticker_plots_subdir, file),
+                            'type': 'html',
+                            'ticker': file.split('_')[0]  # Extract ticker symbol from filename
+                        })
+                        print(f"Found HTML ticker plot in {subdir}: {file}")
+                    
+                    # If we found HTML plots, use them and stop searching
+                    if plots:
+                        print(f"Using ticker plots from {subdir} directory (prioritizing in_sample over out_sample)")
+                        break
+                    
+                    # Otherwise look for image plots
+                    image_files = [f for f in os.listdir(ticker_plots_subdir) 
+                                  if f.endswith(('.png', '.jpg', '.jpeg'))]
+                    for file in image_files:
+                        plots.append({
+                            'name': file,
+                            'path': os.path.join(ticker_plots_subdir, file),
+                            'type': 'image',
+                            'ticker': file.split('_')[0]  # Extract ticker symbol from filename
+                        })
+                        print(f"Found image ticker plot in {subdir}: {file}")
+                    
+                    # If we found any plots, stop searching
+                    if plots:
+                        print(f"Using ticker plots from {subdir} directory (prioritizing in_sample over out_sample)")
+                        break
+    
+    # Sort plots by ticker symbol for better organization
+    plots.sort(key=lambda x: x['ticker'])
+    return plots
+
 def get_equity_curve(output_path):
     """
     Get equity curve data from output folder, prioritizing by workflow type.
@@ -333,8 +543,12 @@ def get_equity_curve(output_path):
                     # Format dates for display
                     dates = df['Date'].dt.strftime('%Y-%m-%d').tolist()
                 else:
-                    # Use index as dates if no Date column
-                    dates = [str(i) for i in range(len(df))]
+                    # If no Date column, create sequential dates starting from default start date
+                    # This prevents the chart from starting at 1970
+                    start_date = pd.to_datetime(DEFAULT_START_DATE)  # Use configured default start date
+                    dates = [(start_date + pd.Timedelta(days=i)).strftime('%Y-%m-%d') 
+                            for i in range(len(df))]
+                    print(f"Warning: No Date column found in {equity_curve_path}, using sequential dates starting from {start_date.strftime('%Y-%m-%d')}")
 
                 # Get equity values
                 if 'Value' in df.columns:
@@ -414,8 +628,12 @@ def get_equity_curve(output_path):
                     # Format dates for display
                     dates = df['Date'].dt.strftime('%Y-%m-%d').tolist()
                 else:
-                    # Use index as dates if no Date column
-                    dates = [str(i) for i in range(len(df))]
+                    # If no Date column, create sequential dates starting from default start date
+                    # This prevents the chart from starting at 1970
+                    start_date = pd.to_datetime(DEFAULT_START_DATE)  # Use configured default start date
+                    dates = [(start_date + pd.Timedelta(days=i)).strftime('%Y-%m-%d') 
+                            for i in range(len(df))]
+                    print(f"Warning: No Date column found in {equity_curve_path}, using sequential dates starting from {start_date.strftime('%Y-%m-%d')}")
 
                 # Get equity values
                 if 'Value' in df.columns:
@@ -583,7 +801,9 @@ def get_monte_carlo_charts(folder_path):
             x in filename.lower() for x in [
                 'monte_carlo',
                 'return_distribution',
-                'dashboard'])
+                'drawdown_analysis',
+                'dashboard',
+                'simulation_paths'])
 
     # Check main directory first
     for file in os.listdir(folder_path):
@@ -598,7 +818,7 @@ def get_monte_carlo_charts(folder_path):
                 })
 
     # Look for specific directory names that might contain charts
-    chart_dirs = ['03_monte_carlo', 'monte_carlo']
+    chart_dirs = ['04_monte_carlo', '03_monte_carlo', 'monte_carlo']
     for chart_dir in chart_dirs:
         subdir_path = os.path.join(folder_path, chart_dir)
         if os.path.exists(subdir_path) and os.path.isdir(subdir_path):
@@ -681,6 +901,23 @@ def get_monte_carlo_charts(folder_path):
     for chart in prioritized_charts:
         print(f"Selected chart: {chart['name']} ({chart['type']})")
 
+    # Sort Monte Carlo charts in a logical order
+    def monte_carlo_sort_key(chart):
+        name = chart['name'].lower()
+        # Define priority order for Monte Carlo visualizations
+        if 'dashboard' in name:
+            return (0, name)  # Dashboard first
+        elif 'simulation_paths' in name or 'monte_carlo_paths' in name:
+            return (1, name)  # Simulation paths second
+        elif 'return_distribution' in name:
+            return (2, name)  # Return distribution third
+        elif 'drawdown_analysis' in name:
+            return (3, name)  # Drawdown analysis fourth
+        else:
+            return (9, name)  # Everything else at the end
+    
+    prioritized_charts.sort(key=monte_carlo_sort_key)
+    
     return prioritized_charts
 
 
@@ -893,13 +1130,24 @@ def get_walk_forward_results(folder_path):
                         'comparison',
                         'combined',
                         'metrics']) and file.endswith('.csv'):
+                    
+                    # Skip the unformatted performance_comparison.csv file
+                    if file.lower() == 'performance_comparison.csv':
+                        continue
+                    
                     comparison_path = os.path.join(location, file)
                     try:
                         # Read CSV into pandas DataFrame
                         df = pd.read_csv(comparison_path)
+                        
+                        # Rename performance_comparison_formatted.csv to just "Performance Comparison"
+                        display_name = file
+                        if file.lower() == 'performance_comparison_formatted.csv':
+                            display_name = 'performance_comparison.csv'
+                        
                         results['comparison_files'].append({
                             'path': comparison_path,
-                            'name': file,
+                            'name': display_name,
                             'data': df.to_dict(orient='records')
                         })
                         print(f"Found comparison file: {file}")
@@ -1131,12 +1379,16 @@ def get_walk_forward_results(folder_path):
             for file in os.listdir(base_dir):
                 file_path = os.path.join(base_dir, file)
 
-                # Check if it's a visualization file
-                if os.path.isfile(file_path) and file.endswith(('.html', '.png', '.jpg', '.jpeg')) and (
-                    'equity' in file.lower() or 'chart' in file.lower() or
-                    'plot' in file.lower() or 'curve' in file.lower() or
-                    'performance' in file.lower() or 'comparison' in file.lower() or
-                        'visualization' in file.lower() or 'dashboard' in file.lower()):
+                # Check if it's a walk-forward specific visualization file
+                # Exclude general backtrader plots and ticker plots that belong in the main equity tab
+                # Also exclude standalone drawdowns and monthly returns files that are not comparisons
+                if (os.path.isfile(file_path) and file.endswith(('.html', '.png', '.jpg', '.jpeg')) and 
+                    ('walkforward' in file.lower() or 'walk_forward' in file.lower() or 
+                     'walk-forward' in file.lower() or 
+                     ('comparison' in file.lower() and ('drawdowns' in file.lower() or 'monthly_returns' in file.lower()))) and
+                    not ('backtrader_plot' in file.lower() or 'ticker_plots' in file_path.lower()) and
+                    not (file.lower().endswith('_drawdowns.html') and 'comparison' not in file.lower()) and
+                    not (file.lower().endswith('_monthly_returns.html') and 'comparison' not in file.lower())):
 
                     found_files.append({
                         'path': file_path,
@@ -1662,9 +1914,36 @@ def view_result(folder_name):
         else:
             print(f"No equity curve data found for {folder_name}")
 
-        # Find equity curve plots generated by workflows with --plot flag
-        equity_plots = get_equity_curve_plots(
-            folder_path) if 'get_equity_curve_plots' in globals() else []
+        # Find equity plots generated by workflows with --plot flag
+        equity_plots = []
+        try:
+            # Try to find workflow-generated equity plots first
+            equity_plot_files = glob.glob(os.path.join(folder_path, '**', 'equity_*.png'), recursive=True)
+            equity_plot_files.extend(glob.glob(os.path.join(folder_path, '**', 'equity_*.html'), recursive=True))
+            
+            for plot_path in equity_plot_files:
+                plot_name = os.path.basename(plot_path)
+                plot_type = 'html' if plot_path.endswith('.html') else 'image'
+                
+                equity_plots.append({
+                    'name': plot_name,
+                    'path': plot_path,
+                    'type': plot_type
+                })
+                print(f"Found equity plot: {plot_name}")
+        except Exception as e:
+            print(f"Error finding equity plots: {str(e)}")
+        
+        # Find ticker-specific plots generated by run_backtest.py
+        ticker_plots = get_equity_curve_plots(folder_path)
+        
+        # Debug: Print found ticker plots
+        if ticker_plots:
+            print(f"Found {len(ticker_plots)} ticker plots for {folder_name}:")
+            for plot in ticker_plots:
+                print(f"  - {plot['ticker']} ({plot['type']}) at {plot['path']}")
+        else:
+            print(f"No ticker plots found for {folder_name}")
 
         trade_log = get_trade_log(folder_path)
         optimization_results = get_optimization_results(folder_path)
@@ -1756,6 +2035,7 @@ def view_result(folder_name):
             summaries=summaries,
             equity_curve=equity_curve,
             equity_plots=equity_plots if 'equity_plots' in locals() else [],
+            ticker_plots=ticker_plots if 'ticker_plots' in locals() else [],
             trade_log=trade_log,
             optimization_results=optimization_results if current_tabs['optimization'] else None,
             monte_carlo_charts=monte_carlo_charts if current_tabs['monte_carlo'] else None,
@@ -1813,11 +2093,6 @@ def run_backtest():
             "tickers": tickers,
             "initial_capital": initial_capital,
             "commission": 0.001,
-            "plot": False,
-            "enhanced_plots": True if workflow_type in [
-                "monte_carlo",
-                "walk_forward",
-                "complete"] else False,
             "verbose": request.form.get('verbose') == 'on'},
         "strategies": {
             strategy: {}}}
@@ -1964,12 +2239,22 @@ def run_backtest():
         }
 
     if workflow_type in ['monte_carlo', 'complete']:
+        # Get selected plot types from checkboxes
+        plot_types = request.form.getlist('monte_carlo_plot_types')
+        if not plot_types:
+            # Default plot types if none selected
+            plot_types = ['dashboard', 'simulation_paths', 'return_distribution', 'drawdown_analysis']
+        
         config["strategies"][strategy]["monte_carlo"] = {
-            "n_simulations": int(
-                request.form.get(
-                    'n_simulations',
-                    DEFAULT_NUM_SIMULATIONS)),
-            "keep_permuted_data": request.form.get('keep_permuted_data') == 'on'}
+            "n_simulations": int(request.form.get('n_simulations', DEFAULT_NUM_SIMULATIONS)),
+            "keep_permuted_data": request.form.get('keep_permuted_data') == 'on',
+            "monte_carlo_plot_types": plot_types,
+            "bootstrap_pct": float(request.form.get('bootstrap_pct', 0.5)),
+            "confidence_level": float(request.form.get('confidence_level', 0.95)),
+            "bootstrap_method": request.form.get('bootstrap_method', 'standard'),
+            "block_size": int(request.form.get('block_size', 21)),
+            "random_seed": int(request.form.get('random_seed', 42))
+        }
 
     if workflow_type in ['walk_forward', 'complete']:
         # Add walk forward specific parameters
@@ -2016,10 +2301,11 @@ def run_backtest():
                 }
 
     # Create config directory if it doesn't exist
-    config_dir = os.path.join(project_root, 'input', 'workflow_configs')
+    # Use parameters directory so files get cleaned up automatically
+    config_dir = os.path.join(project_root, 'input', 'parameters')
     os.makedirs(config_dir, exist_ok=True)
 
-    # Write config to file
+    # Write config to file (will be cleaned up after workflow completes)
     config_file = os.path.join(config_dir,
                                f"{strategy}_{workflow_type}_{timestamp}.json")
     with open(config_file, 'w') as f:
@@ -2033,13 +2319,19 @@ def run_backtest():
     ]
 
     try:
+        # Set up environment variables to ensure correct paths
+        env = os.environ.copy()
+        env['BASE_DIR'] = project_root
+        env['PYTHONPATH'] = f"{project_root}:{os.path.join(project_root, 'src')}"
+        
         # Create a subprocess to run the backtest
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
-            bufsize=1  # Line buffered
+            bufsize=1,  # Line buffered
+            env=env
         )
 
         # Flash message with command details
@@ -2076,6 +2368,9 @@ def run_backtest():
                     print(f"Cleaned up temporary config file: {config_file}")
             except Exception as e:
                 print(f"Error cleaning up config file: {str(e)}")
+            
+            # Cleanup timestamped parameter files
+            cleanup_timestamped_parameter_files()
 
         cleanup_thread = threading.Thread(target=cleanup_process)
         cleanup_thread.daemon = True

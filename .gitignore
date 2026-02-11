@@ -65,6 +65,7 @@ venv.bak/
 *.log
 logs/
 output/
+*.backup
 backtest_output.txt
 params.json
 rc.*
@@ -72,6 +73,8 @@ rc.*
 # Runtime data
 cache/
 src/output/
+frontend/output/
+frontend/temp/
 
 # Input csv
 input/*.csv

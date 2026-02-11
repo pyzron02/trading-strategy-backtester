@@ -8,10 +8,8 @@ import sys
 import json
 from datetime import datetime
 
-# Add the trading-strategy-backtester to the path
+# Project root for path references (not for sys.path - installed as editable package)
 project_root = '/home/pyzron02/trading-strategy-backtester'
-sys.path.append(project_root)
-sys.path.append(os.path.join(project_root, 'src'))
 
 # Test imports
 from src.strategies.registry import get_registered_strategies, get_strategy_class

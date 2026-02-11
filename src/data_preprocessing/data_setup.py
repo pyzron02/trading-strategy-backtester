@@ -1,11 +1,8 @@
 import pandas as pd
 import yfinance as yf
 import os
-import sys
 from pathlib import Path
 
-# Add the parent directory to the path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.path_manager import path_manager, get_input_dir
 
 def fetch_stock_data(tickers, start_date, end_date, output_path='input/stock_data.csv', force_refresh=False):

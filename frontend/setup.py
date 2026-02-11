@@ -26,12 +26,16 @@ def check_dependencies():
 
 def create_directories():
     """Create required directories."""
+    # Resolve paths relative to this file's location
+    frontend_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(frontend_dir)
+
     dirs = [
-        '/home/pyzron02/frontend/temp',
-        '/home/pyzron02/frontend/static',
-        '/home/pyzron02/trading-strategy-backtester/output'
+        os.path.join(frontend_dir, 'temp'),
+        os.path.join(frontend_dir, 'static'),
+        os.path.join(project_root, 'output')
     ]
-    
+
     for directory in dirs:
         if not os.path.exists(directory):
             try:
@@ -42,11 +46,12 @@ def create_directories():
 
 def check_backtester():
     """Check if the backtester codebase is accessible."""
-    backtester_dir = '/home/pyzron02/trading-strategy-backtester'
-    if not os.path.exists(backtester_dir):
+    frontend_dir = os.path.dirname(os.path.abspath(__file__))
+    backtester_dir = os.path.dirname(frontend_dir)
+    if not os.path.exists(os.path.join(backtester_dir, 'src')):
         print(f"Error: Trading Strategy Backtester not found at {backtester_dir}")
         return False
-    
+
     # Check for critical files
     critical_files = [
         os.path.join(backtester_dir, 'src', 'workflows', 'unified_workflow.py'),
