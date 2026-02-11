@@ -5,27 +5,18 @@ Unified workflow for backtest, optimization, and walk-forward validation.
 Main entry point for the workflow system.
 """
 import os
-import sys
 import json
 import datetime
 import argparse
 from typing import Dict, Any, Optional, List, Union
 import uuid
 
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
 # Import workflow modules
 from workflows.workflow_utils import (
     logger, logging_system, find_strategy_param_file,
     check_logs_for_errors, print_error_report
 )
+from utils.path_manager import path_manager
 from workflows.simple_workflow import run_simple_workflow, ensure_data_available
 from workflows.optimization_workflow import run_optimization_workflow
 from workflows.monte_carlo_workflow import run_monte_carlo_workflow
@@ -54,8 +45,12 @@ def is_parameter_grid(param_file: str) -> bool:
         with open(param_file, 'r') as f:
             params = json.load(f)
         
-        # Check if any parameter is a list
-        return any(isinstance(value, list) for value in params.values())
+        # Check if any parameter is a numeric list (parameter grid)
+        return any(
+            isinstance(value, list) and value and
+            all(isinstance(v, (int, float)) for v in value)
+            for value in params.values()
+        )
     except Exception as e:
         logger.warning(f"Error checking parameter file {param_file}: {str(e)}")
         
@@ -170,11 +165,12 @@ def run_unified_workflow(workflow_type, **kwargs):
     
     # Define workflow-specific parameters
     workflow_specific_params = {
-        "simple": ['plot'],
-        "optimization": ['n_trials', 'optimization_metric', 'max_combinations'],
-        "monte_carlo": ['n_simulations', 'keep_permuted_data', 'enhanced_plots', 'plot'],
+        "simple": [],
+        "optimization": ['n_trials', 'optimization_metric', 'max_combinations', 'n_jobs', 'parallel_backend', 'batch_size'],
+        "monte_carlo": ['n_simulations', 'keep_permuted_data', 'monte_carlo_plot_types', 
+                        'confidence_level', 'bootstrap_pct', 'random_seed'],
         "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric', 
-                        'reoptimize', 'reoptimization_threshold', 'enhanced_plots', 'plot'],
+                        'reoptimize', 'reoptimization_threshold'],
         "complete": []  # Complete workflow can use all parameters
     }
     
@@ -182,8 +178,9 @@ def run_unified_workflow(workflow_type, **kwargs):
     if workflow_type != "complete":  # Complete workflow accepts all parameters
         allowed_params = workflow_specific_params.get(workflow_type, [])
         # Add common parameters that are allowed for all workflows
-        common_params = ['strategy_name', 'strategy', 'tickers', 'start_date', 'end_date', 
-                        'output_dir', 'verbose', 'initial_capital', 'commission', 
+        common_params = ['strategy_name', 'strategy', 'tickers', 'start_date', 'end_date',
+                        'output_dir', 'verbose', 'initial_capital', 'commission',
+                        'commission_type',
                         'param_file', 'data_dir', '_temp_files_to_cleanup', '_is_nested_workflow']
         
         allowed_params.extend(common_params)
@@ -211,10 +208,6 @@ def run_unified_workflow(workflow_type, **kwargs):
         elif workflow_type == "complete":
             result = run_complete_workflow(**filtered_kwargs)
         elif workflow_type == "walkforward":
-            # Ensure we're passing the plot parameter correctly
-            if 'plot' not in filtered_kwargs:
-                # Default to False if not provided
-                filtered_kwargs['plot'] = False
             result = run_walkforward_workflow(**filtered_kwargs)
         else:
             logger.error(f"Unknown workflow type: {workflow_type}")
@@ -320,7 +313,7 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     # Base output directory - will be used as parent for strategy-specific dirs
     base_output_dir = common_params.get('output_dir')
     if not base_output_dir:
-        base_output_dir = os.path.join(project_root, "output")
+        base_output_dir = str(path_manager.output_dir)
         os.makedirs(base_output_dir, exist_ok=True)
     
     # Initialize temporary files list to track files that need cleanup
@@ -330,7 +323,8 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     workflow_specific_params = {
         "simple": ['plot'],
         "optimization": ['n_trials', 'optimization_metric', 'max_combinations'],
-        "monte_carlo": ['n_simulations', 'keep_permuted_data', 'enhanced_plots'],
+        "monte_carlo": ['n_simulations', 'keep_permuted_data', 'monte_carlo_plot_types', 
+                        'confidence_level', 'bootstrap_pct', 'random_seed', 'bootstrap_method', 'block_size'],
         "walkforward": ['window_size', 'step_size', 'n_trials', 'optimization_metric', 'reoptimize', 'reoptimization_threshold'],
         "complete": []  # Complete workflow can use all parameters
     }
@@ -358,7 +352,7 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         if not param_file and 'parameters' in strategy_config:
             # Create a temporary parameter file from inline parameters
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            param_dir = os.path.join(project_root, "input", "parameters")
+            param_dir = str(path_manager.parameters_dir)
             os.makedirs(param_dir, exist_ok=True)
             param_file = os.path.join(param_dir, f"{strategy_name.lower()}_params_{timestamp}.json")
             
@@ -380,7 +374,7 @@ def process_config(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         if not grid_file and 'parameter_grid' in strategy_config:
             # Create a temporary grid file from inline parameters
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            grid_dir = os.path.join(project_root, "input", "parameter_grids")
+            grid_dir = str(path_manager.input_dir / "parameter_grids")
             os.makedirs(grid_dir, exist_ok=True)
             grid_file = os.path.join(grid_dir, f"{strategy_name.lower()}_grid_{timestamp}.json")
             

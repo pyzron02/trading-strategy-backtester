@@ -4,7 +4,6 @@
 Utility functions for the unified workflow.
 """
 import os
-import sys
 import json
 import pandas as pd
 import numpy as np
@@ -15,8 +14,6 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 import re
 from pathlib import Path
 
-# Add the parent directory to the path so we can import from engine
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.path_manager import path_manager
 
 # Import the logging system
@@ -429,7 +426,13 @@ STRATEGY_PARAMETER_MAPS = {
         'risk_percent': 'risk_percent',   # Risk percentage per trade
         'use_atr_sizing': 'use_atr_sizing', # Use ATR for position sizing
         'atr_period': 'atr_period',       # ATR calculation period
-    }
+    },
+    'LimitOrder': {
+        'signal_file': 'signal_file',
+        'stake_amounts': 'stake_amounts',
+        'ticker_priority': 'ticker_priority',
+        'transaction_cost': 'transaction_cost',
+    },
 }
 
 def adapt_strategy_parameters(strategy_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
@@ -807,4 +810,138 @@ def print_error_report(error_logs, output_file=None):
         except Exception as e:
             logger.error(f"Failed to write error report to {output_file}: {e}")
     
-    return report_text 
+    return report_text
+
+
+# ====== Shared Workflow Setup / Teardown ======
+
+def workflow_setup(config, workflow_type):
+    """Common setup for all workflow types.
+
+    Normalizes the strategy name and tickers, creates the output directory,
+    sets up logging, and logs the start of the workflow.
+
+    Args:
+        config: A WorkflowConfig instance (or any object with the expected attrs).
+        workflow_type: Short name of the workflow (e.g. "simple", "optimization").
+
+    Returns:
+        The (possibly mutated) config object.
+
+    Raises:
+        ValueError: If strategy_name is not set.
+    """
+    config.normalize_tickers()
+
+    if config.strategy_name is None:
+        raise ValueError("Either strategy or strategy_name must be provided")
+
+    # Ensure output directory exists
+    config.ensure_output_dir(workflow_type)
+
+    # Setup logging for this run
+    setup_output_dir_logging(config.output_dir, config.strategy_name, workflow_type)
+
+    # Set verbose logging if requested
+    if config.verbose:
+        logging_system.set_level('DEBUG', 'workflows')
+
+    # Log start
+    print_header(f"{workflow_type.upper()} WORKFLOW")
+    print_workflow_log(
+        f"{workflow_type.capitalize()} Workflow",
+        config.strategy_name,
+        config.tickers,
+        config.start_date,
+        config.end_date,
+        status="STARTED",
+        additional_info={"output_dir": config.output_dir},
+    )
+
+    # Initialize progress file if specified
+    if config.progress_file:
+        with open(config.progress_file, 'w') as f:
+            json.dump({
+                "progress": 0,
+                "status": f"Starting {workflow_type} workflow",
+                "current_step": "Initializing",
+                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, f, indent=4)
+
+    return config
+
+
+def workflow_teardown(config, workflow_type, result=None, error=None,
+                      additional_info=None):
+    """Common teardown for all workflow types.
+
+    Logs completion (or failure), generates an error report if appropriate,
+    cleans up temporary files, and resets verbose logging.
+
+    Args:
+        config: The WorkflowConfig used for this run.
+        workflow_type: Short name of the workflow.
+        result: The result dict produced by the workflow (optional).
+        error: An exception if the workflow failed, else None.
+        additional_info: Extra info to include in the completion log.
+
+    Returns:
+        dict: Log error counts ``{"count": N, "files": N}``.
+    """
+    status = "FAILED" if error else "COMPLETED"
+
+    info = {"output_dir": config.output_dir}
+    if additional_info:
+        info.update(additional_info)
+
+    # Log completion
+    print_workflow_log(
+        f"{workflow_type.capitalize()} Workflow",
+        config.strategy_name,
+        config.tickers,
+        config.start_date,
+        config.end_date,
+        status=status,
+        additional_info=info,
+    )
+
+    # Check logs for errors and write a report
+    log_errors = {"count": 0, "files": 0}
+    if config.output_dir:
+        error_logs = check_logs_for_errors(config.output_dir)
+        if error_logs:
+            report_path = os.path.join(config.output_dir, "error_report.txt")
+            print_error_report(error_logs, report_path)
+            logger.warning(
+                f"Found errors in logs. Error report saved to: {report_path}"
+            )
+            log_errors = {
+                "count": sum(len(errors) for errors in error_logs.values()),
+                "files": len(error_logs),
+            }
+        else:
+            logger.info("No errors found in logs.")
+
+    # Clean up temp files (preserve workflow_configs)
+    for temp_file in getattr(config, "_temp_files_to_cleanup", []):
+        if not os.path.exists(temp_file):
+            continue
+        if "workflow_configs" in temp_file:
+            logger.debug(f"Preserved file: {temp_file}")
+            continue
+        try:
+            os.remove(temp_file)
+            logger.info(f"Cleaned up temporary file: {temp_file}")
+        except OSError as e:
+            logger.warning(f"Error cleaning up temporary file: {e}")
+
+    # Reset verbose logging
+    if config.verbose:
+        logging_system.set_level('INFO', 'workflows')
+
+    # Remove output logging handlers
+    remove_output_dir_logging(
+        config.output_dir, config.strategy_name, workflow_type
+    )
+
+    return log_errors

@@ -1,0 +1,21 @@
+{
+    "workflow_type": "simple",
+    "common_params": {
+        "start_date": "2020-01-01",
+        "end_date": "2023-12-29",
+        "tickers": ["NVDA"],
+        "initial_capital": 100000.0,
+        "commission": 0.99,
+        "commission_type": "fixed"
+    },
+    "strategies": {
+        "LimitOrder": {
+            "parameters": {
+                "signal_file": "input/signals/limit_order_signals.csv",
+                "stake_amounts": {"NVDA": 4000},
+                "ticker_priority": ["NVDA"],
+                "transaction_cost": 0.99
+            }
+        }
+    }
+}

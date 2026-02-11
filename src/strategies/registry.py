@@ -69,8 +69,8 @@ def get_registered_strategies():
 
 # Auto-register strategies
 try:
-    from strategies.simplestock import SimpleStock
-    register_strategy('SimpleStock', SimpleStock)
+    from strategies.simple_stock_strategy import SimpleStockStrategy
+    register_strategy('SimpleStock', SimpleStockStrategy)
 except ImportError:
     print("Could not import SimpleStock strategy")
 
@@ -90,15 +90,16 @@ try:
     from strategies.ma_crossover import MACrossover
     register_strategy('MACrossover', MACrossover, version="1.0.0")
 except ImportError:
-    print("Could not import MACrossover strategy") 
-    
+    print("Could not import MACrossover strategy")
+
 try:
     from strategies.pairs_trading_strategy import PairsTradingStrategy
     register_strategy('PairsTrading', PairsTradingStrategy, version="1.0.0")
 except ImportError:
-    try:
-        # Alternative import path
-        from src.strategies.pairs_trading_strategy import PairsTradingStrategy
-        register_strategy('PairsTrading', PairsTradingStrategy, version="1.0.0")
-    except ImportError:
-        print("Could not import PairsTradingStrategy strategy")
+    print("Could not import PairsTradingStrategy strategy")
+
+try:
+    from strategies.limit_order_strategy import LimitOrderStrategy
+    register_strategy('LimitOrder', LimitOrderStrategy, version="1.0.0")
+except ImportError:
+    print("Could not import LimitOrderStrategy strategy")

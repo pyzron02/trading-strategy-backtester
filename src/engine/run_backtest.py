@@ -3,7 +3,6 @@
 # run_backtest.py - Run a backtest for a strategy
 
 import os
-import sys
 import argparse
 import backtrader as bt
 import pandas as pd
@@ -12,26 +11,8 @@ import pickle
 import re
 import numpy as np
 import json
-import matplotlib.pyplot as plt
 import importlib
 
-# Plotly imports for interactive visualizations
-try:
-    import plotly.graph_objects as go
-    import plotly.express as px
-    from plotly.subplots import make_subplots
-    import plotly.io as pio
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-    print("Warning: Plotly not installed. Basic plots will use matplotlib. Install with 'pip install plotly'")
-
-# Check if kaleido is available for saving static images
-try:
-    import kaleido
-    KALEIDO_AVAILABLE = True
-except ImportError:
-    KALEIDO_AVAILABLE = False
 from multiprocessing import Pool, cpu_count
 from typing import List, Optional, Dict, Any
 # Importing necessary libraries:
@@ -44,88 +25,15 @@ from typing import List, Optional, Dict, Any
 # - re: For regular expressions
 # - numpy (np): For numerical operations
 # - json: For JSON serialization
-# - matplotlib.pyplot (plt): For plotting
 # - multiprocessing: For parallel processing
 # - typing: For type annotations
-
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
-# Adding the parent directory to the Python path
-# Ensures that modules in the parent directory can be imported
 
 from strategies import registry
 # Importing the strategy registry module which contains available trading strategies
 
-class TradeLogger(bt.Analyzer):
-    def __init__(self):
-        self.trades = []
-        print("TradeLogger analyzer initialized")
-    # Defining a TradeLogger class that inherits from backtrader's Analyzer
-    # Initialize an empty list to store trades
-
-    def start(self):
-        """Called when the analyzer is started."""
-        print("TradeLogger analyzer started")
-        
-    def stop(self):
-        """Called when the analyzer is stopped."""
-        print(f"TradeLogger analyzer stopped. Total trades logged: {len(self.trades)}")
-
-    def notify_trade(self, trade):
-        """Log both opening and closing trades."""
-        try:
-            date = bt.num2date(trade.dtopen if not trade.isclosed else trade.dtclose).strftime('%Y-%m-%d')
-            action = 'buy' if trade.size > 0 else 'sell'
-            trade_type = 'open' if not trade.isclosed else 'close'
-            trade_entry = {
-                'date': date,
-                'action': action,
-                'type': trade_type,
-                'price': trade.price,
-                'size': abs(trade.size),
-                'commission': trade.commission,
-                'pnl': trade.pnl if trade.isclosed else 0.0,  # PnL is 0 for open trades
-                'symbol': trade.data._name
-            }
-            self.trades.append(trade_entry)
-            print(f"{date} - {trade_type.capitalize()} trade logged: {trade_entry}")
-        except Exception as e:
-            print(f"Error in TradeLogger.notify_trade: {e}")
-    # Method triggered when a trade is opened or closed
-    # - Formats the trade data (date, action, price, size, etc.) into a dictionary
-    # - Appends the trade information to the trades list
-    # - Prints trade information to the console
-
-    def get_analysis(self):
-        print(f"TradeLogger.get_analysis called. Returning {len(self.trades)} trades.")
-        return self.trades
-    # Returns the collected trade information when analysis is requested
-
-# Custom JSON encoder to handle NumPy types and other non-serializable objects
-class CustomJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, (pd.Timestamp, datetime.datetime, datetime.date)):
-            return obj.isoformat()
-        elif isinstance(obj, pd.Series):
-            return obj.to_dict()
-        elif isinstance(obj, pd.DataFrame):
-            return obj.to_dict(orient='records')
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            if np.isnan(obj):
-                return "NaN"
-            elif np.isinf(obj):
-                return "Infinity" if obj > 0 else "-Infinity"
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif pd.isna(obj):
-            return None
-        return super(CustomJSONEncoder, self).default(obj)
+from engine.data_feeds import ValidatingCSVData, TradeLogger
+from engine.serialization import CustomJSONEncoder
+from engine.results_serializer import write_summary_file, save_backtest_results
 
 def get_strategy_class(strategy_name):
     """
@@ -137,11 +45,6 @@ def get_strategy_class(strategy_name):
     Returns:
         class: The strategy class
     """
-    # Add the strategies directory to the Python path
-    strategies_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'strategies')
-    if strategies_dir not in sys.path:
-        sys.path.append(strategies_dir)
-    
     try:
         if strategy_name == 'SimpleStock':
             from strategies.simple_stock_strategy import SimpleStockStrategy
@@ -155,6 +58,9 @@ def get_strategy_class(strategy_name):
         elif strategy_name == 'MACrossover':
             from strategies.ma_crossover import MACrossover
             return MACrossover
+        elif strategy_name == 'LimitOrder':
+            from strategies.limit_order_strategy import LimitOrderStrategy
+            return LimitOrderStrategy
         else:
             # Try to import dynamically
             try:
@@ -196,6 +102,7 @@ def run_backtest(
     plot: bool = True,
     initial_capital: float = 100000.0,
     commission: float = 0.001,
+    commission_type: str = "percentage",
     data_dir: str = "input",
     verbose: bool = False,
     slippage: float = 0.0,
@@ -203,7 +110,8 @@ def run_backtest(
     optimize_sharpe: bool = False,
     live_mode: bool = False,
     additional_data: Optional[Dict[str, Any]] = None,
-    highlight_trades: bool = True
+    highlight_trades: bool = True,
+    force_download: bool = False
 ) -> Dict[str, Any]:
     """
     Run a backtest for the given strategy and parameters.
@@ -217,6 +125,7 @@ def run_backtest(
         parameters: Dictionary of strategy parameters
         stock_csv: Path to CSV file with stock data (optional)
         plot: Whether to generate plots
+        force_download: Force downloading data from yfinance instead of using CSV files
         initial_capital: Initial capital for the backtest
         commission: Commission rate for trades
         data_dir: Directory containing input data
@@ -255,8 +164,8 @@ def run_backtest(
         # Default warmup period
         warmup_period = 252  # One year of trading days
     
-    # Find the stock CSV file if not provided
-    if stock_csv is None:
+    # Find the stock CSV file if not provided (unless force_download is True)
+    if stock_csv is None and not force_download:
         # Look in common locations
         input_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), data_dir)
         
@@ -315,6 +224,40 @@ def run_backtest(
                             f.write(f"{error_message}\n")
                     return {"status": "error", "message": error_message}
     
+    # If force_download is True, download data regardless of CSV existence
+    if force_download and stock_csv is None:
+        input_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), data_dir)
+        try:
+            # First, try to use data_setup.py to fetch the data properly
+            from data_preprocessing.data_setup import fetch_stock_data
+            try:
+                print(f"Force downloading data using data_setup.py for {tickers}")
+                fetch_stock_data(tickers, start_date, end_date, force_refresh=True)
+                stock_csv = os.path.join(input_dir, "stock_data.csv")
+                if os.path.exists(stock_csv):
+                    print(f"Successfully fetched and prepared data using data_setup.py at: {stock_csv}")
+                else:
+                    raise FileNotFoundError("stock_data.csv not created by data_setup.py")
+            except Exception as e:
+                print(f"Error using data_setup.py: {e}. Falling back to yfinance direct download.")
+                # Fallback to direct yfinance download
+                import yfinance as yf
+                # Convert tickers to a comma-separated string if it's a list
+                ticker_str = ",".join(tickers) if isinstance(tickers, list) else tickers
+                # Download data
+                data = yf.download(ticker_str, start=start_date, end=end_date)
+                # Save to CSV
+                stock_csv = os.path.join(input_dir, "stock_data.csv")
+                data.to_csv(stock_csv)
+                print(f"Downloaded data for {ticker_str} and saved to {stock_csv}")
+        except Exception as e:
+            error_message = f"Error downloading data: {e}"
+            print(error_message)
+            if output_dir:
+                with open(os.path.join(output_dir, 'error.log'), 'w') as f:
+                    f.write(f"{error_message}\n")
+            return {"status": "error", "message": error_message}
+    
     # Read the CSV file to extract column names
     try:
         df = pd.read_csv(stock_csv)
@@ -340,7 +283,12 @@ def run_backtest(
         # Initialize Cerebro
         cerebro = bt.Cerebro()
         cerebro.broker.setcash(initial_capital)  # Set initial cash
-        cerebro.broker.setcommission(commission)  # Set commission
+        if commission_type == "fixed":
+            cerebro.broker.setcommission(
+                commission=commission, commtype=bt.CommInfoBase.COMM_FIXED
+            )
+        else:
+            cerebro.broker.setcommission(commission)
         
         # Check if there are any missing tickers and download them if needed
         missing_tickers = []
@@ -402,8 +350,8 @@ def run_backtest(
                 continue
             
             try:
-                # Create a data feed from the CSV
-                data = bt.feeds.GenericCSVData(
+                # Create a validating data feed from the CSV that filters out invalid prices
+                data = ValidatingCSVData(
                     dataname=stock_csv,
                     fromdate=from_date,
                     todate=to_date,
@@ -476,6 +424,7 @@ def run_backtest(
     cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
     cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
     cerebro.addanalyzer(TradeLogger, _name='tradelogger')
+    
     
     # Run the backtest
     print(f"Starting backtest with {len(tickers)} tickers: {tickers}")
@@ -818,14 +767,22 @@ def run_backtest(
                 # Calculate rolling maximum
                 if not eq_curve.empty:
                     rolling_max = eq_curve['Value'].cummax()
-                    # Calculate drawdown series (will be negative values)
-                    drawdowns = (eq_curve['Value'] / rolling_max) - 1
+                    # Calculate drawdown series in dollar amounts (will be negative values)
+                    drawdowns_dollars = eq_curve['Value'] - rolling_max
                     
-                    # Save drawdowns to CSV
-                    if drawdowns is not None and not drawdowns.empty:
+                    # Also calculate percentage drawdowns for backwards compatibility
+                    drawdowns_pct = (eq_curve['Value'] / rolling_max) - 1
+                    
+                    # Save dollar drawdowns to CSV (primary output)
+                    if drawdowns_dollars is not None and not drawdowns_dollars.empty:
                         drawdowns_file = os.path.join(output_dir, 'drawdowns.csv')
-                        drawdowns.to_csv(drawdowns_file, header=['Drawdown'])
-                        print(f"Saved drawdowns to {drawdowns_file}")
+                        drawdowns_dollars.to_csv(drawdowns_file, header=['Drawdown'])
+                        print(f"Saved dollar drawdowns to {drawdowns_file}")
+                        
+                        # Also save percentage drawdowns as separate file for reference
+                        drawdowns_pct_file = os.path.join(output_dir, 'drawdowns_pct.csv')
+                        drawdowns_pct.to_csv(drawdowns_pct_file, header=['Drawdown_Pct'])
+                        print(f"Saved percentage drawdowns to {drawdowns_pct_file}")
                     
                     # Calculate monthly returns
                     # Resample to month end and calculate percent change
@@ -841,8 +798,73 @@ def run_backtest(
     
     # Trade log (if available)
     trade_log = None
+    
+    # Check for PairsTrading strategy with trades_history
+    if hasattr(strategy, 'trades_history') and strategy.trades_history:
+        # Convert PairsTrading trades to standard format
+        pairs_trades = []
+        for trade in strategy.trades_history:
+            # Extract entry data for both assets
+            asset1 = trade['asset1']
+            asset2 = trade['asset2']
+            entry_date = trade['entry_date']
+            exit_date = trade.get('exit_date', entry_date)
+            
+            # Create individual trade entries for each asset
+            # Asset 1 trades
+            pairs_trades.append({
+                'date': entry_date,
+                'action': 'buy' if asset1['size'] > 0 else 'sell',
+                'type': 'open',
+                'ticker': asset1['name'],
+                'price': asset1['price'],
+                'size': abs(asset1['size']),
+                'commission': 0,  # Not tracked in PairsTrading
+                'pnl': 0
+            })
+            
+            pairs_trades.append({
+                'date': exit_date,
+                'action': 'sell' if asset1['size'] > 0 else 'buy',
+                'type': 'close',
+                'ticker': asset1['name'],
+                'price': asset1.get('exit_price', asset1['price']),
+                'size': abs(asset1['size']),
+                'commission': 0,
+                'pnl': trade.get('pnl', 0) / 2  # Split PnL between assets
+            })
+            
+            # Asset 2 trades
+            pairs_trades.append({
+                'date': entry_date,
+                'action': 'buy' if asset2['size'] > 0 else 'sell',
+                'type': 'open',
+                'ticker': asset2['name'],
+                'price': asset2['price'],
+                'size': abs(asset2['size']),
+                'commission': 0,
+                'pnl': 0
+            })
+            
+            pairs_trades.append({
+                'date': exit_date,
+                'action': 'sell' if asset2['size'] > 0 else 'buy',
+                'type': 'close',
+                'ticker': asset2['name'],
+                'price': asset2.get('exit_price', asset2['price']),
+                'size': abs(asset2['size']),
+                'commission': 0,
+                'pnl': trade.get('pnl', 0) / 2  # Split PnL between assets
+            })
+        
+        if pairs_trades:
+            trade_log = pd.DataFrame(pairs_trades)
+            trade_log_file = os.path.join(output_dir, 'trade_log.csv')
+            trade_log.to_csv(trade_log_file, index=False)
+            print(f"Saved PairsTrading trade log to {trade_log_file}")
+    
     # First check the strategy's custom trades attribute
-    if hasattr(strategy, 'trades') and strategy.trades:
+    elif hasattr(strategy, 'trades') and strategy.trades:
         # Convert to pandas DataFrame
         trade_log = pd.DataFrame(strategy.trades)
         
@@ -865,777 +887,35 @@ def run_backtest(
     
     # Generate plots only if explicitly requested via the --plot flag
     if plot:
-        try:
-            # Check if Plotly is available
-            if PLOTLY_AVAILABLE:
-                # Create a Backtrader-style plot with Plotly
-                # This will include OHLC charts for each ticker and an equity curve at the bottom
-                
-                # First collect data for all tickers from our data feeds
-                ticker_data = {}
-                for data in cerebro.datas:
-                    ticker = data._name
-                    # Convert array.array to list for plotly compatibility
-                    ticker_data[ticker] = {
-                        'dates': [bt.num2date(x).strftime('%Y-%m-%d') for x in data.datetime.get(size=len(data))],
-                        'open': list(data.open.get(size=len(data))),
-                        'high': list(data.high.get(size=len(data))),
-                        'low': list(data.low.get(size=len(data))),
-                        'close': list(data.close.get(size=len(data))),
-                        'volume': list(data.volume.get(size=len(data))) if hasattr(data, 'volume') and data.volume is not None else None
-                    }
-                
-                # Get the equity curve data
-                equity_curve_data = None
-                if 'equity_curve' in locals() and equity_curve is not None and not equity_curve.empty:
-                    equity_curve_data = {
-                        'dates': equity_curve['Date'] if 'Date' in equity_curve.columns else list(range(len(equity_curve))),
-                        'values': equity_curve['Value'] if 'Value' in equity_curve.columns else equity_curve.iloc[:, 0]
-                    }
-                    # Calculate drawdowns
-                    running_max = pd.Series(equity_curve_data['values']).cummax()
-                    drawdowns = (equity_curve_data['values'] / running_max) - 1
-                    
-                    # Create a subplot figure with a row for each ticker plus one for equity
-                    num_tickers = len(ticker_data)
-                    fig_height = 250 * (num_tickers + 1)  # Height based on number of panels
-                    
-                    # Create subplot layout - one row per ticker plus one for equity
-                    row_heights = [0.7/num_tickers] * num_tickers + [0.3]  # 70% for tickers, 30% for equity
-                    subplot_titles = list(ticker_data.keys()) + ['Equity Curve']
-                    
-                    # Create plots directory for individual ticker plots
-                    ticker_plots_dir = os.path.join(output_dir, 'ticker_plots')
-                    os.makedirs(ticker_plots_dir, exist_ok=True)
-                    
-                    # Create main combined figure
-                    fig = make_subplots(
-                        rows=num_tickers + 1, 
-                        cols=1,
-                        shared_xaxes=True,
-                        vertical_spacing=0.03,
-                        row_heights=row_heights,
-                        subplot_titles=subplot_titles
-                    )
-                    
-                    # Add OHLC/candlestick charts for each ticker
-                    row = 1
-                    for ticker, data in ticker_data.items():
-                        # Add candlestick chart to main figure
-                        fig.add_trace(
-                            go.Candlestick(
-                                x=data['dates'],
-                                open=data['open'],
-                                high=data['high'],
-                                low=data['low'],
-                                close=data['close'],
-                                name=ticker,
-                                increasing_line_color='green',
-                                decreasing_line_color='red'
-                            ),
-                            row=row, col=1
-                        )
-                        
-                        # Add volume as bar chart if available
-                        if data['volume'] is not None and any(v > 0 for v in data['volume']):
-                            fig.add_trace(
-                                go.Bar(
-                                    x=data['dates'],
-                                    y=data['volume'],
-                                    name=f'{ticker} Volume',
-                                    marker_color='rgba(0,0,0,0.2)',
-                                    showlegend=False,
-                                    yaxis=f'y{row*2}'
-                                ),
-                                row=row, col=1
-                            )
-                            
-                            # Create secondary y-axis for volume
-                            fig.update_layout({
-                                f'yaxis{row*2-1}': {'domain': [0.3, 1.0], 'title': 'Price'},
-                                f'yaxis{row*2}': {
-                                    'domain': [0, 0.2], 
-                                    'title': 'Volume',
-                                    'showgrid': False,
-                                    'anchor': f'x{row}'
-                                }
-                            })
-                        
-                        # Create individual ticker figure
-                        ticker_fig = make_subplots(
-                            rows=2, 
-                            cols=1,
-                            shared_xaxes=True,
-                            vertical_spacing=0.03,
-                            row_heights=[0.8, 0.2],
-                            subplot_titles=[f'{ticker} Price', 'Volume']
-                        )
-                        
-                        # Add candlestick chart to individual figure
-                        ticker_fig.add_trace(
-                            go.Candlestick(
-                                x=data['dates'],
-                                open=data['open'],
-                                high=data['high'],
-                                low=data['low'],
-                                close=data['close'],
-                                name=ticker,
-                                increasing_line_color='green',
-                                decreasing_line_color='red'
-                            ),
-                            row=1, col=1
-                        )
-                        
-                        # Add volume to individual figure if available
-                        if data['volume'] is not None and any(v > 0 for v in data['volume']):
-                            ticker_fig.add_trace(
-                                go.Bar(
-                                    x=data['dates'],
-                                    y=data['volume'],
-                                    name=f'{ticker} Volume',
-                                    marker_color='rgba(0,0,0,0.2)',
-                                    showlegend=False
-                                ),
-                                row=2, col=1
-                            )
-                        
-                        # Update individual ticker figure layout
-                        ticker_fig.update_layout(
-                            title=f'{strategy_name}: {ticker} Analysis',
-                            height=700,
-                            width=1200,
-                            template='plotly_white',
-                            hovermode='x unified'
-                        )
-                        
-                        # Save individual ticker plot as HTML
-                        ticker_html_path = os.path.join(ticker_plots_dir, f'{ticker}_plot.html')
-                        ticker_fig.write_html(ticker_html_path, config={'responsive': True})
-                        print(f"Saved individual plot for {ticker} to {ticker_html_path}")
-                        
-                        # Save individual ticker plot as PNG if kaleido is available
-                        if KALEIDO_AVAILABLE:
-                            ticker_png_path = os.path.join(ticker_plots_dir, f'{ticker}_plot.png')
-                            ticker_fig.write_image(ticker_png_path, width=1200, height=700, scale=2)
-                            print(f"Saved static image for {ticker} to {ticker_png_path}")
-                        
-                        row += 1
-                    
-                    # Add equity curve at the bottom
-                    fig.add_trace(
-                        go.Scatter(
-                            x=equity_curve_data['dates'],
-                            y=equity_curve_data['values'],
-                            mode='lines',
-                            name='Equity Curve',
-                            line=dict(color='blue', width=2),
-                            hovertemplate='Date: %{x}<br>Value: $%{y:.2f}<extra></extra>'
-                        ),
-                        row=num_tickers + 1, col=1
-                    )
-                    
-                    # Add drawdown line on secondary y-axis
-                    fig.add_trace(
-                        go.Scatter(
-                            x=equity_curve_data['dates'],
-                            y=drawdowns,
-                            mode='lines',
-                            name='Drawdown',
-                            line=dict(color='red', width=1.5),
-                            yaxis=f'y{(num_tickers+1)*2}',
-                            hovertemplate='Date: %{x}<br>Drawdown: %{y:.2%}<extra></extra>'
-                        ),
-                        row=num_tickers + 1, col=1
-                    )
-                    
-                    # Set up secondary y-axis for drawdowns
-                    fig.update_layout({
-                        f'yaxis{(num_tickers+1)*2-1}': {'title': 'Equity Value', 'tickprefix': '$'},
-                        f'yaxis{(num_tickers+1)*2}': {
-                            'title': 'Drawdown', 
-                            'tickformat': '%',
-                            'overlaying': f'y{(num_tickers+1)*2-1}',
-                            'side': 'right',
-                            'range': [min(drawdowns.min() * 1.1, -0.05), 0.05]
-                        }
-                    })
-                
-                    # If we have trade data, add markers for trades on the appropriate ticker panels
-                    if 'trade_log' in locals() and trade_log is not None and not trade_log.empty:
-                        # Add trade markers to each ticker panel
-                        for ticker_idx, ticker in enumerate(ticker_data.keys(), 1):
-                            # Filter trades for this ticker using 'ticker' column
-                            ticker_trades_df = trade_log[trade_log['ticker'] == ticker] if 'ticker' in trade_log.columns else pd.DataFrame()
-                            
-                            if ticker_trades_df.empty:
-                                continue
-                            
-                            # We want to show all trades for this ticker in the main chart
-                            # Process open and closed trades
-                            open_trades = ticker_trades_df[ticker_trades_df['type'] == 'open'] if 'type' in ticker_trades_df.columns else pd.DataFrame()
-                            closed_trades = ticker_trades_df[ticker_trades_df['type'] == 'close'] if 'type' in ticker_trades_df.columns else pd.DataFrame()
-                            
-                            # Function to connect trades and visualize them for main figure
-                            def plot_connected_trades_main(entries_df, exits_df, marker_color, line_color, marker_symbol_entry, marker_symbol_exit, name_prefix, opacity=0.9):
-                                # Skip if highlight_trades is False
-                                if not highlight_trades:
-                                    return
-                                    
-                                # Complementary color for marker outline (to make them stand out)
-                                border_color = 'white'
-                                if entries_df.empty or exits_df.empty:
-                                    return
-                                    
-                                # Sort entries and exits by date
-                                entries_df = entries_df.sort_values('date')
-                                exits_df = exits_df.sort_values('date')
-                                
-                                # Make sure we have the same number of entries and exits to connect
-                                # If not, take the minimum number of both
-                                min_trades = min(len(entries_df), len(exits_df))
-                                if min_trades == 0:
-                                    return
-                                
-                                entries_df = entries_df.iloc[:min_trades].reset_index(drop=True)
-                                exits_df = exits_df.iloc[:min_trades].reset_index(drop=True)
-                                
-                                # For each entry-exit pair, create a connected line trace
-                                for i in range(min_trades):
-                                    entry_date = entries_df['date'].iloc[i]
-                                    entry_price = entries_df['price'].iloc[i]
-                                    exit_date = exits_df['date'].iloc[i]
-                                    exit_price = exits_df['price'].iloc[i]
-                                    pnl = exits_df['pnl'].iloc[i] if 'pnl' in exits_df.columns else 0
-                                    
-                                    # Create a line connecting entry and exit
-                                    fig.add_trace(
-                                        go.Scatter(
-                                            x=[entry_date, exit_date],
-                                            y=[entry_price, exit_price],
-                                            mode='lines+markers',
-                                            name=f'{ticker} {name_prefix} {i+1}',
-                                            line=dict(color=line_color, width=2.5, dash='dot', opacity=opacity),
-                                            marker=dict(
-                                                color=marker_color,
-                                                size=[18, 14],  # Even larger markers to make them more visible
-                                                symbol=[marker_symbol_entry, marker_symbol_exit],
-                                                line=dict(width=2, color=border_color)  # Add border for better visibility
-                                            ),
-                                            hoverinfo='text',
-                                            hovertext=[
-                                                f'{name_prefix} Entry<br>Date: {entry_date}<br>Price: ${entry_price:.2f}',
-                                                f'{name_prefix} Exit<br>Date: {exit_date}<br>Price: ${exit_price:.2f}<br>PnL: ${pnl:.2f}'
-                                            ],
-                                            showlegend=(i == 0)  # Only show one legend item per trade type
-                                        ),
-                                        row=ticker_idx, col=1
-                                    )
-                            
-                            # Process long trades (buy entry -> sell exit)
-                            buy_entries = open_trades[open_trades['signal'].str.contains('buy', case=False, na=False)] if 'signal' in open_trades.columns else pd.DataFrame()
-                            sell_exits = closed_trades[closed_trades['signal'].str.contains('sell', case=False, na=False)] if 'signal' in closed_trades.columns else pd.DataFrame()
-                            plot_connected_trades_main(buy_entries, sell_exits, '#00CC00', 'rgba(0,204,0,0.8)', 'triangle-up', 'circle', 'Long Trade')
-                            
-                            # Process short trades (sell entry -> buy exit)
-                            sell_entries = open_trades[open_trades['signal'].str.contains('sell', case=False, na=False)] if 'signal' in open_trades.columns else pd.DataFrame()
-                            buy_exits = closed_trades[closed_trades['signal'].str.contains('buy', case=False, na=False)] if 'signal' in closed_trades.columns else pd.DataFrame()
-                            plot_connected_trades_main(sell_entries, buy_exits, '#FF3333', 'rgba(255,51,51,0.8)', 'triangle-down', 'circle', 'Short Trade')
-                
-                    # Update layout with nice formatting for dual y-axis
-                    fig.update_layout(
-                        title=f'{strategy_name}: Backtest Results',
-                        xaxis_title='Date',
-                        yaxis=dict(
-                            title='Equity Value',
-                            tickprefix='$',
-                            side='left',
-                            showgrid=True
-                        ),
-                        yaxis2=dict(
-                            title='Drawdown',
-                            tickformat='%',
-                            side='right',
-                            overlaying='y',
-                            range=[min(drawdowns.min() * 1.1, -0.05), 0.05],  # Set range with buffer
-                            showgrid=False,
-                            zeroline=True,
-                            zerolinecolor='rgba(0,0,0,0.2)',
-                            zerolinewidth=1
-                        ),
-                        hovermode='x unified',
-                        legend=dict(
-                            yanchor="top",
-                            y=0.99,
-                            xanchor="left",
-                            x=0.01,
-                            bgcolor='rgba(255,255,255,0.8)',
-                        bordercolor='rgba(0,0,0,0.1)',
-                        borderwidth=1
-                    ),
-                    width=1200,
-                    height=700,
-                    margin=dict(l=50, r=50, t=80, b=50),
-                    template='plotly_white'
-                )
-                
-                    # Create a more comprehensive dashboard with both charts and metrics table
-                    dashboard = make_subplots(
-                        rows=2, cols=1,
-                        row_heights=[0.8, 0.2],
-                        specs=[
-                            [{'type': 'xy'}],
-                            [{'type': 'table'}]
-                        ],
-                        subplot_titles=(
-                            f'{strategy_name}: Equity Curve & Drawdowns',
-                            'Performance Metrics'
-                        ),
-                        vertical_spacing=0.12
-                    )
-                    
-                    # Add all traces from the equity figure to the dashboard
-                    for trace in fig.data:
-                        dashboard.add_trace(trace, row=1, col=1)
-                    
-                    # Copy layout settings from the original figure
-                    dashboard.update_layout(
-                        yaxis=fig.layout.yaxis,
-                        yaxis2=fig.layout.yaxis2,
-                        legend=fig.layout.legend,
-                        width=1200,
-                        height=900,  # Increased height to accommodate the table
-                        template='plotly_white',
-                        hovermode='x unified'
-                    )
-                    
-                    # Format metrics for the table
-                    metrics_table = go.Table(
-                        header=dict(
-                            values=['Metric', 'Value', 'Trade Metrics', 'Value'],
-                            align=['left', 'right', 'left', 'right'],
-                            fill_color='royalblue',
-                            font=dict(color='white', size=12)
-                        ),
-                        cells=dict(
-                            values=[
-                                # Performance metrics
-                                ['Initial Capital', 'Final Value', 'Total Return', 'Max Drawdown', 'Sharpe Ratio', 'Annual Return'],
-                                [
-                                    f"${metrics.get('initial_value', 0):,.2f}",
-                                    f"${metrics.get('final_value', 0):,.2f}",
-                                    f"{metrics.get('total_return', 0):.2%}",
-                                    f"{metrics.get('max_drawdown', 0):.2%}",
-                                    f"{metrics.get('sharpe_ratio', 0):.2f}",
-                                    f"{metrics.get('annual_return', 0):.2%}"
-                                ],
-                                # Trade metrics
-                                ['Total Trades', 'Win Rate', 'Profit Factor', 'Avg Trade', 'Best Trade', 'Worst Trade'],
-                                [
-                                    f"{metrics.get('total_trades', 0)}",
-                                    f"{metrics.get('win_rate', 0):.2%}",
-                                    f"{metrics.get('profit_factor', 0):.2f}",
-                                    f"${metrics.get('avg_trade_pnl', 0):.2f}",
-                                    f"${metrics.get('avg_win', 0):.2f}" if 'avg_win' in metrics else 'N/A',
-                                    f"${metrics.get('avg_loss', 0):.2f}" if 'avg_loss' in metrics else 'N/A'
-                                ]
-                            ],
-                            align=['left', 'right', 'left', 'right'],
-                            fill_color=['whitesmoke', 'white', 'whitesmoke', 'white'],
-                            font=dict(size=12)
-                        )
-                    )
-                    
-                    # Create metrics table for stats
-                    metrics_table = go.Table(
-                        header=dict(
-                            values=['Metric', 'Value', 'Trade Metrics', 'Value'],
-                            align=['left', 'right', 'left', 'right'],
-                            fill_color='royalblue',
-                            font=dict(color='white', size=12)
-                        ),
-                        cells=dict(
-                            values=[
-                                # Performance metrics
-                                ['Initial Capital', 'Final Value', 'Total Return', 'Max Drawdown', 'Sharpe Ratio', 'Annual Return'],
-                                [
-                                    f"${metrics.get('initial_value', 0):,.2f}",
-                                    f"${metrics.get('final_value', 0):,.2f}",
-                                    f"{metrics.get('total_return', 0):.2%}",
-                                    f"{metrics.get('max_drawdown', 0):.2%}",
-                                    f"{metrics.get('sharpe_ratio', 0):.2f}",
-                                    f"{metrics.get('annual_return', 0):.2%}"
-                                ],
-                                # Trade metrics
-                                ['Total Trades', 'Win Rate', 'Profit Factor', 'Avg Trade', 'Best Trade', 'Worst Trade'],
-                                [
-                                    f"{metrics.get('total_trades', 0)}",
-                                    f"{metrics.get('win_rate', 0):.2%}",
-                                    f"{metrics.get('profit_factor', 0):.2f}",
-                                    f"${metrics.get('avg_trade_pnl', 0):.2f}",
-                                    f"${metrics.get('avg_win', 0):.2f}" if 'avg_win' in metrics else 'N/A',
-                                    f"${metrics.get('avg_loss', 0):.2f}" if 'avg_loss' in metrics else 'N/A'
-                                ]
-                            ],
-                            align=['left', 'right', 'left', 'right'],
-                            fill_color=['whitesmoke', 'white', 'whitesmoke', 'white'],
-                            font=dict(size=12)
-                        )
-                    )
-                    
-                    # Save the Backtrader-style chart as interactive HTML
-                    backtrader_plot_file = os.path.join(output_dir, f"{strategy_name}_backtrader_plot.html")
-                    fig.write_html(backtrader_plot_file, config={'responsive': True})
-                    print(f"Saved Backtrader-style Plotly plot to {backtrader_plot_file}")
-                    
-                    # Create individual ticker plots with trade markers
-                    if 'trade_log' in locals() and trade_log is not None and not trade_log.empty:
-                        for ticker, data in ticker_data.items():
-                            # Create a figure for this ticker
-                            ticker_fig = make_subplots(
-                                rows=2, 
-                                cols=1,
-                                shared_xaxes=True,
-                                vertical_spacing=0.03,
-                                row_heights=[0.8, 0.2],
-                                subplot_titles=[f'{ticker} Price', 'Volume']
-                            )
-                            
-                            # Add candlestick chart
-                            ticker_fig.add_trace(
-                                go.Candlestick(
-                                    x=data['dates'],
-                                    open=data['open'],
-                                    high=data['high'],
-                                    low=data['low'],
-                                    close=data['close'],
-                                    name=ticker,
-                                    increasing_line_color='green',
-                                    decreasing_line_color='red'
-                                ),
-                                row=1, col=1
-                            )
-                            
-                            # Add volume if available
-                            if data['volume'] is not None and any(v > 0 for v in data['volume']):
-                                ticker_fig.add_trace(
-                                    go.Bar(
-                                        x=data['dates'],
-                                        y=data['volume'],
-                                        name=f'{ticker} Volume',
-                                        marker_color='rgba(0,0,0,0.2)',
-                                        showlegend=False
-                                    ),
-                                    row=2, col=1
-                                )
-                            
-                            # Filter trades for this ticker (using 'ticker' column from the trade_log)
-                            ticker_trades_df = trade_log[trade_log['ticker'] == ticker] if 'ticker' in trade_log.columns else pd.DataFrame()
-                            
-                            # Add trade markers if available for this ticker
-                            if not ticker_trades_df.empty:
-                                # Process open trade markers
-                                open_trades = ticker_trades_df[ticker_trades_df['type'] == 'open'] if 'type' in ticker_trades_df.columns else pd.DataFrame()
-                                closed_trades = ticker_trades_df[ticker_trades_df['type'] == 'close'] if 'type' in ticker_trades_df.columns else pd.DataFrame()
-                                
-                                # Function to connect trades and visualize them
-                                def plot_connected_trades(entries_df, exits_df, marker_color, line_color, marker_symbol_entry, marker_symbol_exit, name_prefix, opacity=0.85):
-                                    # Skip if highlight_trades is False
-                                    if not highlight_trades:
-                                        return
-                                        
-                                    # Complementary color for marker outline (to make them stand out)
-                                    border_color = 'black'  # Changed to black for better contrast
-                                    if entries_df.empty or exits_df.empty:
-                                        return
-                                        
-                                    # Set base marker and line properties - these will be enhanced for PNG
-                                    marker_size_entry = 24
-                                    marker_size_exit = 18
-                                    line_width = 2.5
-                                    border_width = 2
-                                    
-                                    # For PNG export, make everything EXTREMELY visible
-                                    if KALEIDO_AVAILABLE:
-                                        marker_size_entry = 50  # Extremely large entry markers
-                                        marker_size_exit = 40   # Very large exit markers
-                                        line_width = 6.0        # Very thick connecting lines
-                                        border_width = 4        # Thick borders
-                                        opacity = 1.0           # Full opacity
-                                        
-                                    # Sort entries and exits by date
-                                    entries_df = entries_df.sort_values('date')
-                                    exits_df = exits_df.sort_values('date')
-                                    
-                                    # Make sure we have the same number of entries and exits to connect
-                                    # If not, take the minimum number of both
-                                    min_trades = min(len(entries_df), len(exits_df))
-                                    if min_trades == 0:
-                                        return
-                                    
-                                    entries_df = entries_df.iloc[:min_trades].reset_index(drop=True)
-                                    exits_df = exits_df.iloc[:min_trades].reset_index(drop=True)
-                                    
-                                    # For each entry-exit pair, create a connected line trace
-                                    for i in range(min_trades):
-                                        entry_date = entries_df['date'].iloc[i]
-                                        entry_price = entries_df['price'].iloc[i]
-                                        exit_date = exits_df['date'].iloc[i]
-                                        exit_price = exits_df['price'].iloc[i]
-                                        pnl = exits_df['pnl'].iloc[i] if 'pnl' in exits_df.columns else 0
-                                        
-                                        # Create a line connecting entry and exit
-                                        ticker_fig.add_trace(
-                                            go.Scatter(
-                                                x=[entry_date, exit_date],
-                                                y=[entry_price, exit_price],
-                                                mode='lines+markers',
-                                                name=f'{name_prefix} {i+1}',
-                                                line=dict(color=line_color, width=line_width, dash='solid', opacity=opacity),
-                                                marker=dict(
-                                                    color=marker_color,
-                                                    size=[marker_size_entry, marker_size_exit],  # Much larger markers to ensure visibility
-                                                    symbol=[marker_symbol_entry, marker_symbol_exit],
-                                                    line=dict(width=border_width, color=border_color)  # Add border for better visibility
-                                                ),
-                                                hoverinfo='text',
-                                                hovertext=[
-                                                    f'{name_prefix} Entry<br>Date: {entry_date}<br>Price: ${entry_price:.2f}',
-                                                    f'{name_prefix} Exit<br>Date: {exit_date}<br>Price: ${exit_price:.2f}<br>PnL: ${pnl:.2f}'
-                                                ],
-                                                showlegend=(i == 0),  # Only show one legend item per trade type
-                                                legendgroup=name_prefix
-                                            ),
-                                            row=1, col=1
-                                        )
-                                
-                                # Process long trades (buy entry -> sell exit)
-                                buy_entries = open_trades[open_trades['signal'].str.contains('buy', case=False, na=False)] if 'signal' in open_trades.columns else pd.DataFrame()
-                                sell_exits = closed_trades[closed_trades['signal'].str.contains('sell', case=False, na=False)] if 'signal' in closed_trades.columns else pd.DataFrame()
-                                plot_connected_trades(buy_entries, sell_exits, 'green', 'rgba(0,128,0,0.5)', 'triangle-up', 'circle', 'Long Trade')
-                                
-                                # Process short trades (sell entry -> buy exit)
-                                sell_entries = open_trades[open_trades['signal'].str.contains('sell', case=False, na=False)] if 'signal' in open_trades.columns else pd.DataFrame()
-                                buy_exits = closed_trades[closed_trades['signal'].str.contains('buy', case=False, na=False)] if 'signal' in closed_trades.columns else pd.DataFrame()
-                                plot_connected_trades(sell_entries, buy_exits, 'red', 'rgba(255,0,0,0.5)', 'triangle-down', 'circle', 'Short Trade')
-                            
-                            # Update layout
-                            ticker_fig.update_layout(
-                                title=f'{strategy_name}: {ticker} Analysis',
-                                height=700,
-                                width=1200,
-                                template='plotly_white',
-                                hovermode='x unified'
-                            )
-                            
-                            # Save ticker figure as HTML
-                            ticker_html_path = os.path.join(ticker_plots_dir, f'{ticker}_plot.html')
-                            ticker_fig.write_html(ticker_html_path, config={'responsive': True})
-                            print(f"Saved individual plot for {ticker} to {ticker_html_path}")
-                            
-                            # Save as PNG if kaleido is available
-                            if KALEIDO_AVAILABLE:
-                                # Create a separate figure just for the PNG export with extreme visibility
-                                png_fig = ticker_fig
-                                
-                                # Force add extra standalone markers specifically for the PNG output
-                                # Extract data just from trades for this ticker
-                                if 'trade_log' in locals() and trade_log is not None and not trade_log.empty:
-                                    ticker_trades = trade_log[trade_log['symbol'] == ticker]
-                                    if not ticker_trades.empty:
-                                        # Add very large entry markers
-                                        entries = ticker_trades[ticker_trades['type'] == 'open']
-                                        for _, row in entries.iterrows():
-                                            png_fig.add_trace(
-                                                go.Scatter(
-                                                    x=[row['date']],
-                                                    y=[row['price']],
-                                                    mode='markers',
-                                                    name='Entry',
-                                                    marker=dict(
-                                                        color='#00CC00',  # Green for entries
-                                                        size=16,  # Reasonable size
-                                                        symbol='triangle-down' if 'sell' in str(row['action']).lower() else 'triangle-up',
-                                                        line=dict(width=2, color='black')
-                                                    ),
-                                                    showlegend=False
-                                                ),
-                                                row=1, col=1
-                                            )
-                                        
-                                        # Add very large exit markers
-                                        exits = ticker_trades[ticker_trades['type'] == 'close']
-                                        for _, row in exits.iterrows():
-                                            png_fig.add_trace(
-                                                go.Scatter(
-                                                    x=[row['date']],
-                                                    y=[row['price']],
-                                                    mode='markers',
-                                                    name='Exit',
-                                                    marker=dict(
-                                                        color='#FF3333',  # Red for exits
-                                                        size=14,  # Reasonable size
-                                                        symbol='circle',
-                                                        line=dict(width=2, color='black')
-                                                    ),
-                                                    showlegend=False
-                                                ),
-                                                row=1, col=1
-                                            )
-                                
-                                # Also enhance any existing markers and lines
-                                for trace in png_fig.data:
-                                    if isinstance(trace, go.Scatter) and trace.mode:
-                                        # Make lines more visible
-                                        if 'lines' in trace.mode and trace.line:
-                                            # Make lines visible in static output
-                                            trace.line.width = 2.0
-                                            # Ensure full opacity
-                                            trace.line.opacity = 1.0
-                                            # Make solid lines (more visible)
-                                            trace.line.dash = 'solid'
-                                        
-                                        # Make markers more visible but reasonably sized
-                                        if 'markers' in trace.mode and trace.marker:
-                                            if isinstance(trace.marker.size, list):
-                                                trace.marker.size = [s * 1.2 for s in trace.marker.size]
-                                            else:
-                                                trace.marker.size = (trace.marker.size or 10) * 1.2
-                                            
-                                            if hasattr(trace.marker, 'line') and trace.marker.line:
-                                                trace.marker.line.width = 1.5
-                                                trace.marker.line.color = 'black'
-                                                
-                                # Save with higher DPI for better clarity
-                                ticker_png_path = os.path.join(ticker_plots_dir, f'{ticker}_plot.png')
-                                png_fig.write_image(ticker_png_path, width=1200, height=700, scale=3)
-                                print(f"Saved greatly enhanced static image for {ticker} to {ticker_png_path}")
-                    
-                    # Create a separate dashboard with metrics table
-                    dashboard = make_subplots(
-                        rows=2, cols=1,
-                        row_heights=[0.8, 0.2],
-                        specs=[
-                            [{'type': 'xy'}],
-                            [{'type': 'table'}]
-                        ],
-                        subplot_titles=(
-                            f'{strategy_name}: Dashboard',
-                            'Performance Metrics'
-                        ),
-                        vertical_spacing=0.12
-                    )
-                    
-                    # Add only equity curve to the dashboard
-                    dashboard.add_trace(
-                        go.Scatter(
-                            x=equity_curve_data['dates'],
-                            y=equity_curve_data['values'],
-                            mode='lines',
-                            name='Equity Curve',
-                            line=dict(color='blue', width=2)
-                        ),
-                        row=1, col=1
-                    )
-                    
-                    # Add drawdown to the dashboard
-                    dashboard.add_trace(
-                        go.Scatter(
-                            x=equity_curve_data['dates'],
-                            y=drawdowns,
-                            mode='lines',
-                            name='Drawdown',
-                            line=dict(color='red', width=1.5),
-                            yaxis='y2'
-                        ),
-                        row=1, col=1
-                    )
-                    
-                    # Add metrics table to the dashboard
-                    dashboard.add_trace(metrics_table, row=2, col=1)
-                    
-                    # Update dashboard layout
-                    dashboard.update_layout(
-                        width=1200,
-                        height=900,
-                        template='plotly_white',
-                        hovermode='x unified',
-                        yaxis=dict(title='Equity Value', tickprefix='$'),
-                        yaxis2=dict(
-                            title='Drawdown', 
-                            tickformat='%', 
-                            overlaying='y',
-                            side='right',
-                            range=[min(drawdowns.min() * 1.1, -0.05), 0.05]
-                        )
-                    )
-                    
-                    # Save the dashboard as interactive HTML
-                    dashboard_file = os.path.join(output_dir, f"{strategy_name}_backtest_dashboard.html")
-                    dashboard.write_html(dashboard_file, config={'responsive': True})
-                    print(f"Saved interactive Plotly dashboard to {dashboard_file}")
-                    
-                    # Also save static image versions if possible
-                    if KALEIDO_AVAILABLE:
-                        try:
-                            # For PNG export, emphasize markers and lines
-                            for trace in fig.data:
-                                if isinstance(trace, go.Scatter) and trace.mode and 'markers' in trace.mode:
-                                    if trace.marker:
-                                        # Increase marker size for better visibility in static images
-                                        trace.marker.size = [s * 1.5 if isinstance(s, (int, float)) else s for s in (trace.marker.size if isinstance(trace.marker.size, list) else [trace.marker.size])]
-                                    if trace.line:
-                                        # Make lines thicker in PNG output
-                                        trace.line.width = 3.5
-                            # Save backtrader-style chart as image
-                            backtrader_img = os.path.join(output_dir, f"{strategy_name}_backtrader_plot.png")
-                            fig.write_image(backtrader_img, width=1200, height=fig_height, scale=2)
-                            print(f"Saved Backtrader-style plot image to {backtrader_img}")
-                            
-                            # Enhance markers and lines for PNG export
-                            for trace in dashboard.data:
-                                if isinstance(trace, go.Scatter) and trace.mode and 'markers' in trace.mode:
-                                    if trace.marker:
-                                        trace.marker.size = [s * 1.5 if isinstance(s, (int, float)) else s for s in (trace.marker.size if isinstance(trace.marker.size, list) else [trace.marker.size])]
-                                    if trace.line:
-                                        trace.line.width = 3.5
-                            # Save dashboard as image
-                            dashboard_img = os.path.join(output_dir, f"{strategy_name}_backtest_dashboard.png")
-                            dashboard.write_image(dashboard_img, width=1200, height=900, scale=2)
-                            print(f"Saved dashboard static image to {dashboard_img}")
-                        except Exception as img_error:
-                            print(f"Warning: Static images could not be saved: {img_error}")
-                    else:
-                        print("Note: Static image export is disabled. To enable, install kaleido package with 'pip install kaleido'.")
-                else:
-                    # Fallback to backtrader's plotting if no equity curve available
-                    print("No equity curve data available, using backtrader's native plotting")
-                    fig = cerebro.plot(style='candle', barup='green', bardown='red', volume=False, grid=True)
-                    # Save the plot to a file
-                    plot_file = os.path.join(output_dir, f"{strategy_name}_backtest_plot.png")
-                    # If fig is a list of figures, save the first one
-                    if isinstance(fig, list) and len(fig) > 0:
-                        fig[0][0].savefig(plot_file)
-                        print(f"Saved plot to {plot_file}")
-                    elif hasattr(fig, 'savefig'):
-                        fig.savefig(plot_file)
-                        print(f"Saved plot to {plot_file}")
-            else:
-                # If Plotly is not available, use backtrader's plotting
-                print("Plotly is not available, using backtrader's native plotting")
-                fig = cerebro.plot(style='candle', barup='green', bardown='red', volume=False, grid=True)
-                # Save the plot to a file
-                plot_file = os.path.join(output_dir, f"{strategy_name}_backtest_plot.png")
-                # If fig is a list of figures, save the first one
-                if isinstance(fig, list) and len(fig) > 0:
-                    fig[0][0].savefig(plot_file)
-                    print(f"Saved plot to {plot_file}")
-                elif hasattr(fig, 'savefig'):
-                    fig.savefig(plot_file)
-                    print(f"Saved plot to {plot_file}")
-        except Exception as e:
-            import traceback
-            print(f"Error generating plot: {e}")
-            traceback.print_exc()
+        # Collect data for all tickers from data feeds
+        ticker_data = {}
+        for data in cerebro.datas:
+            ticker = data._name
+            # Convert array.array to list for plotly compatibility
+            ticker_data[ticker] = {
+                'dates': [bt.num2date(x).strftime('%Y-%m-%d') for x in data.datetime.get(size=len(data))],
+                'open': list(data.open.get(size=len(data))),
+                'high': list(data.high.get(size=len(data))),
+                'low': list(data.low.get(size=len(data))),
+                'close': list(data.close.get(size=len(data))),
+                'volume': list(data.volume.get(size=len(data))) if hasattr(data, 'volume') and data.volume is not None else None
+            }
+
+        from visualization.backtest_charts import generate_backtest_visualizations
+        generate_backtest_visualizations(
+            output_dir=output_dir,
+            strategy_name=strategy_name,
+            tickers=tickers,
+            equity_curve=equity_curve,
+            drawdowns=drawdowns,
+            trade_log=trade_log,
+            ticker_data=ticker_data,
+            metrics=metrics,
+            cerebro=cerebro,
+            strategy=strategy,
+            highlight_trades=highlight_trades,
+            enhanced_plots=enhanced_plots
+        )
     
     # Create result dictionary
     result = {
@@ -1657,95 +937,17 @@ def run_backtest(
         if logger_trades:
             result["trade_log"] = pd.DataFrame(logger_trades)
     
-    # Save detailed results to a text file
-    with open(os.path.join(output_dir, 'results.txt'), 'w') as f:
-        # Strategy and test information
-        f.write(f"Strategy: {strategy_name}\n")
-        f.write(f"Parameters: {parameters}\n")
-        f.write(f"Tickers: {tickers}\n")
-        f.write(f"Period: {start_date} to {end_date}\n\n")
-        
-        # Performance summary
-        f.write(f"==============================================================\n")
-        f.write(f"PERFORMANCE SUMMARY\n")
-        f.write(f"==============================================================\n")
-        f.write(f"Initial Value: ${initial_value:.2f}\n")
-        f.write(f"Final Value: ${final_value:.2f}\n")
-        f.write(f"Absolute Return: ${final_value - initial_value:.2f}\n")
-        f.write(f"Total Return: {total_return:.2%}\n")
-        f.write(f"Benchmark Return: {benchmark_return:.2%}\n")
-        f.write(f"Alpha: {alpha:.2%}\n")
-        if 'annual_return' in metrics:
-            f.write(f"Annual Return: {metrics['annual_return']:.2%}\n")
-        f.write(f"Sharpe Ratio: {metrics.get('sharpe_ratio', 0):.4f}\n")
-        if metrics.get('win_rate', 0) > 0:
-            f.write(f"Profit Factor: {metrics.get('profit_factor', 0):.2f}\n")
-        f.write("\n")
-        
-        # Risk metrics
-        f.write(f"==============================================================\n")
-        f.write(f"RISK METRICS\n")
-        f.write(f"==============================================================\n")
-        f.write(f"Maximum Drawdown: {metrics.get('max_drawdown_pct', 0):.2f}%\n")
-        f.write(f"Maximum Drawdown (Money): ${metrics.get('max_drawdown_money', 0):.2f}\n")
-        if metrics.get('sharpe_ratio', 0) > 0:
-            # Use max_drawdown in decimal form (0.15 for 15%) for Calmar ratio calculation
-            # Ensure we don't divide by zero by using max(drawdown, 0.01)
-            calmar_ratio = metrics.get('annual_return', 0) / max(metrics.get('max_drawdown', 0.01), 0.01)
-            f.write(f"Calmar Ratio: {calmar_ratio:.4f}\n")
-            f.write(f"Sortino Ratio: {metrics.get('sortino_ratio', 0):.4f}\n")
-        f.write(f"Volatility (Annualized): {metrics.get('annualized_volatility', 0):.2%}\n\n")
-        
-        # Trade statistics
-        f.write(f"==============================================================\n")
-        f.write(f"TRADE STATISTICS\n")
-        f.write(f"==============================================================\n")
-        f.write(f"Total Trades: {metrics.get('total_trades', 0)}\n")
-        if metrics.get('total_trades', 0) > 0:
-            f.write(f"Winning Trades: {metrics.get('winning_trades', 0)} ({metrics.get('win_rate_pct', 0):.1f}%)\n")
-            f.write(f"Losing Trades: {metrics.get('losing_trades', 0)} ({100 - metrics.get('win_rate_pct', 0):.1f}%)\n")
-            f.write(f"Profit Factor: {metrics.get('profit_factor', 0):.4f}\n")
-            f.write(f"Average Trade PnL: ${metrics.get('avg_trade_pnl', 0):.2f}\n")
-            
-            # More details for trades if we have them
-            if metrics.get('gross_profit', 0) != 0 or metrics.get('gross_loss', 0) != 0:
-                f.write(f"\nProfit & Loss:\n")
-                f.write(f"  Gross Profit: ${metrics.get('gross_profit', 0):.2f}\n")
-                f.write(f"  Gross Loss: ${metrics.get('gross_loss', 0):.2f}\n")
-                f.write(f"  Net Profit: ${metrics.get('net_profit', 0):.2f}\n")
-            
-            if metrics.get('avg_win', 0) != 0 or metrics.get('avg_loss', 0) != 0:
-                f.write(f"\nTrade Sizing:\n")
-                f.write(f"  Average Win: ${metrics.get('avg_win', 0):.2f}\n")
-                f.write(f"  Average Loss: ${metrics.get('avg_loss', 0):.2f}\n")
-                win_loss_ratio = abs(metrics.get('avg_win', 0) / metrics.get('avg_loss', 1))
-                f.write(f"  Win/Loss Ratio: {win_loss_ratio:.2f}\n")
-            
-            if metrics.get('max_consecutive_wins', 0) > 0 or metrics.get('max_consecutive_losses', 0) > 0:
-                f.write(f"\nWin/Loss Streaks:\n")
-                f.write(f"  Max Consecutive Wins: {metrics.get('max_consecutive_wins', 0)}\n")
-                f.write(f"  Max Consecutive Losses: {metrics.get('max_consecutive_losses', 0)}\n")
-                
-            if metrics.get('avg_trade_length', 0) > 0:
-                f.write(f"\nTrade Duration:\n")
-                f.write(f"  Average Trade Length: {metrics.get('avg_trade_length', 0):.1f} bars\n")
-    
-    # Save detailed results to JSON and pickle
-    json_file = os.path.join(output_dir, 'backtest_results.json')
-    with open(json_file, 'w') as f:
-        # Convert non-serializable objects to strings or other serializable types
-        serializable_results = result.copy()
-        if 'equity_curve' in serializable_results:
-            serializable_results['equity_curve'] = serializable_results['equity_curve'].to_dict('records') if serializable_results['equity_curve'] is not None else None
-        if 'trade_log' in serializable_results:
-            serializable_results['trade_log'] = serializable_results['trade_log'].to_dict('records') if serializable_results['trade_log'] is not None else None
-        
-        json.dump(serializable_results, f, indent=4, default=str)
-    
-    # Save to pickle (can store more complex objects)
-    pickle_file = os.path.join(output_dir, 'backtest_results.pkl')
-    with open(pickle_file, 'wb') as f:
-        pickle.dump(result, f)
+    # Include parameters in metrics so write_summary_file can access them
+    metrics['parameters'] = parameters
+
+    # Write human-readable performance summary
+    write_summary_file(
+        output_dir, metrics, initial_value, final_value,
+        strategy_name, tickers, start_date, end_date
+    )
+
+    # Serialize results to JSON and pickle
+    save_backtest_results(output_dir, result, metrics)
     
     print(f"Backtest complete. Results saved to {output_dir}")
     return result

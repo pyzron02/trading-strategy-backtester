@@ -4,7 +4,6 @@
 Simple backtest workflow module.
 """
 import os
-import sys
 import json
 import numpy as np
 import pandas as pd
@@ -14,51 +13,52 @@ import uuid
 import logging
 import tempfile
 
-# Add the parent directory to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # Go up to src directory
-project_root = os.path.dirname(src_dir)  # Go up to project root
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
 # Import the utilities
 from workflows.workflow_utils import (
     print_header, print_section, print_parameters, print_metrics,
     save_results_summary, time_execution, find_strategy_param_file,
     logger, logging_system, print_workflow_log, adapt_strategy_parameters,
     setup_output_dir_logging, remove_output_dir_logging,
-    check_logs_for_errors, print_error_report
+    check_logs_for_errors, print_error_report,
+    workflow_setup, workflow_teardown
 )
+from workflows.config import WorkflowConfig
+from utils.path_manager import path_manager
 
 # Import engine components
 from engine.run_backtest import run_backtest
 from engine.parameter_management import ParameterManager
 from utils.error_reporting import create_stage_error_report, StageError, StageErrorReport
 
+def _is_parameter_grid_value(value) -> bool:
+    """Check if a list value looks like a parameter grid (list of numbers)."""
+    if not isinstance(value, list) or not value:
+        return False
+    return all(isinstance(v, (int, float)) for v in value)
+
+
 def convert_grid_to_single_values(parameters: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert parameter grids to single values by taking the first value from each list.
-    
+
+    Only converts lists of numeric values (parameter grids). Lists that contain
+    strings, dicts, or other complex types are left as-is since they are
+    legitimate list-typed parameters (e.g. ticker_priority).
+
     Args:
         parameters: Dictionary of parameters, potentially containing lists
-        
+
     Returns:
         Dictionary with single values for each parameter
     """
     single_params = {}
     for key, value in parameters.items():
-        if isinstance(value, list):
-            if value:  # Check if list is not empty
-                single_params[key] = value[0]  # Take the first value
-                logger.info(f"Parameter '{key}' is a list. Using first value: {value[0]}")
-            else:
-                single_params[key] = None
-                logger.warning(f"Parameter '{key}' is an empty list. Setting to None.")
+        if _is_parameter_grid_value(value):
+            single_params[key] = value[0]
+            logger.info(f"Parameter '{key}' is a grid. Using first value: {value[0]}")
         else:
             single_params[key] = value
-    
+
     return single_params
 
 def ensure_data_available(tickers: List[str], start_date: str, end_date: str, data_dir: str = "input"):
@@ -84,7 +84,7 @@ def ensure_data_available(tickers: List[str], start_date: str, end_date: str, da
     logger.info(f"Ensuring data available for tickers: {tickers}")
     
     # Construct the path to stock_data.csv
-    stock_data_path = os.path.join(project_root, data_dir, "stock_data.csv")
+    stock_data_path = os.path.join(str(path_manager.input_dir), "stock_data.csv")
     
     # Check if stock_data.csv exists
     if not os.path.exists(stock_data_path):
@@ -92,7 +92,7 @@ def ensure_data_available(tickers: List[str], start_date: str, end_date: str, da
         try:
             from data_preprocessing.data_setup import fetch_stock_data
             # Force refresh to ensure all tickers are included
-            fetch_stock_data(tickers, start_date, end_date, force_refresh=True)
+            fetch_stock_data(tickers, start_date, end_date, force_refresh=False)
             logger.info(f"Generated stock_data.csv at {stock_data_path}")
         except Exception as e:
             logger.error(f"Error generating stock_data.csv: {e}")
@@ -114,7 +114,7 @@ def ensure_data_available(tickers: List[str], start_date: str, end_date: str, da
                 logger.warning(f"stock_data.csv is missing data for tickers: {missing_tickers}. Regenerating...")
                 from data_preprocessing.data_setup import fetch_stock_data
                 # Force refresh to ensure all tickers are included
-                fetch_stock_data(tickers, start_date, end_date, force_refresh=True)
+                fetch_stock_data(tickers, start_date, end_date, force_refresh=False)
                 logger.info(f"Regenerated stock_data.csv with all required tickers")
         except Exception as e:
             logger.error(f"Error verifying stock_data.csv: {e}")
@@ -132,20 +132,20 @@ def run_simple_workflow(
     output_dir=None,
     parameters=None,
     param_file=None,
-    plot=True,
     verbose=False,
     initial_capital=100000.0,
     commission=0.001,
     data_dir="input",
     slippage=0.0,
-    enhanced_plots=False,
     optimize_sharpe=False,
     live_mode=False,
     additional_data=None,
+    commission_type="percentage",
     progress_callback=None,
     progress_file=None,
     stock_csv=None,
     _temp_files_to_cleanup=None,
+    force_download=False,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -166,7 +166,6 @@ def run_simple_workflow(
         commission: Commission rate for trades
         data_dir: Directory containing input data
         slippage: Slippage per trade
-        enhanced_plots: Whether to create enhanced plots
         optimize_sharpe: Whether to optimize for Sharpe ratio
         live_mode: Whether to run in live mode
         additional_data: Additional data for the strategy
@@ -179,71 +178,35 @@ def run_simple_workflow(
     Returns:
         Dict containing the workflow results
     """
-    # Process tickers parameter to ensure it's in the correct format
-    if tickers is None:
-        tickers = ["SPY"]  # Default ticker
-    elif isinstance(tickers, str):
-        # Handle comma-separated string format
-        tickers = [t.strip() for t in tickers.split(',') if t.strip()]
-    
-    # Log the processed tickers for debugging
-    logger.info(f"Processed tickers for simple workflow: {tickers}")
-    
-    # Use strategy if provided, otherwise use strategy_name
-    if strategy is not None and strategy_name is None:
-        strategy_name = strategy
-    elif strategy is None and strategy_name is None:
-        return {
-            "status": "error",
-            "message": "Either strategy or strategy_name must be provided"
-        }
-    
-    # Track new temporary files if not already tracking
-    if _temp_files_to_cleanup is None:
-        _temp_files_to_cleanup = []
-    
-    # Create a unique output directory if none is provided
-    if not output_dir:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_id = str(uuid.uuid4())[:8]  # For uniqueness
-        output_dir = os.path.join(project_root, "output", f"{strategy_name}_simple_{timestamp}_{run_id}")
-        logger.info(f"Creating unique output directory: {output_dir}")
-    
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Setup logging for this run
-    setup_output_dir_logging(output_dir, strategy_name, "simple")
-    
-    # Log the start of the workflow
-    print_header("SIMPLE WORKFLOW")
-    print_workflow_log("Simple", strategy_name, tickers, start_date, end_date)
-    
-    # Add parameters to additional info if provided
-    additional_info = {}
-    if param_file:
-        additional_info["param_file"] = param_file
-    if parameters:
-        additional_info["parameters"] = parameters
-    
-    # Create progress tracking file if specified
-    if progress_file:
-        # Initialize progress tracking
-        with open(progress_file, 'w') as f:
-            json.dump({
-                "progress": 0,
-                "status": "Starting",
-                "current_step": "Initializing",
-                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }, f, indent=4)
-    
+    config = WorkflowConfig.from_kwargs(
+        strategy=strategy, strategy_name=strategy_name, tickers=tickers,
+        start_date=start_date, end_date=end_date, output_dir=output_dir,
+        parameters=parameters, param_file=param_file, verbose=verbose,
+        initial_capital=initial_capital, commission=commission,
+        commission_type=commission_type, data_dir=data_dir,
+        slippage=slippage, optimize_sharpe=optimize_sharpe, live_mode=live_mode,
+        additional_data=additional_data, progress_callback=progress_callback,
+        progress_file=progress_file, stock_csv=stock_csv,
+        _temp_files_to_cleanup=_temp_files_to_cleanup or [],
+        force_download=force_download, **kwargs
+    )
+    try:
+        workflow_setup(config, "simple")
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    # Extract commonly used values from config
+    strategy_name = config.strategy_name
+    tickers = config.tickers
+    output_dir = config.output_dir
+
     if not param_file:
         param_file = find_strategy_param_file(strategy_name)
         if not param_file:
             # Check if we have parameters directly specified
             if parameters:
                 # Create a temporary parameter file
-                temp_param_file = os.path.join(project_root, "input", "parameters", 
+                temp_param_file = os.path.join(str(path_manager.parameters_dir),
                                              f"{strategy_name.lower()}_params_temp.json")
                 
                 try:
@@ -252,7 +215,7 @@ def run_simple_workflow(
                     logger.info(f"Created temporary parameter file from provided parameters: {temp_param_file}")
                     param_file = temp_param_file
                     # Track for cleanup
-                    _temp_files_to_cleanup.append(temp_param_file)
+                    config._temp_files_to_cleanup.append(temp_param_file)
                 except Exception as e:
                     logger.error(f"Error creating temporary parameter file: {str(e)}")
             else:
@@ -282,19 +245,10 @@ def run_simple_workflow(
             logger.info(f"Loaded parameters from {param_file}")
             logger.debug(f"Parameters: {strategy_params}")
         except Exception as e:
+            error_msg = f"Error loading parameters: {str(e)}"
             logger.error(f"Error loading parameters from {param_file}: {str(e)}")
-            
-            # Check logs for errors
-            logger.info("Checking logs for errors...")
-            error_logs = check_logs_for_errors(output_dir)
-            
-            if error_logs:
-                # Generate error report and save to file
-                error_report_path = os.path.join(output_dir, "error_report.txt")
-                print_error_report(error_logs, error_report_path)
-                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-            
-            return {"status": "error", "message": f"Error loading parameters: {str(e)}"}
+            workflow_teardown(config, "simple", None, error=Exception(error_msg))
+            return {"status": "error", "message": error_msg, "output_dir": config.output_dir}
     
     # Override with any directly provided parameters
     if parameters:
@@ -306,7 +260,7 @@ def run_simple_workflow(
         logger.debug(f"Updated parameters: {strategy_params}")
     
     # Check for parameter grids and convert to single values if needed
-    has_grid = any(isinstance(v, list) for v in strategy_params.values())
+    has_grid = any(_is_parameter_grid_value(v) for v in strategy_params.values())
     if has_grid:
         logger.info("Parameter grid detected in simple workflow. Converting to single values.")
         original_params = strategy_params.copy()
@@ -328,32 +282,11 @@ def run_simple_workflow(
         if not os.path.exists(stock_data_path):
             error_msg = f"Failed to create or locate stock data file at: {stock_data_path}."
             logger.error(error_msg)
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Simple Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": error_msg}
-            )
-            
-            # Check logs for errors
-            logger.info("Checking logs for errors...")
-            error_logs = check_logs_for_errors(output_dir)
-            
-            if error_logs:
-                # Generate error report and save to file
-                error_report_path = os.path.join(output_dir, "error_report.txt")
-                print_error_report(error_logs, error_report_path)
-                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-            
+            workflow_teardown(config, "simple", None, error=Exception(error_msg))
             return {
                 "status": "error",
                 "message": error_msg,
-                "output_dir": output_dir
+                "output_dir": config.output_dir
             }
         
         # Run backtest
@@ -370,47 +303,26 @@ def run_simple_workflow(
             output_dir=output_dir,
             parameters=strategy_params,
             stock_csv=stock_csv,  # Pass the explicit stock_csv path
-            plot=plot,
             initial_capital=initial_capital,
             commission=commission,
+            commission_type=config.commission_type,
             data_dir=data_dir,
             verbose=verbose,
             slippage=slippage,
-            enhanced_plots=enhanced_plots,
             optimize_sharpe=optimize_sharpe,
             live_mode=live_mode,
-            additional_data=additional_data
+            additional_data=additional_data,
+            force_download=force_download
         )
         
         if not backtest_result:
             error_msg = "Backtest failed to produce valid results"
             logger.error(error_msg)
-            
-            # Log workflow failure
-            print_workflow_log(
-                workflow_name="Simple Workflow",
-                strategy_name=strategy_name,
-                tickers=tickers,
-                start_date=start_date,
-                end_date=end_date,
-                status="FAILED",
-                additional_info={"error": error_msg}
-            )
-            
-            # Check logs for errors
-            logger.info("Checking logs for errors...")
-            error_logs = check_logs_for_errors(output_dir)
-            
-            if error_logs:
-                # Generate error report and save to file
-                error_report_path = os.path.join(output_dir, "error_report.txt")
-                print_error_report(error_logs, error_report_path)
-                logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-            
+            workflow_teardown(config, "simple", None, error=Exception(error_msg))
             return {
-                "status": "error", 
+                "status": "error",
                 "message": error_msg,
-                "output_dir": output_dir
+                "output_dir": config.output_dir
             }
         
         # Extract and display results
@@ -431,38 +343,13 @@ def run_simple_workflow(
         logger.error(error_msg)
         if verbose:
             logger.exception("Full error traceback:")
-        
-        # Log workflow failure
-        print_workflow_log(
-            workflow_name="Simple Workflow",
-            strategy_name=strategy_name,
-            tickers=tickers,
-            start_date=start_date,
-            end_date=end_date,
-            status="FAILED",
-            additional_info={"error": error_msg}
-        )
-        
-        # Check logs for errors
-        logger.info("Checking logs for errors...")
-        error_logs = check_logs_for_errors(output_dir)
-        
-        if error_logs:
-            # Generate error report and save to file
-            error_report_path = os.path.join(output_dir, "error_report.txt")
-            print_error_report(error_logs, error_report_path)
-            logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-        
+        workflow_teardown(config, "simple", None, error=e)
         return {
             "status": "error",
             "message": error_msg,
-            "output_dir": output_dir
+            "output_dir": config.output_dir
         }
-    
-    # Reset logging level if it was changed
-    if verbose:
-        logging_system.set_level('INFO', 'workflows')
-    
+
     # Create a combined result
     workflow_result = {
         "status": "success",
@@ -471,68 +358,15 @@ def run_simple_workflow(
             "start_date": start_date,
             "end_date": end_date
         },
-        "parameters": strategy_params,  # Original parameters
+        "parameters": strategy_params,
         "metrics": metrics,
         "output_dir": output_dir
     }
-    
-    # Log workflow completion
-    completion_info = {
-        "total_return": f"{metrics.get('total_return', 0.0):.2%}",
-        "sharpe_ratio": f"{metrics.get('sharpe_ratio', 0.0):.2f}",
-        "output_dir": output_dir
-    }
-    print_workflow_log(
-        workflow_name="Simple Workflow",
-        strategy_name=strategy_name,
-        tickers=tickers,
-        start_date=start_date,
-        end_date=end_date,
-        status="COMPLETED",
-        additional_info=completion_info
-    )
-    
-    # Clean up temporary files
-    files_to_delete = []
-    files_skipped = []
-    
-    for temp_file in _temp_files_to_cleanup:
-        if os.path.exists(temp_file):
-            # Skip files in the workflow_configs directory
-            if "workflow_configs" in temp_file:
-                files_skipped.append(temp_file)
-            else:
-                files_to_delete.append(temp_file)
-    
-    if files_skipped:
-        logger.info(f"Skipping cleanup of {len(files_skipped)} workflow config files")
-        for file_path in files_skipped:
-            logger.debug(f"Preserved file: {file_path}")
-    
-    for temp_file in files_to_delete:
-        try:
-            os.remove(temp_file)
-            logger.info(f"Cleaned up temporary file: {temp_file}")
-        except Exception as e:
-            logger.warning(f"Error cleaning up temporary file: {str(e)}")
-    
-    # Check logs for errors
-    logger.info("Checking logs for errors...")
-    error_logs = check_logs_for_errors(output_dir)
-    
-    if error_logs:
-        # Add log errors to the results
-        workflow_result["log_errors"] = {
-            "count": sum(len(errors) for errors in error_logs.values()),
-            "files": len(error_logs)
-        }
-        
-        # Generate error report and save to file
-        error_report_path = os.path.join(output_dir, "error_report.txt")
-        print_error_report(error_logs, error_report_path)
-        logger.warning(f"Found errors in logs. Error report saved to: {error_report_path}")
-    else:
-        logger.info("No errors found in logs.")
-        workflow_result["log_errors"] = {"count": 0, "files": 0}
-    
-    return workflow_result 
+
+    log_errors = workflow_teardown(config, "simple", workflow_result,
+                                   additional_info={
+                                       "total_return": f"{metrics.get('total_return', 0.0):.2%}",
+                                       "sharpe_ratio": f"{metrics.get('sharpe_ratio', 0.0):.2f}",
+                                   })
+    workflow_result["log_errors"] = log_errors
+    return workflow_result

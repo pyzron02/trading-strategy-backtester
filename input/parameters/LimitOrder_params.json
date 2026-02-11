@@ -1,0 +1,6 @@
+{
+    "signal_file": "input/signals/limit_order_signals.csv",
+    "stake_amounts": {"TSLA": 0, "NVDA": 4000, "SPY": 0},
+    "ticker_priority": ["TSLA", "NVDA", "SPY"],
+    "transaction_cost": 0.99
+}
